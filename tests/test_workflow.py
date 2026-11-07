@@ -18,6 +18,37 @@ import crop
 import stack
 
 class WorkflowTests(unittest.TestCase):
+    def test_horizon_rotation_points_up_and_preserves_coordinates(self):
+        from astropy import units as u
+        from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+        from astropy.utils import iers
+        from astropy.wcs import WCS
+
+        time = Time("2026-11-06T21:00:00")
+        observer = {"lon": 0, "lat": 45, "elevation": 0}
+        frame = AltAz(obstime=time, location=EarthLocation.from_geodetic(
+            0 * u.deg, 45 * u.deg, 0 * u.m
+        ))
+        with iers.conf.set_temp("auto_download", False):
+            center = SkyCoord(az=120 * u.deg, alt=35 * u.deg, frame=frame).icrs
+            upward = SkyCoord(az=120 * u.deg, alt=35.001 * u.deg, frame=frame).icrs
+            wcs = WCS(naxis=2)
+            wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+            wcs.wcs.crval = [center.ra.deg, center.dec.deg]
+            wcs.wcs.crpix = [100.5, 80.5]
+            wcs.wcs.cd = [[-0.004, 0.003], [0.003, 0.004]]
+            x, y = wcs.world_to_pixel(center)
+            ux, uy = wcs.world_to_pixel(upward)
+            rotation = crop.horizon_rotation(wcs, x, y, time, observer)
+
+        origin, above = rotation.transform([[x, y], [ux, uy]])
+        self.assertAlmostEqual(origin[0], above[0], places=5)
+        self.assertGreater(above[1], origin[1])
+        points = np.array([[30, 40], [140, 100]])
+        np.testing.assert_allclose(
+            rotation.inverted().transform(rotation.transform(points)), points
+        )
+
     def test_stacking_twice_preserves_pixels_and_dimensions(self):
         rng = np.random.default_rng(42)
         y, x = np.mgrid[:128, :128]
@@ -58,7 +89,7 @@ class WorkflowTests(unittest.TestCase):
                 "targetname": ["Titan (606)"] * len(ordered),
             })
 
-        def record_crop(path, radius, ra, dec, time, query, target_name=None):
+        def record_crop(path, radius, ra, dec, time, query, target_name=None, observer=None):
             calls.append((path.name, time.jd, ra))
 
         with tempfile.TemporaryDirectory() as temporary:
