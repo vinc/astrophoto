@@ -44,23 +44,27 @@ def get_ephemerides(query, observer, epochs):
         print(f"Resolved {query} to Horizons ID {matches[0]}")
         return lookup(matches[0])
 
-def crop_image(path, radius, ra, dec, time, query, target_name=None):
+def crop_image(path, radius, ra, dec, time, query, target_name=None, source_path=None):
     data, header = fits.getdata(path, header=True)
     wcs = WCS(header)
 
     x, y = wcs.world_to_pixel_values(ra, dec)
     height, width = data.shape
 
-    print(f"{path}: {query} at ({x:.1f}, {y:.1f})")
+    source_path = Path(path if source_path is None else source_path)
+    print(f"{source_path}: {query} at ({x:.1f}, {y:.1f})")
 
     if not (0 <= x < width and 0 <= y < height):
         print("  Skipped: object is outside the image")
         return
 
-    x0 = max(0, int(x) - radius)
-    x1 = min(width, int(x) + radius)
-    y0 = max(0, int(y) - radius)
-    y1 = min(height, int(y) + radius)
+    if radius is None:
+        x0, x1, y0, y1 = 0, width, 0, height
+    else:
+        x0 = max(0, int(x) - radius)
+        x1 = min(width, int(x) + radius)
+        y0 = max(0, int(y) - radius)
+        y1 = min(height, int(y) + radius)
 
     # Frames from convert.py hold the raw Bayer mosaic: average each
     # 2x2 block so the colour channels don't show as a checkerboard
@@ -79,7 +83,7 @@ def crop_image(path, radius, ra, dec, time, query, target_name=None):
 
     vmin, vmax = ZScaleInterval().get_limits(crop)
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(10, 7) if radius is None else None)
 
     ax.imshow(
         crop,
@@ -103,7 +107,8 @@ def crop_image(path, radius, ra, dec, time, query, target_name=None):
     ax.set_title(f"{target_name or query}\n{time.utc.iso.split('.')[0]} UTC")
 
     name = re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
-    output = path.with_name(f"{path.stem}-crop-{name}.png")
+    kind = "locate" if radius is None else "crop"
+    output = source_path.with_name(f"{source_path.stem}-{kind}-{name}.png")
 
     fig.savefig(output, dpi=150, bbox_inches="tight")
     plt.close(fig)

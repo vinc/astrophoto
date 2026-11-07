@@ -35,6 +35,18 @@ Stack the FITS images in a dir:
 python stack.py 20261221-2149
 ```
 
+Mark an object in the full image and save a `-locate-<name>.png` beside each input:
+
+```sh
+python locate.py 2026*/*-stack.fit \
+    --latitude 51.18 \
+    --longitude -1.83 \
+    --elevation 0.10 \
+    --query vesta
+```
+
+Images are plate-solved if needed. The title and date match `crop.py`.
+
 Adjust manual focus with repeated short captures and an enlarged star preview:
 
 Preview windows need a GUI toolkit, for example `python -m pip install PyQt6`.
