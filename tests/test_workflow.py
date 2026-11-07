@@ -17,7 +17,6 @@ from astropy.time import Time
 import crop
 import stack
 
-
 class WorkflowTests(unittest.TestCase):
     def test_stacking_twice_preserves_pixels_and_dimensions(self):
         rng = np.random.default_rng(42)
@@ -51,7 +50,7 @@ class WorkflowTests(unittest.TestCase):
         calls = []
 
         def ephemerides(query, observer, requested_epochs):
-            # Model Horizons returning rows sorted by epoch, including duplicates.
+            # Model Horizons returning rows sorted by epoch, including duplicates
             ordered = sorted(requested_epochs)
             return Table({
                 "RA": [10 + jd - min(epochs) for jd in ordered],
@@ -88,7 +87,6 @@ class WorkflowTests(unittest.TestCase):
             index = int(name.removeprefix("frame-").removesuffix(".new"))
             self.assertEqual(jd, epochs[index])
             self.assertEqual(ra, 10 + epochs[index] - min(epochs))
-
 
 if __name__ == "__main__":
     unittest.main()

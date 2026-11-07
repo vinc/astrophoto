@@ -4,11 +4,9 @@ A collection of vibe coded astrophoto scripts
 
 ## Setup
 
-Requires Python 3, gphoto2, Astrometry.net (`solve-field`), and wget.
-
 ```sh
 pip install -r requirements.txt
-(cd index && sh download.sh)
+sh index/download.sh
 ```
 
 ## Usage
@@ -36,5 +34,3 @@ Stack the FITS images in a dir:
 ```sh
 python stack.py 20261221-2149
 ```
-
-Run the regression tests with `python -m unittest discover -s tests -v`.
