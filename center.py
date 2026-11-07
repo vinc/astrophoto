@@ -117,7 +117,12 @@ def show_pointing(figure, path, query, result, interactive=True):
     x, y = result["x"], result["y"]
     if result["inside"]:
         ax.scatter([x], [y], facecolors="none", edgecolors="red", linewidths=2, s=150)
-        ax.annotate(target_name, (x, y), xytext=(10, 10), textcoords="offset points", color="red")
+        ax.annotate(
+            target_name, (x, y),
+            xytext=(10 if x < cx else -10, -10 if y < cy else 10),
+            textcoords="offset points", color="red",
+            ha="left" if x < cx else "right", va="top" if y < cy else "bottom",
+        )
     elif np.isfinite([x, y]).all():
         dx, dy = x - cx, y - cy
         fraction = 0.95 * min(cx / abs(dx) if dx else np.inf, cy / abs(dy) if dy else np.inf)
