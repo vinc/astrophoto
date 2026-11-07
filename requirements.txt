@@ -5,4 +5,3 @@ exifread
 matplotlib>=3.8,<4
 numpy>=1.24
 rawpy
-scipy>=1.10
