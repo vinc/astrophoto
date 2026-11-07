@@ -55,9 +55,10 @@ class WorkflowTests(unittest.TestCase):
             return Table({
                 "RA": [10 + jd - min(epochs) for jd in ordered],
                 "DEC": [0.0] * len(ordered),
+                "targetname": ["Titan (606)"] * len(ordered),
             })
 
-        def record_crop(path, radius, ra, dec, time, query):
+        def record_crop(path, radius, ra, dec, time, query, target_name=None):
             calls.append((path.name, time.jd, ra))
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -144,6 +145,7 @@ class WorkflowTests(unittest.TestCase):
         calls = {}
         def record_imshow(self, crop, **kwargs):
             calls["crop"] = crop
+            calls["extent"] = kwargs["extent"]
         def record_scatter(self, xs, ys, **kwargs):
             calls["marker"] = (xs[0], ys[0])
 
@@ -160,8 +162,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(image.shape, (20, 20))
         mx, my = calls["marker"]
         peak = np.unravel_index(np.argmax(image), image.shape)
-        self.assertAlmostEqual(mx, peak[1], places=6)
-        self.assertAlmostEqual(my, peak[0], places=6)
+        left, right, bottom, top = calls["extent"]
+        self.assertAlmostEqual(mx, left + (peak[1] + 0.5) * 2, places=6)
+        self.assertAlmostEqual(my, bottom + (peak[0] + 0.5) * 2, places=6)
         # No checkerboard left in the background
         background = image.copy()
         background[peak] = np.nan
