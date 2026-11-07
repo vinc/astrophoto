@@ -5,10 +5,13 @@ import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 from astropy.io import fits
 from astropy.time import Time
 from astropy.visualization import ZScaleInterval
 from astropy.wcs import WCS
+from astropy.wcs.utils import proj_plane_pixel_scales
+from scipy.ndimage import map_coordinates
 from astroquery.jplhorizons import Horizons
 
 def get_ephemerides(query, observer, epochs):
@@ -44,6 +47,39 @@ def get_ephemerides(query, observer, epochs):
         print(f"Resolved {query} to Horizons ID {matches[0]}")
         return lookup(matches[0])
 
+def align_image(data, wcs, ra, dec):
+    # Resample the full frame onto a north-up RA/Dec grid before cropping
+    scale = float(np.sqrt(np.prod(proj_plane_pixel_scales(wcs))))
+    aligned_wcs = WCS(naxis=2)
+    aligned_wcs.wcs.ctype = ["RA---CAR", "DEC--CAR"]
+    aligned_wcs.wcs.crval = [ra, 0]
+    aligned_wcs.wcs.crpix = [1, 1]
+    aligned_wcs.wcs.cdelt = [-scale, scale]
+
+    height, width = data.shape
+    edge_x = np.linspace(-0.5, width - 0.5, 128)
+    edge_y = np.linspace(-0.5, height - 0.5, 128)
+    xs = np.concatenate([edge_x, edge_x, np.full(128, -0.5),
+                         np.full(128, width - 0.5)])
+    ys = np.concatenate([np.full(128, -0.5), np.full(128, height - 0.5),
+                         edge_y, edge_y])
+    lon, lat = wcs.pixel_to_world_values(xs, ys)
+    px, py = aligned_wcs.world_to_pixel_values(lon, lat)
+    left, bottom = np.floor([px.min(), py.min()]).astype(int)
+    right, top = np.ceil([px.max(), py.max()]).astype(int)
+    aligned_wcs.wcs.crpix -= [left, bottom]
+    aligned = np.empty((top - bottom + 1, right - left + 1))
+
+    for row in range(0, aligned.shape[0], 128):
+        yy, xx = np.mgrid[row:min(row + 128, aligned.shape[0]), :aligned.shape[1]]
+        lon, lat = aligned_wcs.pixel_to_world_values(xx, yy)
+        sx, sy = wcs.world_to_pixel_values(lon, lat)
+        aligned[row:row + len(yy)] = map_coordinates(
+            data, [sy, sx], order=1, mode="constant", cval=np.nan,
+        )
+
+    return aligned, aligned_wcs
+
 def crop_image(path, radius, ra, dec, time, query, target_name=None):
     data, header = fits.getdata(path, header=True)
     wcs = WCS(header)
@@ -57,27 +93,29 @@ def crop_image(path, radius, ra, dec, time, query, target_name=None):
         print("  Skipped: object is outside the image")
         return
 
+    data = data.astype(float)
+
+    # Bin the full Bayer frame before resampling its colour mosaic
+    if "RAWFILE" in header:
+        h, w = data.shape
+        data = data[:h // 2 * 2, :w // 2 * 2]
+        data = data.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
+        wcs = wcs.slice((slice(None, None, 2), slice(None, None, 2)))
+        radius = max(1, radius // 2)
+
+    data, wcs = align_image(data, wcs, ra, dec)
+    x, y = wcs.world_to_pixel_values(ra, dec)
+    height, width = data.shape
     x0 = max(0, int(x) - radius)
     x1 = min(width, int(x) + radius)
     y0 = max(0, int(y) - radius)
     y1 = min(height, int(y) + radius)
-
-    # Frames from convert.py hold the raw Bayer mosaic: average each
-    # 2x2 block so the colour channels don't show as a checkerboard
-    bayer = "RAWFILE" in header
-
-    if bayer:
-        x0, y0 = x0 // 2 * 2, y0 // 2 * 2
-        x1 = x0 + (x1 - x0) // 2 * 2
-        y1 = y0 + (y1 - y0) // 2 * 2
-
-    crop = data[y0:y1, x0:x1].astype(float)
-
-    if bayer:
-        h, w = crop.shape
-        crop = crop.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
-
-    vmin, vmax = ZScaleInterval().get_limits(crop)
+    crop = data[y0:y1, x0:x1]
+    finite = crop[np.isfinite(crop)]
+    if not finite.size:
+        print("  Skipped: crop has no valid pixels")
+        return
+    vmin, vmax = ZScaleInterval().get_limits(finite)
 
     fig, ax = plt.subplots(subplot_kw={"projection": wcs})
 
@@ -98,12 +136,11 @@ def crop_image(path, radius, ra, dec, time, query, target_name=None):
         s=150,
     )
 
-    ax.invert_yaxis()
     ax.coords["ra"].set_axislabel("Right Ascension")
     ax.coords["ra"].set_major_formatter("hh:mm:ss")
     ax.coords["dec"].set_axislabel("Declination")
     ax.coords["dec"].set_major_formatter("dd:mm:ss")
-    ax.set_title(f"{target_name or query}\n{time.utc.isot.split(".")[0]} UTC")
+    ax.set_title(f"{target_name or query}\n{time.utc.isot.split('.')[0]} UTC")
 
     name = re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
     output = path.with_name(f"{path.stem}-crop-{name}.png")
