@@ -5,11 +5,35 @@ import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
+from astropy import units as u
+from astropy.coordinates import AltAz, EarthLocation, SkyCoord
 from astropy.io import fits
 from astropy.time import Time
 from astropy.visualization import ZScaleInterval
+from astropy.visualization.wcsaxes import WCSAxes
+from astropy.visualization.wcsaxes.frame import RectangularFrame
+from astropy.visualization.wcsaxes.wcsapi import transform_coord_meta_from_wcs
 from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
+from matplotlib.transforms import Affine2D
+
+def horizon_rotation(wcs, x, y, time, observer):
+    location = EarthLocation.from_geodetic(
+        observer["lon"] * u.deg,
+        observer["lat"] * u.deg,
+        observer["elevation"] * u.km,
+    )
+    frame = AltAz(obstime=time, location=location)
+    target = wcs.pixel_to_world(x, y).transform_to(frame)
+    if abs(target.alt.deg) > 89.99:
+        raise ValueError("Horizon orientation is undefined near the zenith or nadir")
+    upward = SkyCoord(
+        az=target.az, alt=target.alt + 1 * u.arcsec, frame=frame
+    ).transform_to(wcs.pixel_to_world(x, y).frame)
+    ux, uy = wcs.world_to_pixel(upward)
+    angle = np.pi / 2 - np.arctan2(uy - y, ux - x)
+    return Affine2D().rotate_around(x, y, angle)
 
 def get_ephemerides(query, observer, epochs):
     def lookup(target):
@@ -44,7 +68,7 @@ def get_ephemerides(query, observer, epochs):
         print(f"Resolved {query} to Horizons ID {matches[0]}")
         return lookup(matches[0])
 
-def crop_image(path, radius, ra, dec, time, query, target_name=None):
+def crop_image(path, radius, ra, dec, time, query, target_name=None, observer=None):
     data, header = fits.getdata(path, header=True)
     wcs = WCS(header)
 
@@ -79,7 +103,13 @@ def crop_image(path, radius, ra, dec, time, query, target_name=None):
 
     vmin, vmax = ZScaleInterval().get_limits(crop)
 
-    fig, ax = plt.subplots(subplot_kw={"projection": wcs})
+    rotation = horizon_rotation(wcs, x, y, time, observer) if observer else Affine2D()
+    transform, coord_meta = transform_coord_meta_from_wcs(wcs, RectangularFrame)
+    fig, ax = plt.subplots(subplot_kw={
+        "axes_class": WCSAxes,
+        "transform": rotation.inverted() + transform,
+        "coord_meta": coord_meta,
+    })
 
     ax.imshow(
         crop,
@@ -88,6 +118,7 @@ def crop_image(path, radius, ra, dec, time, query, target_name=None):
         extent=(x0 - 0.5, x1 - 0.5, y0 - 0.5, y1 - 0.5),
         vmin=vmin,
         vmax=vmax,
+        transform=rotation + ax.transData,
     )
 
     ax.scatter(
@@ -96,14 +127,22 @@ def crop_image(path, radius, ra, dec, time, query, target_name=None):
         facecolors="none",
         edgecolors="red",
         s=150,
+        transform=rotation + ax.transData,
     )
 
-    ax.invert_yaxis()
-    ax.coords["ra"].set_axislabel("Right ascension")
+    corners = rotation.transform([
+        [x0 - 0.5, y0 - 0.5], [x1 - 0.5, y0 - 0.5],
+        [x0 - 0.5, y1 - 0.5], [x1 - 0.5, y1 - 0.5],
+    ])
+    ax.set_xlim(corners[:, 0].min(), corners[:, 0].max())
+    ax.set_ylim(corners[:, 1].min(), corners[:, 1].max())
+    if observer is None:
+        ax.invert_yaxis()
+    ax.coords["ra"].set_axislabel("Right Ascension")
     ax.coords["ra"].set_major_formatter("hh:mm:ss")
     ax.coords["dec"].set_axislabel("Declination")
     ax.coords["dec"].set_major_formatter("dd:mm:ss")
-    ax.set_title(f"{time.utc.isot} UTC / {target_name or query}")
+    ax.set_title(f"{target_name or query}\n{time.utc.isot} UTC")
 
     name = re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
     output = path.with_name(f"{path.stem}-crop-{name}.png")
@@ -193,6 +232,7 @@ def main():
                 time,
                 args.query,
                 target_name=str(position["targetname"]),
+                observer=observer,
             )
         except Exception as exc:
             print(f"{path}: ERROR: {exc}")
