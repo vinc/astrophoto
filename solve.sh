@@ -4,6 +4,7 @@ failed=0
 
 for file in "$@"; do
   solve-field \
+    --fits-image \
     --backend-config astrometry.cfg \
     --scale-units degwidth \
     --scale-low 16 \
