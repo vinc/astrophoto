@@ -111,8 +111,17 @@ def main():
 
     tz = ZoneInfo(args.timezone)
 
+    failed = 0
+
     for path in args.files:
-        convert(path, tz)
+        try:
+            convert(path, tz)
+        except Exception as exc:
+            print(f"{path}: ERROR: {exc}")
+            failed += 1
+
+    if failed:
+        raise SystemExit(f"{failed} of {len(args.files)} files failed")
 
 if __name__ == "__main__":
     main()

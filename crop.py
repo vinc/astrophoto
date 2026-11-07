@@ -44,7 +44,7 @@ def get_ephemerides(query, observer, epochs):
         print(f"Resolved {query} to Horizons ID {matches[0]}")
         return lookup(matches[0])
 
-def crop_image(path, radius, ra, dec, time, query):
+def crop_image(path, radius, ra, dec, time, query, target_name=None):
     data, header = fits.getdata(path, header=True)
     wcs = WCS(header)
 
@@ -62,7 +62,21 @@ def crop_image(path, radius, ra, dec, time, query):
     y0 = max(0, int(y) - radius)
     y1 = min(height, int(y) + radius)
 
-    crop = data[y0:y1, x0:x1]
+    # Frames from convert.py hold the raw Bayer mosaic: average each
+    # 2x2 block so the colour channels don't show as a checkerboard
+    bayer = "RAWFILE" in header
+
+    if bayer:
+        x0, y0 = x0 // 2 * 2, y0 // 2 * 2
+        x1 = x0 + (x1 - x0) // 2 * 2
+        y1 = y0 + (y1 - y0) // 2 * 2
+
+    crop = data[y0:y1, x0:x1].astype(float)
+
+    if bayer:
+        h, w = crop.shape
+        crop = crop.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
+
     vmin, vmax = ZScaleInterval().get_limits(crop)
 
     fig, ax = plt.subplots()
@@ -70,25 +84,28 @@ def crop_image(path, radius, ra, dec, time, query):
     ax.imshow(
         crop,
         cmap="gray",
-        origin="upper",
+        origin="lower",
+        extent=(x0 - 0.5, x1 - 0.5, y0 - 0.5, y1 - 0.5),
         vmin=vmin,
         vmax=vmax,
     )
 
     ax.scatter(
-        [x - x0],
-        [y - y0],
+        [x],
+        [y],
         facecolors="none",
         edgecolors="red",
         s=150,
     )
 
-    ax.set_title(f"{query} — {time.utc.isot} UTC")
+    ax.invert_yaxis()
+    ax.set_axis_off()
+    ax.set_title(f"{target_name or query}\n{time.utc.iso.split('.')[0]} UTC")
 
     name = re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
     output = path.with_name(f"{path.stem}-crop-{name}.png")
 
-    fig.savefig(output, dpi=150)
+    fig.savefig(output, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     print(f"  Saved {output}")
@@ -172,6 +189,7 @@ def main():
                 float(position["DEC"]),
                 time,
                 args.query,
+                target_name=str(position["targetname"]),
             )
         except Exception as exc:
             print(f"{path}: ERROR: {exc}")
