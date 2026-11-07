@@ -63,6 +63,70 @@ class PreviewTests(unittest.TestCase):
             capture.assert_not_called()
 
 class FocusTests(unittest.TestCase):
+    def test_saved_image_defaults_to_text_measurements(self):
+        argv = ["focus.py", "saved.fit"]
+        with patch.object(sys, "argv", argv), \
+                patch.object(focus, "read_image", return_value=(star_field(1.5), None, 1)), \
+                patch.object(focus, "preview_figure") as preview, \
+                patch.object(focus.plt, "show") as show, \
+                patch.object(focus.plt, "pause") as pause, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            focus.main()
+        preview.assert_not_called()
+        show.assert_not_called()
+        pause.assert_not_called()
+        self.assertIn("HFR", output.getvalue())
+        self.assertNotIn("best", output.getvalue())
+
+    def test_saved_image_can_write_a_preview_without_a_gui(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "focus.png"
+            argv = ["focus.py", "saved.fit", "--save-preview", str(output)]
+            with patch.object(sys, "argv", argv), \
+                    patch.object(focus, "read_image", return_value=(star_field(1.5), None, 1)), \
+                    patch.object(focus, "preview_figure") as preview, \
+                    patch.object(focus.plt, "show") as show, \
+                    patch.object(focus.plt, "pause") as pause, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                focus.main()
+            self.assertGreater(output.stat().st_size, 1000)
+        preview.assert_not_called()
+        show.assert_not_called()
+        pause.assert_not_called()
+
+    def test_defocus_does_not_replace_stars_with_unsaturated_warm_pixels(self):
+        rng = np.random.default_rng(17)
+        y, x = np.mgrid[:512, :512]
+        measured = []
+        for sigma in [1, 2, 3, 4]:
+            data = rng.normal(100, 1, x.shape)
+            for j in range(4):
+                for i in range(5):
+                    sx, sy = 40.2 + i * 55, 40.3 + j * 60
+                    data += 2000 / sigma**2 * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * sigma**2))
+            for j in range(4):
+                for i in range(10):
+                    data[310 + j * 45, 35 + i * 45] += 200
+            stars = focus.measure_stars(data)
+            self.assertEqual(len(stars), 20)
+            self.assertTrue(all(sy < 280 for _, sy, _ in stars))
+            measured.append(np.median([hfr for _, _, hfr in stars]))
+        self.assertTrue(np.all(np.diff(measured) > 0), measured)
+        self.assertGreater(measured[-1], 3 * measured[0])
+
+    def test_background_noise_does_not_become_extra_star_flux(self):
+        rng = np.random.default_rng(23)
+        y, x = np.mgrid[:192, :256]
+        measured = []
+        for peak in [1000, 30]:
+            image = rng.normal(100, 1, x.shape)
+            for sx, sy in [(40.2, 40.3), (100.1, 50.4), (180.3, 120.2), (60.4, 140.1)]:
+                image += peak * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * 1.5**2))
+            stars = focus.measure_stars(image)
+            self.assertEqual(len(stars), 4)
+            measured.append(np.median([hfr for _, _, hfr in stars]))
+        self.assertLess(abs(measured[0] - measured[1]), 0.4)
+
     def test_hfr_increases_with_defocus(self):
         sharp = focus.measure_stars(star_field(1.5))
         blurred = focus.measure_stars(star_field(3))

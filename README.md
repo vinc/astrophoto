@@ -45,6 +45,15 @@ python focus.py
 
 Lower HFR means smaller stars. Keep exposures short enough to avoid star trails.
 
+Measure a saved image without a window, or save an annotated PNG:
+
+```sh
+python focus.py image.fit
+python focus.py image.fit --save-preview focus.png
+```
+
+Use `--plot` to open a window for saved images.
+
 Centre an object with a full-frame preview and tripod pan/tilt corrections:
 
 ```sh

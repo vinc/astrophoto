@@ -40,25 +40,38 @@ def measure_stars(data, saturated=None, radius=12, max_stars=20):
             continue
 
         sky = np.median(np.concatenate([stamp[0], stamp[-1], stamp[1:-1, 0], stamp[1:-1, -1]]))
-        flux = np.maximum(stamp - sky, 0)
+        core = stamp[radius - 1:radius + 2, radius - 1:radius + 2]
+        # A real star must extend beyond an isolated detector pixel
+        if np.count_nonzero(core > sky + 3 * noise) < 3:
+            continue
+        signal = stamp - sky
+        flux = np.maximum(signal, 0)
         yy, xx = np.indices(stamp.shape)
         aperture = np.hypot(xx - radius, yy - radius) <= radius
         flux *= aperture
-        total = flux.sum()
-        if total <= 0 or flux.max() > 0.9 * total:
+        positive_total = flux.sum()
+        total = signal[aperture].sum()
+        if total <= 10 * noise * np.sqrt(aperture.sum()) or flux.max() > 0.9 * total:
             continue
-        cx, cy = (flux * xx).sum() / total, (flux * yy).sum() / total
+        cx, cy = (flux * xx).sum() / positive_total, (flux * yy).sum() / positive_total
         distances = np.hypot(xx - cx, yy - cy)
-        pixels = np.argsort(distances.ravel())
-        cumulative = np.cumsum(flux.ravel()[pixels])
-        hfr = np.interp(total / 2, cumulative, distances.ravel()[pixels])
+        radii = distances[aperture]
+        pixels = np.argsort(radii)
+        radii = radii[pixels]
+        # Keep negative sky residuals so noise does not become extra star flux
+        cumulative = np.cumsum(signal[aperture][pixels])
+        index = int(np.flatnonzero(cumulative >= total / 2)[0])
+        if index == 0:
+            hfr = radii[0]
+        else:
+            hfr = np.interp(total / 2, cumulative[index - 1:index + 1], radii[index - 1:index + 1])
         if 0 < hfr < radius / 2:
             stars.append((x + cx - radius, y + cy - radius, hfr))
         if len(stars) == max_stars:
             break
     return stars
 
-def show_focus(figure, data, stars, title):
+def show_focus(figure, data, stars, title, interactive=True):
     figure.clear()
     field, detail = figure.subplots(1, 2)
     low, high = display_limits(data)
@@ -78,7 +91,8 @@ def show_focus(figure, data, stars, title):
     figure.suptitle(title)
     figure.tight_layout()
     figure.canvas.draw_idle()
-    plt.pause(0.1)
+    if interactive:
+        plt.pause(0.1)
 
 def main():
     parser = argparse.ArgumentParser(description="Measure manual focus from stars in RAW or FITS images")
@@ -86,12 +100,20 @@ def main():
     parser.add_argument("--shutterspeed", default="1/4", help="gphoto2 shutter speed for new captures (default: 1/4)")
     parser.add_argument("--interval", type=float, default=1, help="Pause between captures in seconds (default: 1)")
     parser.add_argument("--frames", type=int, default=0, help="Number of new captures; 0 repeats until stopped")
-    parser.add_argument("--no-plot", action="store_true", help="Print measurements without a preview window")
+    preview = parser.add_mutually_exclusive_group()
+    preview.add_argument("--plot", action="store_true", help="Open a preview window for saved images")
+    preview.add_argument("--no-plot", action="store_true", help="Print measurements without a preview window")
+    parser.add_argument("--save-preview", type=Path, help="Save an annotated PNG without requiring a GUI")
     args = parser.parse_args()
     if args.interval < 0 or args.frames < 0:
         parser.error("--interval and --frames must not be negative")
+    if args.save_preview and len(args.files) > 1:
+        parser.error("--save-preview accepts one saved image at a time")
 
-    figure = None if args.no_plot else preview_figure(figsize=(11, 5))
+    interactive = not args.no_plot and (not args.files or args.plot)
+    figure = preview_figure(figsize=(11, 5)) if interactive else None
+    if figure is None and args.save_preview:
+        figure = plt.figure(figsize=(11, 5))
     best = np.inf
     count = 0
     if not args.files:
@@ -107,21 +129,26 @@ def main():
                 if stars:
                     hfr = float(np.median([star[2] for star in stars])) * scale
                     best = min(best, hfr)
-                    title = f"HFR {hfr:.2f} px | best {best:.2f} | {len(stars)} stars"
+                    title = f"HFR {hfr:.2f} px | {len(stars)} stars"
+                    if not args.files:
+                        title += f" | best {best:.2f}"
                 else:
                     title = "No usable stars: check rough focus, exposure, or saturation"
                 print(f"{path.name}: {title}", flush=True)
                 if figure is not None:
-                    show_focus(figure, data, stars, title)
+                    show_focus(figure, data, stars, title, interactive=interactive)
+                    if args.save_preview:
+                        figure.savefig(args.save_preview, dpi=150)
+                        print(f"  Saved {args.save_preview}")
             count += 1
             if args.files and count == len(args.files):
                 break
             if not args.files and (not args.frames or count < args.frames):
-                if figure is None:
-                    time.sleep(args.interval)
-                else:
+                if interactive:
                     plt.pause(max(args.interval, 0.01))
-        if figure is not None and args.files:
+                else:
+                    time.sleep(args.interval)
+        if interactive and args.files:
             plt.show()
     except KeyboardInterrupt:
         pass
