@@ -55,9 +55,10 @@ class WorkflowTests(unittest.TestCase):
             return Table({
                 "RA": [10 + jd - min(epochs) for jd in ordered],
                 "DEC": [0.0] * len(ordered),
+                "targetname": ["Titan (606)"] * len(ordered),
             })
 
-        def record_crop(path, radius, ra, dec, time, query):
+        def record_crop(path, radius, ra, dec, time, query, target_name=None):
             calls.append((path.name, time.jd, ra))
 
         with tempfile.TemporaryDirectory() as temporary:
