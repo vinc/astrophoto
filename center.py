@@ -40,7 +40,7 @@ def solve_image(path, directory, timezone, scale_low, scale_high):
     marker = directory / "solved.solved"
     marker.unlink(missing_ok=True)
     subprocess.run([
-        "solve-field", "--fits-image", "--backend-config", str(ROOT / "astrometry.cfg"),
+        "solve-field", "--backend-config", str(ROOT / "astrometry.cfg"),
         "--scale-units", "degwidth", "--scale-low", str(scale_low),
         "--scale-high", str(scale_high), "--downsample", "2",
         "--no-plots", "--overwrite", "--cpulimit", "60",
