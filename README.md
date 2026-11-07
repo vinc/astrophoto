@@ -4,9 +4,11 @@ A collection of vibe coded astrophoto scripts
 
 ## Setup
 
+Requires Python 3, gphoto2, Astrometry.net (`solve-field`), and wget.
+
 ```sh
 pip install -r requirements.txt
-cd index && sh download.sh
+(cd index && sh download.sh)
 ```
 
 ## Usage
@@ -15,7 +17,7 @@ Capture a sequence of pictures and convert the CR2 into FITS format:
 
 ```sh
 sh capture.sh
-sh convert.sh 2026*/*.CR2
+python convert.py 2026*/*.CR2
 ```
 
 Crop a major or minor body from the image:
@@ -34,3 +36,5 @@ Stack the FITS images in a dir:
 ```sh
 python stack.py 20261221-2149
 ```
+
+Run the regression tests with `python -m unittest discover -s tests -v`.

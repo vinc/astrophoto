@@ -157,6 +157,8 @@ def main():
         "elevation": args.elevation,
     }
 
+    # Horizons returns discrete epochs in chronological order.
+    observations.sort(key=lambda observation: observation[1].jd)
     epochs = [time.jd for _, time in observations]
 
     result = get_ephemerides(args.query, observer, epochs)
