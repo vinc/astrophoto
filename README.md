@@ -37,6 +37,8 @@ python stack.py 20261221-2149
 
 Adjust manual focus with repeated short captures and an enlarged star preview:
 
+Preview windows need a GUI toolkit, for example `python -m pip install PyQt6`.
+
 ```sh
 python focus.py
 ```

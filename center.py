@@ -16,7 +16,7 @@ from astropy.time import Time
 from astropy.utils import iers
 from astropy.wcs import NoConvergence, WCS
 
-from camera import capture, display_limits, read_image
+from camera import capture, display_limits, preview_figure, read_image
 from convert import convert
 from crop import get_ephemerides
 
@@ -158,7 +158,7 @@ def main():
     observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
     coordinates = None if args.ra is None else (args.ra, args.dec)
     query = args.query or f"RA {args.ra:g}, Dec {args.dec:g}"
-    figure = None if args.no_plot else plt.figure(figsize=(10, 7))
+    figure = None if args.no_plot else preview_figure(figsize=(10, 7))
     try:
         while True:
             if figure is not None and not plt.fignum_exists(figure.number):

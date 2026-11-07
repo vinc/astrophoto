@@ -1,10 +1,26 @@
 from pathlib import Path
 import subprocess
 
+import matplotlib.pyplot as plt
 import numpy as np
 import rawpy
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
+
+def preview_figure(**kwargs):
+    help_text = (
+        "Install a GUI toolkit with 'python -m pip install PyQt6' and run from a graphical session\n"
+        "If Agg was configured explicitly, use MPLBACKEND=QtAgg\n"
+        "Use --no-plot for measurements without a preview window"
+    )
+    try:
+        figure = plt.figure(**kwargs)
+    except (ImportError, RuntimeError) as exc:
+        raise SystemExit(f"Cannot open a preview window: {exc}\n{help_text}") from exc
+    if figure.canvas.required_interactive_framework is None:
+        plt.close(figure)
+        raise SystemExit(f"Matplotlib backend '{plt.get_backend()}' cannot open a preview window\n{help_text}")
+    return figure
 
 def capture(directory, shutterspeed=None):
     directory = Path(directory).resolve()

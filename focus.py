@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.stats import sigma_clipped_stats
 
-from camera import capture, display_limits, read_image
+from camera import capture, display_limits, preview_figure, read_image
 
 def measure_stars(data, saturated=None, radius=12, max_stars=20):
     background, _, noise = sigma_clipped_stats(data)
@@ -91,7 +91,7 @@ def main():
     if args.interval < 0 or args.frames < 0:
         parser.error("--interval and --frames must not be negative")
 
-    figure = None if args.no_plot else plt.figure(figsize=(11, 5))
+    figure = None if args.no_plot else preview_figure(figsize=(11, 5))
     best = np.inf
     count = 0
     if not args.files:

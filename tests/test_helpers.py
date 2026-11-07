@@ -41,6 +41,27 @@ def solved_header():
     header["DATE-AVG"] = "2025-01-01T00:00:00.000"
     return header
 
+class PreviewTests(unittest.TestCase):
+    def test_noninteractive_backend_has_a_clear_error_and_closes_figure(self):
+        figures = camera.plt.get_fignums()
+        with self.assertRaisesRegex(SystemExit, "cannot open a preview window") as error:
+            camera.preview_figure()
+        self.assertIn("python -m pip install PyQt6", str(error.exception))
+        self.assertIn("--no-plot", str(error.exception))
+        self.assertEqual(camera.plt.get_fignums(), figures)
+
+    def test_both_helpers_check_window_support_before_capturing(self):
+        commands = [
+            (focus, ["focus.py"]),
+            (center, ["center.py", "--query", "vesta", "--latitude", "0", "--longitude", "0", "--elevation", "0"]),
+        ]
+        for module, argv in commands:
+            with self.subTest(module=module.__name__), \
+                    patch.object(sys, "argv", argv), patch.object(module, "capture") as capture, \
+                    self.assertRaisesRegex(SystemExit, "cannot open a preview window"):
+                module.main()
+            capture.assert_not_called()
+
 class FocusTests(unittest.TestCase):
     def test_hfr_increases_with_defocus(self):
         sharp = focus.measure_stars(star_field(1.5))
