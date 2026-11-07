@@ -100,7 +100,7 @@ def crop_image(path, radius, ra, dec, time, query, target_name=None):
 
     ax.invert_yaxis()
     ax.set_axis_off()
-    ax.set_title(f"{target_name or query}\n{time.utc.isot.split('.')[0]} UTC")
+    ax.set_title(f"{target_name or query}\n{time.utc.iso.split('.')[0]} UTC")
 
     name = re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
     output = path.with_name(f"{path.stem}-crop-{name}.png")
