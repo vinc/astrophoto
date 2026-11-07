@@ -76,7 +76,7 @@ def show_focus(figure, data, stars, title, interactive=True):
     figure.clear()
     field, detail = figure.subplots(1, 2)
     low, high = display_limits(data)
-    field.imshow(data, cmap="gray", origin="upper", vmin=low, vmax=high)
+    field.imshow(data, cmap="gray", origin="lower", vmin=low, vmax=high)
     if stars:
         field.scatter(*np.array(stars)[:, :2].T, facecolors="none", edgecolors="red", s=80)
         height, width = data.shape
@@ -95,7 +95,7 @@ def show_focus(figure, data, stars, title, interactive=True):
     low = float(np.nanmedian(patch))
     high = max(float(np.nanmax(patch)), low + 1)
     detail.set_facecolor("0.15")
-    detail.imshow(patch, cmap="gray", origin="upper", vmin=low, vmax=high, interpolation="nearest")
+    detail.imshow(patch, cmap="gray", origin="lower", vmin=low, vmax=high, interpolation="nearest")
     field.set_title("Measured stars")
     detail.set_title("Star detail" if stars else "Centre detail")
     figure.suptitle(title)
