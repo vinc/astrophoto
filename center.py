@@ -81,8 +81,10 @@ def inspect_image(path, query, observer, coordinates=None):
     if coordinates is None:
         position = get_ephemerides(query, observer, [time.jd])[0]
         target = SkyCoord(float(position["RA"]) * u.deg, float(position["DEC"]) * u.deg)
+        target_name = str(position["targetname"])
     else:
         target = SkyCoord(coordinates[0] * u.deg, coordinates[1] * u.deg)
+        target_name = query
     pan, tilt = pointing_offset(center, target, time, observer)
     try:
         x, y = map(float, wcs.world_to_pixel(target))
@@ -90,15 +92,17 @@ def inspect_image(path, query, observer, coordinates=None):
         x, y = np.nan, np.nan
     inside = bool(0 <= x < width and 0 <= y < height)
     directions = (
-        f"Pan {'right' if pan >= 0 else 'left'} {angle_text(pan)} | "
-        f"{'Raise' if tilt >= 0 else 'Lower'} {angle_text(tilt)}"
+        f"Pan {'right' if pan >= 0 else 'left'} {angle_text(pan)} and "
+        f"{'raise' if tilt >= 0 else 'lower'} {angle_text(tilt)}"
     )
-    print(f"{query}: {time.utc.isot} UTC")
+    print(f"{target_name}: {time.utc.iso.split('.')[0]} UTC")
     print(f"  Separation from centre: {angle_text(center.separation(target).deg)}")
     print(f"  {directions}")
     print(f"  Target is {'inside' if inside else 'outside'} the frame")
-    print("  Pan means change in azimuth; tilt means change in altitude at the exposure time")
-    return {"x": x, "y": y, "inside": inside, "pan": pan, "tilt": tilt, "title": directions}
+    return {
+        "x": x, "y": y, "inside": inside, "pan": pan, "tilt": tilt,
+        "title": directions, "target_name": target_name,
+    }
 
 def show_pointing(figure, path, query, result, interactive=True):
     data, _, _ = read_image(path, bin_raw=False)
@@ -108,20 +112,27 @@ def show_pointing(figure, path, query, result, interactive=True):
     ax = figure.subplots()
     low, high = display_limits(data)
     ax.imshow(data, cmap="gray", origin="upper", vmin=low, vmax=high)
-    ax.plot(cx, cy, "+", color="lime", markersize=15)
+    ax.plot(cx, cy, "+", color="red", markersize=15, markeredgewidth=2)
+    target_name = result.get("target_name", query)
     x, y = result["x"], result["y"]
     if result["inside"]:
-        ax.scatter([x], [y], facecolors="none", edgecolors="red", s=150)
-        ax.annotate(query, (x, y), xytext=(10, 10), textcoords="offset points", color="red")
+        ax.scatter([x], [y], facecolors="none", edgecolors="red", linewidths=2, s=150)
+        ax.annotate(target_name, (x, y), xytext=(10, 10), textcoords="offset points", color="red")
     elif np.isfinite([x, y]).all():
         dx, dy = x - cx, y - cy
-        fraction = 0.9 * min(cx / abs(dx) if dx else np.inf, cy / abs(dy) if dy else np.inf)
+        fraction = 0.95 * min(cx / abs(dx) if dx else np.inf, cy / abs(dy) if dy else np.inf)
         edge = (cx + dx * fraction, cy + dy * fraction)
-        ax.annotate("", xy=edge, xytext=(cx, cy), arrowprops={"arrowstyle": "->", "color": "red", "lw": 2})
-        ax.annotate(query, edge, xytext=(0, 10), textcoords="offset points", color="red", ha="center")
+        horizontal = "center" if abs(edge[0] - cx) < cx / 4 else "left" if dx < 0 else "right"
+        vertical = "center" if abs(edge[1] - cy) < cy / 4 else "top" if dy < 0 else "bottom"
+        ax.annotate(
+            target_name, xy=(cx, cy), xytext=edge, color="red",
+            ha=horizontal, va=vertical,
+            arrowprops={"arrowstyle": "<-", "color": "red", "lw": 2, "shrinkA": 8, "shrinkB": 0},
+        )
     ax.set_xlim(-0.5, width - 0.5)
     ax.set_ylim(height - 0.5, -0.5)
-    ax.set_title(f"{query}: {result['title']}")
+    ax.set_axis_off()
+    ax.set_title(f"{target_name}\n{result['title']}")
     figure.tight_layout()
     figure.canvas.draw_idle()
     if interactive:
