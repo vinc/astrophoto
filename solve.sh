@@ -1,5 +1,7 @@
 #!/bin/sh
 
+failed=0
+
 for file in "$@"; do
   solve-field \
     --backend-config astrometry.cfg \
@@ -9,5 +11,13 @@ for file in "$@"; do
     --downsample 2 \
     --no-plots \
     --overwrite \
-    "$file" || exit 1
+    "$file" || {
+      echo "Failed to solve $file" >&2
+      failed=$((failed + 1))
+    }
 done
+
+if [ "$failed" -gt 0 ]; then
+  echo "$failed of $# files failed to solve" >&2
+  exit 1
+fi

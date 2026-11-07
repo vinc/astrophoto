@@ -62,7 +62,24 @@ def crop_image(path, radius, ra, dec, time, query):
     y0 = max(0, int(y) - radius)
     y1 = min(height, int(y) + radius)
 
-    crop = data[y0:y1, x0:x1]
+    # Frames from convert.py hold the raw Bayer mosaic: average each
+    # 2x2 block so the colour channels don't show as a checkerboard
+    bayer = "RAWFILE" in header
+
+    if bayer:
+        x0, y0 = x0 // 2 * 2, y0 // 2 * 2
+        x1 = x0 + (x1 - x0) // 2 * 2
+        y1 = y0 + (y1 - y0) // 2 * 2
+
+    crop = data[y0:y1, x0:x1].astype(float)
+    mx, my = x - x0, y - y0
+
+    if bayer:
+        h, w = crop.shape
+        crop = crop.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
+        # Binned pixel j covers full-resolution pixels 2j and 2j+1
+        mx, my = (mx - 0.5) / 2, (my - 0.5) / 2
+
     vmin, vmax = ZScaleInterval().get_limits(crop)
 
     fig, ax = plt.subplots()
@@ -76,8 +93,8 @@ def crop_image(path, radius, ra, dec, time, query):
     )
 
     ax.scatter(
-        [x - x0],
-        [y - y0],
+        [mx],
+        [my],
         facecolors="none",
         edgecolors="red",
         s=150,

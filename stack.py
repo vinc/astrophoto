@@ -6,6 +6,7 @@ from pathlib import Path
 import astroalign
 import numpy as np
 from astropy.io import fits
+from astropy.time import Time
 from matplotlib import pyplot as plt
 
 def load(path):
@@ -22,6 +23,33 @@ def load(path):
         h // 2, 2, w // 2, 2
     ).mean(axis=(1, 3))
 
+def stack_header(reference, files):
+    header = fits.getheader(reference)
+
+    # Data is rewritten as unscaled float32 2x2-binned pixels
+    for key in ("BZERO", "BSCALE", "RAWFILE"):
+        header.remove(key, ignore_missing=True)
+
+    header["NCOMBINE"] = (len(files), "Number of frames stacked")
+
+    times = []
+    for path in files:
+        frame = fits.getheader(path)
+        if "DATE-OBS" in frame and "DATE-AVG" in frame:
+            times.append((
+                Time(frame["DATE-OBS"], format="isot", scale="utc"),
+                Time(frame["DATE-AVG"], format="isot", scale="utc"),
+            ))
+
+    if times:
+        start = min(t for t, _ in times)
+        mean = Time(np.mean([t.jd for _, t in times]),
+                    format="jd", scale="utc")
+        header["DATE-OBS"] = (start.isot, "First exposure start (UTC)")
+        header["DATE-AVG"] = (mean.isot, "Mean exposure midpoint (UTC)")
+
+    return header
+
 def stack_directory(directory):
     files = sorted(
         path for path in directory.glob("*.fit")
@@ -31,10 +59,17 @@ def stack_directory(directory):
     if not files:
         raise SystemExit(f"No FITS images found in {directory}")
 
-    reference = load(files[0])
+    # The field drifts on a fixed tripod, so align to the middle
+    # frame to halve the largest offset between frames
+    middle = files[len(files) // 2]
+    reference = load(middle)
     aligned = [reference]
+    used = [middle]
 
-    for path in files[1:]:
+    for path in files:
+        if path == middle:
+            continue
+
         image = load(path)
 
         try:
@@ -43,6 +78,7 @@ def stack_directory(directory):
             )
             registered[footprint] = np.nan
             aligned.append(registered)
+            used.append(path)
             print(f"Aligned {path.name}")
         except Exception as exc:
             print(f"Skipped {path.name}: {exc}")
@@ -60,6 +96,7 @@ def stack_directory(directory):
     fits.writeto(
         fits_path,
         stack.astype(np.float32),
+        header=stack_header(middle, used),
         overwrite=True,
     )
 
