@@ -8,6 +8,7 @@ import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+from astropy.nddata import Cutout2D
 from astropy.stats import sigma_clipped_stats
 
 from camera import capture, display_limits, preview_figure, read_image
@@ -82,9 +83,10 @@ def show_focus(figure, data, stars, title, interactive=True):
         x, y = int(round(x)), int(round(y))
     else:
         y, x = np.array(data.shape) // 2
-    patch = data[max(0, y - 30):y + 31, max(0, x - 30):x + 31]
+    patch = Cutout2D(data, (x, y), (61, 61), mode="partial", fill_value=np.nan).data
     low = float(np.nanmedian(patch))
     high = max(float(np.nanmax(patch)), low + 1)
+    detail.set_facecolor("0.15")
     detail.imshow(patch, cmap="gray", origin="upper", vmin=low, vmax=high, interpolation="nearest")
     field.set_title("Measured stars")
     detail.set_title("Star detail" if stars else "Centre detail")
