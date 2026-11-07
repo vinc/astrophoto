@@ -23,7 +23,10 @@ def load(path):
     ).mean(axis=(1, 3))
 
 def stack_directory(directory):
-    files = sorted(directory.glob("*.fit"))
+    files = sorted(
+        path for path in directory.glob("*.fit")
+        if not path.name.endswith("-stack.fit")
+    )
 
     if not files:
         raise SystemExit(f"No FITS images found in {directory}")

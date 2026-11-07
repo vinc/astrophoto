@@ -6,7 +6,7 @@ A collection of vibe coded astrophoto scripts
 
 ```sh
 pip install -r requirements.txt
-cd index && sh download.sh
+sh index/download.sh
 ```
 
 ## Usage
@@ -15,7 +15,7 @@ Capture a sequence of pictures and convert the CR2 into FITS format:
 
 ```sh
 sh capture.sh
-sh convert.sh 2026*/*.CR2
+python convert.py 2026*/*.CR2
 ```
 
 Crop a major or minor body from the image:

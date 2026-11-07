@@ -1,7 +1,7 @@
 #!/bin/sh
 
 dir=$(date +%Y%m%d-%H%M)
-mkdir -p "$dir"
+mkdir -p "$dir" || exit 1
 echo "Capturing pictures in $dir ..."
 
 gphoto2 \
@@ -13,4 +13,4 @@ gphoto2 \
   --capture-image-and-download \
   --interval 15 \
   --frames 20 \
-  --filename "%Y%m%d-%H%M%S.%C"
+  --filename "$dir/%Y%m%d-%H%M%S.%C"
