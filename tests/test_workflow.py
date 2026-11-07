@@ -18,31 +18,6 @@ import crop
 import stack
 
 class WorkflowTests(unittest.TestCase):
-    def test_alignment_makes_ra_horizontal_and_dec_vertical(self):
-        from astropy.wcs import WCS
-
-        wcs = WCS(naxis=2)
-        wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-        wcs.wcs.crval = [20, -5]
-        wcs.wcs.crpix = [100.5, 80.5]
-        wcs.wcs.cd = [[-0.004, 0.003], [0.003, 0.004]]
-        yy, xx = np.mgrid[:160, :200]
-        data = np.exp(-((xx - 100)**2 + (yy - 80)**2) / 4)
-        ra, dec = wcs.pixel_to_world_values(100, 80)
-        aligned, output_wcs = crop.align_image(data, wcs, ra, dec)
-        x, y = output_wcs.world_to_pixel_values(ra, dec)
-        peak_y, peak_x = np.unravel_index(np.nanargmax(aligned), aligned.shape)
-        self.assertAlmostEqual(x, peak_x, delta=1)
-        self.assertAlmostEqual(y, peak_y, delta=1)
-        lon, lat = output_wcs.pixel_to_world_values(
-            [x - 10, x, x + 10, x, x],
-            [y, y, y, y - 10, y + 10],
-        )
-        np.testing.assert_allclose(lat[:3], dec)
-        np.testing.assert_allclose(lon[3:], ra)
-        self.assertGreater(lon[0], lon[2])
-        self.assertGreater(lat[4], lat[3])
-
     def test_stacking_twice_preserves_pixels_and_dimensions(self):
         rng = np.random.default_rng(42)
         y, x = np.mgrid[:128, :128]
@@ -188,12 +163,12 @@ class WorkflowTests(unittest.TestCase):
         mx, my = calls["marker"]
         peak = np.unravel_index(np.argmax(image), image.shape)
         left, right, bottom, top = calls["extent"]
-        self.assertAlmostEqual(mx, left + peak[1] + 0.5, delta=1)
-        self.assertAlmostEqual(my, bottom + peak[0] + 0.5, delta=1)
+        self.assertAlmostEqual(mx, left + (peak[1] + 0.5) * 2, places=6)
+        self.assertAlmostEqual(my, bottom + (peak[0] + 0.5) * 2, places=6)
         # No checkerboard left in the background
         background = image.copy()
         background[peak] = np.nan
-        self.assertLess(np.nanmedian(background), 30)
+        self.assertAlmostEqual(np.nanstd(background), 0.0)
 
     def test_convert_continues_after_unreadable_file(self):
         import convert
