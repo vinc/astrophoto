@@ -79,7 +79,15 @@ def show_focus(figure, data, stars, title, interactive=True):
     field.imshow(data, cmap="gray", origin="upper", vmin=low, vmax=high)
     if stars:
         field.scatter(*np.array(stars)[:, :2].T, facecolors="none", edgecolors="red", s=80)
-        x, y, _ = stars[0]
+        height, width = data.shape
+        candidates = [
+            star for star in stars
+            if 30 <= round(star[0]) < width - 30 and 30 <= round(star[1]) < height - 30
+        ]
+        x, y, _ = min(
+            candidates or stars,
+            key=lambda star: (star[0] - (width - 1) / 2)**2 + (star[1] - (height - 1) / 2)**2,
+        )
         x, y = int(round(x)), int(round(y))
     else:
         y, x = np.array(data.shape) // 2
