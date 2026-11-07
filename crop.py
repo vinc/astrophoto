@@ -72,40 +72,43 @@ def crop_image(path, radius, ra, dec, time, query, target_name=None):
         y1 = y0 + (y1 - y0) // 2 * 2
 
     crop = data[y0:y1, x0:x1].astype(float)
-    mx, my = x - x0, y - y0
 
     if bayer:
         h, w = crop.shape
         crop = crop.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
-        # Binned pixel j covers full-resolution pixels 2j and 2j+1
-        mx, my = (mx - 0.5) / 2, (my - 0.5) / 2
 
     vmin, vmax = ZScaleInterval().get_limits(crop)
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(subplot_kw={"projection": wcs})
 
     ax.imshow(
         crop,
         cmap="gray",
-        origin="upper",
+        origin="lower",
+        extent=(x0 - 0.5, x1 - 0.5, y0 - 0.5, y1 - 0.5),
         vmin=vmin,
         vmax=vmax,
     )
 
     ax.scatter(
-        [mx],
-        [my],
+        [x],
+        [y],
         facecolors="none",
         edgecolors="red",
         s=150,
     )
 
+    ax.invert_yaxis()
+    ax.coords["ra"].set_axislabel("Right ascension")
+    ax.coords["ra"].set_major_formatter("hh:mm:ss")
+    ax.coords["dec"].set_axislabel("Declination")
+    ax.coords["dec"].set_major_formatter("dd:mm:ss")
     ax.set_title(f"{time.utc.isot} UTC / {target_name or query}")
 
     name = re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
     output = path.with_name(f"{path.stem}-crop-{name}.png")
 
-    fig.savefig(output, dpi=150)
+    fig.savefig(output, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     print(f"  Saved {output}")
