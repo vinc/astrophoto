@@ -44,7 +44,7 @@ def get_ephemerides(query, observer, epochs):
         print(f"Resolved {query} to Horizons ID {matches[0]}")
         return lookup(matches[0])
 
-def crop_image(path, radius, ra, dec, time, query):
+def crop_image(path, radius, ra, dec, time, query, target_name=None):
     data, header = fits.getdata(path, header=True)
     wcs = WCS(header)
 
@@ -100,7 +100,7 @@ def crop_image(path, radius, ra, dec, time, query):
         s=150,
     )
 
-    ax.set_title(f"{query} — {time.utc.isot} UTC")
+    ax.set_title(f"{time.utc.isot} UTC / {target_name or query}")
 
     name = re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
     output = path.with_name(f"{path.stem}-crop-{name}.png")
@@ -189,6 +189,7 @@ def main():
                 float(position["DEC"]),
                 time,
                 args.query,
+                target_name=str(position["targetname"]),
             )
         except Exception as exc:
             print(f"{path}: ERROR: {exc}")
