@@ -100,7 +100,7 @@ def inspect_image(path, query, observer, coordinates=None):
     print("  Pan means change in azimuth; tilt means change in altitude at the exposure time")
     return {"x": x, "y": y, "inside": inside, "pan": pan, "tilt": tilt, "title": directions}
 
-def show_pointing(figure, path, query, result):
+def show_pointing(figure, path, query, result, interactive=True):
     data, _, _ = read_image(path, bin_raw=False)
     height, width = data.shape
     cx, cy = (width - 1) / 2, (height - 1) / 2
@@ -124,7 +124,8 @@ def show_pointing(figure, path, query, result):
     ax.set_title(f"{query}: {result['title']}")
     figure.tight_layout()
     figure.canvas.draw_idle()
-    plt.pause(0.1)
+    if interactive:
+        plt.pause(0.1)
 
 def main():
     parser = argparse.ArgumentParser(description="Guide manual camera pointing using a plate-solved exposure")
@@ -141,7 +142,10 @@ def main():
     parser.add_argument("--scale-high", type=float, default=20, help="Maximum image width in degrees (default: 20)")
     parser.add_argument("--shutterspeed", help="Optional gphoto2 shutter speed for new captures")
     parser.add_argument("--loop", action="store_true", help="Repeat new captures until Ctrl-C or the window is closed")
-    parser.add_argument("--no-plot", action="store_true", help="Print corrections without a preview window")
+    preview = parser.add_mutually_exclusive_group()
+    preview.add_argument("--plot", action="store_true", help="Open a preview window for a saved image")
+    preview.add_argument("--no-plot", action="store_true", help="Print corrections without a preview window")
+    parser.add_argument("--save-preview", type=Path, help="Save an annotated PNG without requiring a GUI")
     args = parser.parse_args()
     if (args.ra is None) != (args.dec is None):
         parser.error("Provide both --ra and --dec, or use --query")
@@ -158,7 +162,10 @@ def main():
     observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
     coordinates = None if args.ra is None else (args.ra, args.dec)
     query = args.query or f"RA {args.ra:g}, Dec {args.dec:g}"
-    figure = None if args.no_plot else preview_figure(figsize=(10, 7))
+    interactive = not args.no_plot and (args.file is None or args.plot)
+    figure = preview_figure(figsize=(10, 7)) if interactive else None
+    if figure is None and args.save_preview:
+        figure = plt.figure(figsize=(10, 7))
     try:
         while True:
             if figure is not None and not plt.fignum_exists(figure.number):
@@ -176,14 +183,17 @@ def main():
                 else:
                     result = inspect_image(solved, query, observer, coordinates)
                     if figure is not None:
-                        show_pointing(figure, solved, query, result)
+                        show_pointing(figure, solved, query, result, interactive=interactive)
+                        if args.save_preview:
+                            figure.savefig(args.save_preview, dpi=150)
+                            print(f"  Saved {args.save_preview}")
             if not args.loop:
                 break
-            if figure is not None:
+            if interactive:
                 plt.pause(1)
             else:
                 time.sleep(1)
-        if figure is not None and not args.loop:
+        if interactive and not args.loop:
             plt.show()
     except KeyboardInterrupt:
         pass

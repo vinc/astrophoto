@@ -52,8 +52,6 @@ python focus.py image.fit
 python focus.py image.fit --save-preview focus.png
 ```
 
-Use `--plot` to open a window for saved images.
-
 Centre an object with a full-frame preview and tripod pan/tilt corrections:
 
 ```sh
@@ -66,6 +64,8 @@ python center.py --query vesta \
 ```
 
 Both helpers also accept a saved RAW or FITS image as a positional argument.
+Saved images print results without a window by default. Use `--plot` to open
+a window or `--save-preview preview.png` to save an annotated image.
 New captures are temporary. Close the window or press Ctrl-C to stop.
 Use `--shutterspeed` to change the exposure, and `--ra` with `--dec` in degrees
 instead of `--query` for a fixed sky position.
