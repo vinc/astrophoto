@@ -34,3 +34,27 @@ Stack the FITS images in a dir:
 ```sh
 python stack.py 20261221-2149
 ```
+
+Adjust manual focus with repeated short captures and an enlarged star preview:
+
+```sh
+python focus.py
+```
+
+Lower HFR means smaller stars. Keep exposures short enough to avoid star trails.
+
+Centre an object with a full-frame preview and tripod pan/tilt corrections:
+
+```sh
+python center.py --query vesta \
+    --latitude 51.18 \
+    --longitude -1.83 \
+    --elevation 0.10 \
+    --shutterspeed 2 \
+    --loop
+```
+
+Both helpers also accept a saved RAW or FITS image as a positional argument.
+New captures are temporary. Close the window or press Ctrl-C to stop.
+Use `--shutterspeed` to change the exposure, and `--ra` with `--dec` in degrees
+instead of `--query` for a fixed sky position.

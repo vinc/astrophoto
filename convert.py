@@ -20,7 +20,7 @@ def exif_float(tags, key):
     return float(Fraction(value)) if value is not None else None
 
 
-def convert(path, tz):
+def convert(path, tz, output=None):
     with rawpy.imread(str(path)) as raw:
         # Preserve the original Bayer mosaic without demosaicing
         data = raw.raw_image_visible.copy()
@@ -85,13 +85,14 @@ def convert(path, tz):
     )
     hdr["WHITELEV"] = (white_level, "Raw sensor white level")
 
-    output = path.with_suffix(".fit")
+    output = Path(output) if output is not None else path.with_suffix(".fit")
     hdu.writeto(output, overwrite=True)
 
     print(f"{path} -> {output}")
     print(f"  Start:    {start.isoformat()}")
     print(f"  Midpoint: {midpoint.isoformat()}")
     print(f"  Exposure: {exposure} s")
+    return output
 
 
 def main():
