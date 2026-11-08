@@ -1,119 +1,18 @@
 #!/usr/bin/env python3
 
 import argparse
-import re
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 from astropy.io import fits
 from astropy.time import Time
-from astropy.visualization import ZScaleInterval
-from astropy.wcs import WCS
-from astroquery.jplhorizons import Horizons
 
-def get_ephemerides(query, observer, epochs):
-    def lookup(target):
-        return Horizons(
-            id=target,
-            location=observer,
-            epochs=epochs,
-        ).ephemerides()
-
-    try:
-        return lookup(query)
-    except ValueError as exc:
-        if "Ambiguous target name" not in str(exc):
-            raise
-
-        matches = []
-
-        for line in str(exc).splitlines():
-            match = re.match(r"^\s*(-?\d+)\s+(.+)$", line)
-            if not match:
-                continue
-
-            object_id, fields = match.groups()
-            name = re.split(r"\s{2,}", fields.strip())[0]
-
-            if name.casefold() == query.strip().casefold():
-                matches.append(object_id)
-
-        if len(matches) != 1:
-            raise
-
-        print(f"Resolved {query} to Horizons ID {matches[0]}")
-        return lookup(matches[0])
+from locate import get_ephemerides, save_image
 
 def crop_image(path, radius, ra, dec, time, query, target_name=None, source_path=None):
-    data, header = fits.getdata(path, header=True)
-    wcs = WCS(header)
-
-    x, y = wcs.world_to_pixel_values(ra, dec)
-    height, width = data.shape
-
-    source_path = Path(path if source_path is None else source_path)
-    print(f"{source_path}: {query} at ({x:.1f}, {y:.1f})")
-
-    if not (0 <= x < width and 0 <= y < height):
-        print("  Skipped: object is outside the image")
-        return
-
-    if radius is None:
-        x0, x1, y0, y1 = 0, width, 0, height
-    else:
-        x0 = max(0, int(x) - radius)
-        x1 = min(width, int(x) + radius)
-        y0 = max(0, int(y) - radius)
-        y1 = min(height, int(y) + radius)
-
-    # Frames from convert.py hold the raw Bayer mosaic: average each
-    # 2x2 block so the colour channels don't show as a checkerboard
-    bayer = "RAWFILE" in header
-
-    if bayer:
-        x0, y0 = x0 // 2 * 2, y0 // 2 * 2
-        x1 = x0 + (x1 - x0) // 2 * 2
-        y1 = y0 + (y1 - y0) // 2 * 2
-
-    crop = data[y0:y1, x0:x1].astype(float)
-
-    if bayer:
-        h, w = crop.shape
-        crop = crop.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
-
-    vmin, vmax = ZScaleInterval().get_limits(crop)
-
-    fig, ax = plt.subplots(figsize=(10, 7) if radius is None else None)
-
-    ax.imshow(
-        crop,
-        cmap="gray",
-        origin="lower",
-        extent=(x0 - 0.5, x1 - 0.5, y0 - 0.5, y1 - 0.5),
-        vmin=vmin,
-        vmax=vmax,
+    return save_image(
+        path, ra, dec, time, query, target_name=target_name,
+        radius=radius, source_path=source_path,
     )
-
-    ax.scatter(
-        [x],
-        [y],
-        facecolors="none",
-        edgecolors="red",
-        s=150,
-    )
-
-    ax.invert_yaxis()
-    ax.set_axis_off()
-    ax.set_title(f"{target_name or query}\n{time.utc.iso.split('.')[0]} UTC")
-
-    name = re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
-    kind = "locate" if radius is None else "crop"
-    output = source_path.with_name(f"{source_path.stem}-{kind}-{name}.png")
-
-    fig.savefig(output, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-    print(f"  Saved {output}")
 
 def main():
     parser = argparse.ArgumentParser(

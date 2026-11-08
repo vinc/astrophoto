@@ -22,6 +22,7 @@ import camera
 import center
 import convert as conversion
 import focus
+import locate
 
 def star_field(sigma):
     rng = np.random.default_rng(42)
@@ -193,18 +194,18 @@ class CenterTests(unittest.TestCase):
             fits.writeto(path, np.zeros((50, 50)), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}))
             (directory / "solved.solved").touch()
             (directory / "solved.new").touch()
-            with patch.object(center.subprocess, "run") as run:
+            with patch.object(locate.subprocess, "run") as run:
                 with self.assertRaisesRegex(RuntimeError, "Plate solving failed"):
                     center.solve_image(path, directory, None, 3, 20)
-            self.assertEqual(run.call_args.kwargs["cwd"], center.ROOT)
+            self.assertEqual(run.call_args.kwargs["cwd"], locate.ROOT)
             command = run.call_args.args[0]
-            self.assertEqual(command[command.index("--backend-config") + 1], str(center.ROOT / "astrometry.cfg"))
+            self.assertEqual(command[command.index("--backend-config") + 1], str(locate.ROOT / "astrometry.cfg"))
 
     def test_solved_input_does_not_invoke_solver(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "frame.new"
             fits.writeto(path, np.zeros((200, 300)), solved_header())
-            with patch.object(center.subprocess, "run") as run:
+            with patch.object(locate.subprocess, "run") as run:
                 result = center.solve_image(path, temporary, None, 3, 20)
             self.assertEqual(result, path)
             run.assert_not_called()

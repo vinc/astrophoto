@@ -17,39 +17,7 @@ from astropy.utils import iers
 from astropy.wcs import NoConvergence, WCS
 
 from camera import capture, display_limits, preview_figure, read_image
-from convert import convert
-from crop import get_ephemerides
-
-ROOT = Path(__file__).resolve().parent
-
-class PlateSolveError(RuntimeError):
-    pass
-
-def solve_image(path, directory, timezone, scale_low, scale_high):
-    path = path.resolve()
-    directory = Path(directory).resolve()
-    if path.suffix.lower() not in {".fit", ".fits", ".new"}:
-        path = convert(path, timezone, output=directory / "capture.fit")
-    header = fits.getheader(path)
-    if "DATE-AVG" not in header:
-        raise ValueError(f"{path}: missing DATE-AVG; convert the original RAW image first")
-    if WCS(header, fix=False).has_celestial:
-        return path
-
-    output = directory / "solved.new"
-    marker = directory / "solved.solved"
-    marker.unlink(missing_ok=True)
-    subprocess.run([
-        "solve-field", "--backend-config", str(ROOT / "astrometry.cfg"),
-        "--scale-units", "degwidth", "--scale-low", str(scale_low),
-        "--scale-high", str(scale_high), "--downsample", "2",
-        "--no-plots", "--overwrite", "--cpulimit", "60",
-        "--dir", str(directory), "--new-fits", str(output),
-        "--solved", str(marker), str(path),
-    ], cwd=ROOT, check=True)
-    if not marker.exists() or not output.exists():
-        raise PlateSolveError("Plate solving failed; check focus, exposure, indexes, and scale limits")
-    return output
+from locate import PlateSolveError, get_ephemerides, solve_image
 
 def pointing_offset(center, target, time, observer):
     location = EarthLocation.from_geodetic(

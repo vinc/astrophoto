@@ -1,6 +1,8 @@
 import contextlib
 import io
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,7 +13,6 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 
-import crop
 import locate
 
 def make_header(shape, date):
@@ -32,9 +33,18 @@ def ephemerides(query, observer, epochs):
     })
 
 class LocateTests(unittest.TestCase):
+    def test_importing_shared_locating_code_preserves_the_selected_backend(self):
+        result = subprocess.run(
+            [sys.executable, "-c", "import matplotlib; import center; import crop; print(matplotlib.get_backend())"],
+            cwd=Path(locate.__file__).resolve().parent,
+            env=dict(os.environ, MPLBACKEND="svg"),
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(result.stdout.strip().lower(), "svg")
+
     def test_full_frame_raw_and_stack_outputs_reuse_crop_style_without_a_gui(self):
         figures = []
-        subplots = crop.plt.subplots
+        subplots = locate.plt.subplots
         def record_figure(*args, **kwargs):
             figure, axes = subplots(*args, **kwargs)
             figures.append((figure, axes))
@@ -57,9 +67,9 @@ class LocateTests(unittest.TestCase):
             ]
             with patch.object(sys, "argv", argv), \
                     patch.object(locate, "get_ephemerides", side_effect=ephemerides) as lookup, \
-                    patch.object(crop.plt, "subplots", side_effect=record_figure), \
-                    patch.object(crop.plt, "show") as show, \
-                    patch.object(crop.plt, "pause") as pause, \
+                    patch.object(locate.plt, "subplots", side_effect=record_figure), \
+                    patch.object(locate.plt, "show") as show, \
+                    patch.object(locate.plt, "pause") as pause, \
                     contextlib.redirect_stdout(io.StringIO()):
                 locate.main()
 
@@ -81,7 +91,7 @@ class LocateTests(unittest.TestCase):
             self.assertEqual(axes.get_title(), f"4 Vesta (A807 FA)\n2025-01-0{index + 1} 00:00:00 UTC")
             expected = [74.5, 49.5] if index == 0 else [149.5, 99.5]
             np.testing.assert_allclose(axes.collections[0].get_offsets()[0], expected)
-            self.assertFalse(crop.plt.fignum_exists(figure.number))
+            self.assertFalse(locate.plt.fignum_exists(figure.number))
 
     def test_unsolved_stack_saves_next_to_input_after_solver_temporary_files_are_removed(self):
         solved_paths = []
@@ -103,7 +113,7 @@ class LocateTests(unittest.TestCase):
                 "--latitude", "0", "--longitude", "0", "--elevation", "0",
             ]
             with patch.object(sys, "argv", argv), \
-                    patch("center.subprocess.run", side_effect=solve) as solver, \
+                    patch("locate.subprocess.run", side_effect=solve) as solver, \
                     patch.object(locate, "get_ephemerides", side_effect=ephemerides), \
                     contextlib.redirect_stdout(io.StringIO()):
                 locate.main()
