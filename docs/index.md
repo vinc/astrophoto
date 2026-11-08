@@ -14,13 +14,13 @@
 
 ![Saturn](images/saturn.jpg)
 
-### Neptune
-
-![Neptune](images/neptune.jpg)
-
 ### Uranus
 
 ![Uranus](images/uranus.jpg)
+
+### Neptune
+
+![Neptune](images/neptune.jpg)
 
 ## Asteroids
 
