@@ -30,4 +30,4 @@
 
 ### Pallas
 
-![Pallas](images/Pallas.jpg)
+![Pallas](images/pallas.jpg)
