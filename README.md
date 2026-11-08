@@ -15,12 +15,12 @@ Center and focus the camera, capture a sequence of raw pictures, and convert
 the CR2 files into FITS files:
 
 ```sh
-python center.py 2026*/*.new \
+python focus.py
+python center.py \
     --latitude 51.18 \
     --longitude -1.83 \
     --elevation 0.10 \
     --query vesta
-python focus.py
 sh capture.sh
 python convert.py 2026*/*.CR2
 ```
