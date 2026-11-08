@@ -1,6 +1,6 @@
 # Astrophoto
 
-A collection of vibe coded astrophoto scripts
+A collection of mostly vibe coded astrophoto scripts.
 
 ## Setup
 
@@ -10,6 +10,16 @@ sh index/download.sh
 ```
 
 ## Usage
+
+Prepare a session by listing what is visible:
+
+```sh
+python visible.py \
+    --latitude 51.18 \
+    --longitude -1.83 \
+    --elevation 0.10 \
+    --time 2026-12-21T21:49
+```
 
 Center and focus the camera, capture a sequence of raw pictures, and convert
 the CR2 files into FITS files:
@@ -41,7 +51,8 @@ python locate.py 2026*/*-stack.fit \
     --query vesta
 ```
 
-Images are plate-solved if needed, with solutions saved as `.new` files for reuse.
+Images are plate-solved if needed, with solutions saved as `.new` files for
+reuse.
 
 Crop a major or minor body from the image:
 
