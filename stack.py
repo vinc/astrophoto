@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+import re
 
 import astroalign
 import numpy as np
@@ -29,6 +30,17 @@ def stack_header(reference, files):
     # Data is rewritten as unscaled float32 2x2-binned pixels
     for key in ("BZERO", "BSCALE", "RAWFILE"):
         header.remove(key, ignore_missing=True)
+
+    # Registration and binning invalidate the reference frame's coordinates
+    coordinates = re.compile(
+        r"(?:WCSAXES|WCSNAME|LONPOLE|LATPOLE|RADESYS|RADECSYS|EQUINOX)[A-Z]?|"
+        r"(?:CTYPE|CUNIT|CRPIX|CRVAL|CDELT|CROTA|CNAME|CRDER|CSYER)\d+[A-Z]?|"
+        r"(?:PC|CD|PV|PS)\d+_\d+[A-Z]?|(?:A|B|AP|BP)_(?:ORDER|DMAX|\d+_\d+)|"
+        r"(?:CPDIS|CQDIS|D2IMDIS)\d+|(?:DP|DQ|D2IM)\d+(?:\..*)?"
+    )
+    for key in list(header):
+        if coordinates.fullmatch(key):
+            header.remove(key, ignore_missing=True, remove_all=True)
 
     header["NCOMBINE"] = (len(files), "Number of frames stacked")
 

@@ -58,8 +58,8 @@ class WorkflowTests(unittest.TestCase):
                 "targetname": ["Titan (606)"] * len(ordered),
             })
 
-        def record_crop(path, radius, ra, dec, time, query, target_name=None):
-            calls.append((path.name, time.jd, ra))
+        def record_crop(path, radius, ra, dec, time, query, target_name=None, source_path=None):
+            calls.append((source_path.name, time.jd, ra))
 
         with tempfile.TemporaryDirectory() as temporary:
             paths = []
@@ -76,6 +76,7 @@ class WorkflowTests(unittest.TestCase):
                 "--latitude", "0", "--longitude", "0", "--elevation", "0",
             ]
             with patch.object(sys, "argv", argv), \
+                    patch.object(crop, "solve_image", side_effect=lambda path, *args, **kwargs: path), \
                     patch.object(crop, "get_ephemerides", side_effect=ephemerides), \
                     patch.object(crop, "crop_image", side_effect=record_crop):
                 crop.main()
@@ -123,6 +124,31 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(header["BITPIX"], -32)
         self.assertNotIn("BZERO", header)
         self.assertNotIn("RAWFILE", header)
+
+    def test_stack_drops_reference_wcs_and_distortion_after_binning(self):
+        from astropy.wcs import WCS
+        wcs = WCS(naxis=2)
+        wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+        wcs.wcs.crval = [120, 20]
+        wcs.wcs.crpix = [100, 100]
+        wcs.wcs.cdelt = [-0.02, 0.02]
+        header = wcs.to_header()
+        extra = {
+            "CD1_1": -0.02, "CD2_2": 0.02, "CTYPE1A": "RA---TAN", "CRPIX1A": 100,
+            "A_ORDER": 2, "B_ORDER": 2, "A_2_0": 0.001, "AP_ORDER": 2, "BP_0_2": 0.001,
+            "CPDIS1": "LOOKUP", "DP1.EXTVER": 1, "D2IMDIS1": "LOOKUP", "D2IM1.EXTVER": 1,
+        }
+        header.update(extra)
+        header["INSTRUME"] = "test camera"
+        header["DATE-AVG"] = "2025-01-01T00:00:00"
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "frame.new"
+            fits.writeto(source, np.zeros((200, 200)), header)
+            result = stack.stack_header(source, [source])
+        self.assertFalse(WCS(result).has_celestial)
+        self.assertTrue(all(key not in result for key in extra))
+        self.assertEqual(result["INSTRUME"], "test camera")
+        self.assertEqual(result["DATE-AVG"], header["DATE-AVG"])
 
     def test_crop_bins_bayer_frames_and_keeps_marker_on_target(self):
         from astropy.wcs import WCS
