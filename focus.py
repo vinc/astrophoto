@@ -13,6 +13,9 @@ from astropy.stats import sigma_clipped_stats
 
 from camera import capture, display_limits, preview_figure, read_image
 
+class FocusRangeError(ValueError):
+    pass
+
 def measure_stars(data, saturated=None, radius=12, max_stars=20):
     background, _, noise = sigma_clipped_stats(data)
     inner = data[1:-1, 1:-1]
@@ -45,10 +48,16 @@ def measure_stars(data, saturated=None, radius=12, max_stars=20):
         # A real star must extend beyond an isolated detector pixel
         if np.count_nonzero(core > sky + 3 * noise) < 3:
             continue
+        yy, xx = np.indices(stamp.shape)
+        distance = np.hypot(xx - radius, yy - radius)
+        rim = (distance > radius - 1.5) & (distance <= radius)
+        # Bright wings at the aperture edge make a truncated HFR misleading
+        threshold = max(5 * noise, 0.05 * (core.max() - sky))
+        if np.count_nonzero(stamp[rim] - sky > threshold) >= 3:
+            raise FocusRangeError("HFR out of range: improve rough focus or increase --radius")
         signal = stamp - sky
         flux = np.maximum(signal, 0)
-        yy, xx = np.indices(stamp.shape)
-        aperture = np.hypot(xx - radius, yy - radius) <= radius
+        aperture = distance <= radius
         flux *= aperture
         positive_total = flux.sum()
         total = signal[aperture].sum()
@@ -68,6 +77,8 @@ def measure_stars(data, saturated=None, radius=12, max_stars=20):
             hfr = np.interp(total / 2, cumulative[index - 1:index + 1], radii[index - 1:index + 1])
         if 0 < hfr < radius / 2:
             stars.append((x + cx - radius, y + cy - radius, hfr))
+        else:
+            raise FocusRangeError("HFR out of range: improve rough focus or increase --radius")
         if len(stars) == max_stars:
             break
     return stars
@@ -110,6 +121,7 @@ def main():
     parser.add_argument("--shutterspeed", default="1/4", help="gphoto2 shutter speed for new captures (default: 1/4)")
     parser.add_argument("--interval", type=float, default=1, help="Pause between captures in seconds (default: 1)")
     parser.add_argument("--frames", type=int, default=0, help="Number of new captures; 0 repeats until stopped")
+    parser.add_argument("--radius", type=int, default=12, help="Aperture radius in binned image pixels (default: 12)")
     preview = parser.add_mutually_exclusive_group()
     preview.add_argument("--plot", action="store_true", help="Open a preview window for saved images")
     preview.add_argument("--no-plot", action="store_true", help="Print measurements without a preview window")
@@ -117,6 +129,8 @@ def main():
     args = parser.parse_args()
     if args.interval < 0 or args.frames < 0:
         parser.error("--interval and --frames must not be negative")
+    if args.radius < 3:
+        parser.error("--radius must be at least 3")
     if args.save_preview and len(args.files) > 1:
         parser.error("--save-preview accepts one saved image at a time")
 
@@ -133,17 +147,32 @@ def main():
             if figure is not None and not plt.fignum_exists(figure.number):
                 break
             with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
-                path = args.files[count] if args.files else capture(temporary, args.shutterspeed)
+                try:
+                    path = args.files[count] if args.files else capture(temporary, args.shutterspeed)
+                except subprocess.CalledProcessError as exc:
+                    print(f"{exc}; retrying with the next capture", flush=True)
+                    if figure is not None:
+                        figure.suptitle("Capture failed; retrying")
+                        figure.canvas.draw_idle()
+                    if interactive:
+                        plt.pause(max(args.interval, 0.01))
+                    else:
+                        time.sleep(max(args.interval, 0.1))
+                    continue
                 data, saturated, scale = read_image(path)
-                stars = measure_stars(data, saturated)
+                try:
+                    stars = measure_stars(data, saturated, radius=args.radius)
+                except FocusRangeError as exc:
+                    stars = []
+                    title = str(exc)
+                else:
+                    title = "No usable stars: check rough focus, exposure, or saturation"
                 if stars:
                     hfr = float(np.median([star[2] for star in stars])) * scale
                     best = min(best, hfr)
                     title = f"HFR {hfr:.2f} px | {len(stars)} stars"
                     if not args.files:
                         title += f" | best {best:.2f}"
-                else:
-                    title = "No usable stars: check rough focus, exposure, or saturation"
                 print(f"{path.name}: {title}", flush=True)
                 if figure is not None:
                     show_focus(figure, data, stars, title, interactive=interactive)

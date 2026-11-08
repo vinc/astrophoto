@@ -1,6 +1,7 @@
 import contextlib
 import io
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -64,6 +65,57 @@ class PreviewTests(unittest.TestCase):
             capture.assert_not_called()
 
 class FocusTests(unittest.TestCase):
+    def test_broad_gaussians_and_rings_need_a_larger_aperture(self):
+        y, x = np.mgrid[:256, :256]
+        distance = np.hypot(x - 128.2, y - 128.3)
+        for kind, widths in [("gaussian", [5, 8]), ("ring", [6, 10])]:
+            measured = []
+            for width in widths:
+                data = np.random.default_rng(42).normal(100, 0.2, distance.shape)
+                if kind == "gaussian":
+                    data += 1000 * np.exp(-distance**2 / (2 * width**2))
+                    expected = 1.1774 * width
+                else:
+                    data += 100 * np.exp(-(distance - width)**2 / 2)
+                    expected = width
+                with self.subTest(kind=kind, width=width), \
+                        self.assertRaisesRegex(focus.FocusRangeError, "out of range"):
+                    focus.measure_stars(data)
+                stars = focus.measure_stars(data, radius=32)
+                self.assertEqual(len(stars), 1)
+                measured.append(stars[0][2])
+                self.assertAlmostEqual(measured[-1], expected, delta=0.4)
+            self.assertGreater(measured[1], measured[0] * 1.4)
+
+    def test_out_of_range_frame_does_not_replace_best_focus(self):
+        argv = ["focus.py", "--no-plot", "--frames", "3", "--interval", "0"]
+        with patch.object(sys, "argv", argv), \
+                patch.object(focus, "capture", return_value=Path("capture.fit")), \
+                patch.object(focus, "read_image", side_effect=[
+                    (star_field(1.5), None, 1), (star_field(8), None, 1), (star_field(3), None, 1),
+                ]), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            focus.main()
+        readings = [line for line in output.getvalue().splitlines() if line.startswith("capture.fit:")]
+        self.assertEqual(len(readings), 3)
+        self.assertIn("out of range", readings[1])
+        self.assertNotIn("best", readings[1])
+        self.assertEqual(readings[0].split("best ")[1], readings[2].split("best ")[1])
+
+    def test_live_capture_failure_is_retried_without_counting_a_frame(self):
+        argv = ["focus.py", "--no-plot", "--frames", "1", "--interval", "0", "--radius", "32"]
+        with patch.object(sys, "argv", argv), \
+                patch.object(focus, "capture", side_effect=[
+                    subprocess.CalledProcessError(1, "gphoto2"), Path("capture.fit"),
+                ]) as capture, \
+                patch.object(focus, "read_image", return_value=(star_field(3), None, 1)), \
+                patch.object(focus.time, "sleep"), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            focus.main()
+        self.assertEqual(capture.call_count, 2)
+        self.assertIn("retrying with the next capture", output.getvalue())
+        self.assertIn("HFR", output.getvalue())
+
     def test_saved_image_defaults_to_text_measurements(self):
         argv = ["focus.py", "saved.fit"]
         with patch.object(sys, "argv", argv), \
@@ -161,6 +213,74 @@ class FocusTests(unittest.TestCase):
             self.assertEqual(image[0, 0], 0)
 
 class CenterTests(unittest.TestCase):
+    def test_live_correction_keeps_camera_fixed_and_advances_target_time(self):
+        exposure = Time("2025-01-01T00:00:00")
+        current = Time("2025-01-01T00:10:00")
+        observer = {"lat": 0, "lon": 0, "elevation": 0}
+        frame = AltAz(obstime=exposure, location=EarthLocation.from_geodetic(0 * u.deg, 0 * u.deg))
+        with iers.conf.set_temp("auto_download", False), iers.conf.set_temp("auto_max_age", None):
+            target = SkyCoord(az=90 * u.deg, alt=40 * u.deg, frame=frame).icrs
+            future = target.transform_to(AltAz(obstime=current, location=frame.location))
+        pan, tilt = center.pointing_offset(target, target, exposure, observer, target_time=current)
+        self.assertAlmostEqual(pan, (future.az.deg - 90 + 180) % 360 - 180, places=5)
+        self.assertAlmostEqual(tilt, future.alt.deg - 40, places=5)
+        self.assertGreater(abs(tilt), 2)
+        old_pan, old_tilt = center.pointing_offset(target, target, exposure, observer)
+        self.assertAlmostEqual(old_pan, 0, places=5)
+        self.assertAlmostEqual(old_tilt, 0, places=5)
+
+    def test_live_lookup_updates_target_but_marker_uses_exposure_position(self):
+        header = solved_header()
+        exposure = Time(header["DATE-AVG"])
+        current = exposure + 60 * u.s
+        original = WCS(header).pixel_to_world(100, 80)
+        from astropy.table import Table
+        positions = Table({
+            "RA": [original.ra.deg, original.ra.deg + 0.01],
+            "DEC": [original.dec.deg, original.dec.deg + 0.01],
+            "targetname": ["test", "test"],
+        })
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "frame.new"
+            fits.writeto(path, np.zeros((200, 300)), header)
+            with patch.object(center, "get_ephemerides", return_value=positions) as lookup, \
+                    patch.object(center, "pointing_offset", return_value=(1, 2)) as offset, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                result = center.inspect_image(path, "test", {"lat": 0, "lon": 0, "elevation": 0}, correction_time=current)
+        self.assertEqual(lookup.call_args.args[2], [exposure.jd, current.jd])
+        self.assertAlmostEqual(offset.call_args.args[1].ra.deg, original.ra.deg + 0.01)
+        self.assertEqual(offset.call_args.kwargs["target_time"], current)
+        self.assertAlmostEqual(result["x"], 100, places=5)
+        self.assertAlmostEqual(result["y"], 80, places=5)
+
+    def test_live_capture_failure_is_retried_and_saved_images_keep_exposure_time(self):
+        options = ["--query", "vesta", "--latitude", "0", "--longitude", "0", "--elevation", "0", "--no-plot"]
+        now = Time("2025-01-01T00:10:00")
+        with patch.object(sys, "argv", ["center.py", "--loop", *options]), \
+                patch.object(center, "capture", side_effect=[
+                    subprocess.CalledProcessError(1, "gphoto2"), Path("capture.fit"), KeyboardInterrupt(),
+                ]) as capture, \
+                patch.object(center, "solve_image", return_value=Path("solved.new")) as solve, \
+                patch.object(center, "inspect_image") as inspect, \
+                patch.object(center.Time, "now", return_value=now), \
+                patch.object(center.time, "sleep"), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            center.main()
+        self.assertEqual(capture.call_count, 3)
+        inspect.assert_called_once()
+        self.assertEqual(inspect.call_args.kwargs["correction_time"], now)
+        self.assertFalse(solve.call_args.kwargs["keep_solution"])
+        self.assertIn("retrying with the next capture", output.getvalue())
+
+        with patch.object(sys, "argv", ["center.py", "saved.fit", *options]), \
+                patch.object(center, "capture") as capture, \
+                patch.object(center, "solve_image", return_value=Path("saved.new")) as solve, \
+                patch.object(center, "inspect_image") as inspect:
+            center.main()
+        capture.assert_not_called()
+        self.assertIsNone(inspect.call_args.kwargs["correction_time"])
+        self.assertTrue(solve.call_args.kwargs["keep_solution"])
+
     def test_pan_wraps_across_north_and_tilt_has_correct_sign(self):
         time = Time("2025-01-01T00:00:00")
         observer = {"lat": 0, "lon": 0, "elevation": 0}

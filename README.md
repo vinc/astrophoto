@@ -41,13 +41,12 @@ python locate.py 2026*/*-stack.fit \
     --query vesta
 ```
 
-Images are plate-solved if needed.
+Images are plate-solved if needed, with solutions saved as `.new` files for reuse.
 
 Crop a major or minor body from the image:
 
 ```sh
-sh solve.sh 2026*/*.fit
-python crop.py 2026*/*.new \
+python crop.py 2026*/*.fit \
     --latitude 51.18 \
     --longitude -1.83 \
     --elevation 0.10 \

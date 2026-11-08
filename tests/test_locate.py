@@ -93,7 +93,7 @@ class LocateTests(unittest.TestCase):
             np.testing.assert_allclose(axes.collections[0].get_offsets()[0], expected)
             self.assertFalse(locate.plt.fignum_exists(figure.number))
 
-    def test_unsolved_stack_saves_next_to_input_after_solver_temporary_files_are_removed(self):
+    def test_unsolved_stack_keeps_solution_and_png_after_temporary_files_are_removed(self):
         solved_paths = []
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -120,6 +120,7 @@ class LocateTests(unittest.TestCase):
 
             solver.assert_called_once()
             self.assertTrue((directory / "session-stack-locate-vesta.png").is_file())
+            self.assertTrue((directory / "session-stack.new").is_file())
             self.assertEqual(source.read_bytes(), original)
             self.assertTrue(all(not path.exists() for path in solved_paths))
 

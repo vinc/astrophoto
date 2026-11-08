@@ -19,7 +19,7 @@ from astropy.wcs import NoConvergence, WCS
 from camera import capture, display_limits, preview_figure, read_image
 from locate import PlateSolveError, get_ephemerides, solve_image
 
-def pointing_offset(center, target, time, observer):
+def pointing_offset(center, target, time, observer, target_time=None):
     location = EarthLocation.from_geodetic(
         observer["lon"] * u.deg, observer["lat"] * u.deg,
         observer["elevation"] * u.km,
@@ -28,7 +28,8 @@ def pointing_offset(center, target, time, observer):
     # Bundled Earth rotation data is sufficient for manual pointing
     with iers.conf.set_temp("auto_download", False), iers.conf.set_temp("auto_max_age", None):
         center_altaz = center.transform_to(frame)
-        target_altaz = target.transform_to(frame)
+        target_frame = frame if target_time is None else AltAz(obstime=target_time, location=location)
+        target_altaz = target.transform_to(target_frame)
     azimuth = (target_altaz.az - center_altaz.az).wrap_at(180 * u.deg).deg
     altitude = (target_altaz.alt - center_altaz.alt).deg
     return float(azimuth), float(altitude)
@@ -38,7 +39,7 @@ def angle_text(degrees):
         return f"{abs(degrees):.2f} degrees"
     return f"{abs(degrees) * 60:.1f} arcmin"
 
-def inspect_image(path, query, observer, coordinates=None):
+def inspect_image(path, query, observer, coordinates=None, correction_time=None):
     data, header = fits.getdata(path, header=True)
     if data.ndim != 2:
         raise ValueError("Expected a 2D plate-solved FITS image")
@@ -47,13 +48,19 @@ def inspect_image(path, query, observer, coordinates=None):
     height, width = data.shape
     center = wcs.pixel_to_world((width - 1) / 2, (height - 1) / 2)
     if coordinates is None:
-        position = get_ephemerides(query, observer, [time.jd])[0]
+        epochs = [time.jd] if correction_time is None else sorted([time.jd, correction_time.jd])
+        positions = get_ephemerides(query, observer, epochs)
+        exposure_index = 0 if correction_time is None or time <= correction_time else 1
+        position = positions[exposure_index]
         target = SkyCoord(float(position["RA"]) * u.deg, float(position["DEC"]) * u.deg)
         target_name = str(position["targetname"])
+        current = positions[1 - exposure_index] if correction_time is not None else position
+        correction_target = SkyCoord(float(current["RA"]) * u.deg, float(current["DEC"]) * u.deg)
     else:
         target = SkyCoord(coordinates[0] * u.deg, coordinates[1] * u.deg)
+        correction_target = target
         target_name = query
-    pan, tilt = pointing_offset(center, target, time, observer)
+    pan, tilt = pointing_offset(center, correction_target, time, observer, target_time=correction_time)
     try:
         x, y = map(float, wcs.world_to_pixel(target))
     except NoConvergence:
@@ -124,6 +131,7 @@ def main():
     parser.add_argument("--timezone", default="Europe/Paris", help="Camera clock timezone (default: Europe/Paris)")
     parser.add_argument("--scale-low", type=float, default=3, help="Minimum image width in degrees (default: 3)")
     parser.add_argument("--scale-high", type=float, default=20, help="Maximum image width in degrees (default: 20)")
+    parser.add_argument("--cpu-limit", type=int, default=60, help="Plate-solving CPU limit in seconds (default: 60)")
     parser.add_argument("--shutterspeed", help="Optional gphoto2 shutter speed for new captures")
     parser.add_argument("--loop", action="store_true", help="Repeat new captures until Ctrl-C or the window is closed")
     preview = parser.add_mutually_exclusive_group()
@@ -139,6 +147,8 @@ def main():
         parser.error("Invalid observer latitude or longitude")
     if not (0 < args.scale_low < args.scale_high):
         parser.error("Scale limits must satisfy 0 < --scale-low < --scale-high")
+    if args.cpu_limit <= 0:
+        parser.error("--cpu-limit must be positive")
     if args.loop and args.file:
         parser.error("--loop requires new captures, so omit the input file")
 
@@ -155,17 +165,22 @@ def main():
             if figure is not None and not plt.fignum_exists(figure.number):
                 break
             with tempfile.TemporaryDirectory(prefix="astrophoto-center-") as temporary:
-                path = args.file or capture(temporary, args.shutterspeed)
                 try:
-                    solved = solve_image(path, temporary, timezone, args.scale_low, args.scale_high)
-                except PlateSolveError as exc:
+                    path = args.file or capture(temporary, args.shutterspeed)
+                    solved = solve_image(
+                        path, temporary, timezone, args.scale_low, args.scale_high,
+                        cpu_limit=args.cpu_limit, keep_solution=args.file is not None,
+                    )
+                except (PlateSolveError, subprocess.CalledProcessError) as exc:
                     if not args.loop:
                         raise
                     print(f"{exc}; retrying with the next capture", flush=True)
                     if figure is not None:
-                        figure.suptitle("No solution; adjust the camera before the next exposure")
+                        figure.suptitle("Capture or plate solving failed; retrying")
+                        figure.canvas.draw_idle()
                 else:
-                    result = inspect_image(solved, query, observer, coordinates)
+                    correction_time = Time.now() if args.file is None else None
+                    result = inspect_image(solved, query, observer, coordinates, correction_time=correction_time)
                     if figure is not None:
                         show_pointing(figure, solved, query, result, interactive=interactive)
                         if args.save_preview:

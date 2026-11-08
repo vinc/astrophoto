@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 from zoneinfo import ZoneInfo
@@ -22,8 +23,9 @@ ROOT = Path(__file__).resolve().parent
 class PlateSolveError(RuntimeError):
     pass
 
-def solve_image(path, directory, timezone, scale_low, scale_high):
+def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, keep_solution=False):
     path = path.resolve()
+    source = path
     directory = Path(directory).resolve()
     if path.suffix.lower() not in {".fit", ".fits", ".new"}:
         path = convert(path, timezone, output=directory / "capture.fit")
@@ -33,19 +35,47 @@ def solve_image(path, directory, timezone, scale_low, scale_high):
     if WCS(header, fix=False).has_celestial:
         return path
 
+    cached = source.with_suffix(".new")
+    if cached == source:
+        cached = source.with_name(f"{source.stem}-solved.new")
+    if keep_solution and cached.exists() and cached.stat().st_mtime_ns >= source.stat().st_mtime_ns:
+        try:
+            previous = fits.getheader(cached)
+            same_frame = all(previous.get(key) == header.get(key) for key in ("DATE-AVG", "NAXIS1", "NAXIS2"))
+            if same_frame and WCS(previous, fix=False).has_celestial:
+                return cached
+        except (OSError, ValueError):
+            pass
+
     output = directory / "solved.new"
     marker = directory / "solved.solved"
     marker.unlink(missing_ok=True)
-    subprocess.run([
-        "solve-field", "--backend-config", str(ROOT / "astrometry.cfg"),
-        "--scale-units", "degwidth", "--scale-low", str(scale_low),
-        "--scale-high", str(scale_high), "--downsample", "2",
-        "--no-plots", "--overwrite", "--cpulimit", "60",
-        "--dir", str(directory), "--new-fits", str(output),
-        "--solved", str(marker), str(path),
-    ], cwd=ROOT, check=True)
+    try:
+        subprocess.run([
+            "solve-field", "--backend-config", str(ROOT / "astrometry.cfg"),
+            "--scale-units", "degwidth", "--scale-low", str(scale_low),
+            "--scale-high", str(scale_high), "--downsample", "2",
+            "--no-plots", "--overwrite", "--cpulimit", str(cpu_limit),
+            "--dir", str(directory), "--new-fits", str(output),
+            "--solved", str(marker), str(path),
+        ], cwd=ROOT, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise PlateSolveError(f"Plate solving failed with exit status {exc.returncode}") from exc
     if not marker.exists() or not output.exists():
         raise PlateSolveError("Plate solving failed; check focus, exposure, indexes, and scale limits")
+    if not WCS(fits.getheader(output), fix=False).has_celestial:
+        raise PlateSolveError("Plate solving returned an image without celestial coordinates")
+    if keep_solution:
+        with tempfile.NamedTemporaryFile(dir=cached.parent, delete=False) as saved:
+            temporary = Path(saved.name)
+            try:
+                with output.open("rb") as solved:
+                    shutil.copyfileobj(solved, saved)
+                saved.close()
+                temporary.replace(cached)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return cached
     return output
 
 def get_ephemerides(query, observer, epochs):
@@ -163,11 +193,14 @@ def main():
     parser.add_argument("--timezone", default="Europe/Paris", help="Camera clock timezone (default: Europe/Paris)")
     parser.add_argument("--scale-low", type=float, default=3, help="Minimum image width in degrees (default: 3)")
     parser.add_argument("--scale-high", type=float, default=20, help="Maximum image width in degrees (default: 20)")
+    parser.add_argument("--cpu-limit", type=int, default=60, help="Plate-solving CPU limit in seconds (default: 60)")
     args = parser.parse_args()
     if not (-90 <= args.latitude <= 90 and -180 <= args.longitude <= 180):
         parser.error("Invalid observer latitude or longitude")
     if not (0 < args.scale_low < args.scale_high):
         parser.error("Scale limits must satisfy 0 < --scale-low < --scale-high")
+    if args.cpu_limit <= 0:
+        parser.error("--cpu-limit must be positive")
 
     timezone = ZoneInfo(args.timezone)
     observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
@@ -178,7 +211,10 @@ def main():
             try:
                 directory = Path(temporary) / str(index)
                 directory.mkdir()
-                solved = solve_image(path, directory, timezone, args.scale_low, args.scale_high)
+                solved = solve_image(
+                    path, directory, timezone, args.scale_low, args.scale_high,
+                    cpu_limit=args.cpu_limit, keep_solution=True,
+                )
                 header = fits.getheader(solved)
                 time = Time(header["DATE-AVG"], format="isot", scale="utc")
                 observations.append((path, solved, time))
