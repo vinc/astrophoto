@@ -3,6 +3,7 @@ import io
 import os
 from pathlib import Path
 import subprocess
+import stat
 import sys
 import tempfile
 import unittest
@@ -31,6 +32,16 @@ def solve(command, **kwargs):
     output.with_suffix(".axy").touch()
 
 class SolverTests(unittest.TestCase):
+    def test_saved_solutions_match_source_permissions(self):
+        for mode in [0o644, 0o640, 0o444]:
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary) / "frame.fit"
+                fits.writeto(source, np.zeros((20, 30)), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}))
+                source.chmod(mode)
+                with patch.object(locate.subprocess, "run", side_effect=solve):
+                    output = locate.solve_image(source, temporary, None, 3, 20, keep_solution=True)
+                self.assertEqual(stat.S_IMODE(output.stat().st_mode), mode)
+
     def test_crop_and_locate_reuse_the_same_solution_and_keep_only_new(self):
         result = Table({"RA": [120.0], "DEC": [20.0], "targetname": ["4 Vesta"]})
         with tempfile.TemporaryDirectory() as temporary:
@@ -114,13 +125,68 @@ class SolverTests(unittest.TestCase):
                 fits.writeto(output, np.zeros((20, 30)), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}), overwrite=True)
                 return output
             with tempfile.TemporaryDirectory() as work, \
-                    patch.object(locate, "convert", side_effect=convert), \
+                    patch.object(locate, "convert", side_effect=convert) as converter, \
                     patch.object(locate.subprocess, "run", side_effect=solve) as solver:
                 for _ in range(2):
                     output = locate.solve_image(source, work, None, 3, 20, keep_solution=True)
                     self.assertEqual(output, source.with_suffix(".new"))
                 solver.assert_called_once()
+                converter.assert_called_once()
+                self.assertEqual(stat.S_IMODE(output.stat().st_mode), stat.S_IMODE(source.stat().st_mode))
             self.assertTrue(output.exists())
+
+    def test_legacy_raw_solution_is_validated_once_then_skips_decoding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "IMG_0001.CR2"
+            source.write_bytes(b"raw")
+            def convert(path, timezone, output):
+                fits.writeto(output, np.zeros((20, 30)), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}), overwrite=True)
+                return output
+            with tempfile.TemporaryDirectory() as work, \
+                    patch.object(locate, "convert", side_effect=convert) as converter, \
+                    patch.object(locate.subprocess, "run", side_effect=solve) as solver:
+                cached = locate.solve_image(source, work, None, 3, 20, keep_solution=True)
+                with fits.open(cached, mode="update") as old:
+                    for key in ("RAWFILE", "RAWSIZE", "RAWMTIME", "RAWTZ"):
+                        del old[0].header[key]
+                converter.reset_mock()
+                solver.reset_mock()
+                for _ in range(2):
+                    self.assertEqual(locate.solve_image(source, work, None, 3, 20, keep_solution=True), cached)
+                converter.assert_called_once()
+                solver.assert_not_called()
+
+    def test_raw_cache_identity_changes_force_conversion_and_a_new_solve(self):
+        for change in ["size", "mtime", "timezone", "filename", "invalid_wcs"]:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary) / "IMG_0001.CR2"
+                source.write_bytes(b"raw")
+                def convert(path, timezone, output):
+                    fits.writeto(output, np.zeros((20, 30)), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}), overwrite=True)
+                    return output
+                with tempfile.TemporaryDirectory() as work, \
+                        patch.object(locate, "convert", side_effect=convert) as converter, \
+                        patch.object(locate.subprocess, "run", side_effect=solve) as solver:
+                    cached = locate.solve_image(source, work, None, 3, 20, keep_solution=True)
+                    stamp = source.stat()
+                    timezone = None
+                    if change == "size":
+                        source.write_bytes(b"changed raw")
+                        os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                    elif change == "mtime":
+                        os.utime(source, ns=(stamp.st_atime_ns, stamp.st_mtime_ns - 1))
+                    elif change == "timezone":
+                        timezone = "UTC"
+                    else:
+                        with fits.open(cached, mode="update") as saved:
+                            if change == "filename":
+                                saved[0].header["RAWFILE"] = "OTHER.CR2"
+                            else:
+                                del saved[0].header["CTYPE1"]
+                                del saved[0].header["CTYPE2"]
+                    locate.solve_image(source, work, timezone, 3, 20, keep_solution=True)
+                    self.assertEqual(converter.call_count, 2)
+                    self.assertEqual(solver.call_count, 2)
 
     def test_failed_solver_preserves_existing_cache_and_raises_a_retryable_error(self):
         with tempfile.TemporaryDirectory() as temporary:

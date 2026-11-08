@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from zoneinfo import ZoneInfo
@@ -23,11 +24,53 @@ ROOT = Path(__file__).resolve().parent
 class PlateSolveError(RuntimeError):
     pass
 
+def _save_solution(output, cached, source, source_info, timezone, raw):
+    with tempfile.NamedTemporaryFile(dir=cached.parent, delete=False) as saved:
+        temporary = Path(saved.name)
+        try:
+            with output.open("rb") as solved:
+                shutil.copyfileobj(solved, saved)
+            saved.close()
+            if raw:
+                with fits.open(temporary, mode="update") as solved:
+                    header = solved[0].header
+                    header["RAWFILE"] = source.name
+                    header["RAWSIZE"] = (source_info.st_size, "Original RAW size in bytes")
+                    header["RAWMTIME"] = (source_info.st_mtime_ns, "Original RAW modification time in ns")
+                    header["RAWTZ"] = (str(timezone), "Camera clock timezone used for conversion")
+            temporary.chmod(stat.S_IMODE(source_info.st_mode))
+            temporary.replace(cached)
+        finally:
+            temporary.unlink(missing_ok=True)
+
 def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, keep_solution=False):
     path = path.resolve()
     source = path
+    source_info = source.stat()
     directory = Path(directory).resolve()
-    if path.suffix.lower() not in {".fit", ".fits", ".new"}:
+    raw = path.suffix.lower() not in {".fit", ".fits", ".new"}
+    cached = source.with_suffix(".new")
+    if cached == source:
+        cached = source.with_name(f"{source.stem}-solved.new")
+    previous = None
+    if keep_solution and cached.exists() and cached.stat().st_mtime_ns >= source_info.st_mtime_ns:
+        try:
+            candidate = fits.getheader(cached)
+            if "DATE-AVG" in candidate and WCS(candidate, fix=False).has_celestial:
+                previous = candidate
+        except (OSError, ValueError):
+            pass
+    # Provenance lets RAW caches be checked without decoding the sensor data
+    if raw and previous is not None:
+        identity = {
+            "RAWFILE": source.name, "RAWSIZE": source_info.st_size,
+            "RAWMTIME": source_info.st_mtime_ns, "RAWTZ": str(timezone),
+        }
+        if all(previous.get(key) == value for key, value in identity.items()):
+            return cached
+        if any(key in previous for key in ("RAWSIZE", "RAWMTIME", "RAWTZ")):
+            previous = None
+    if raw:
         path = convert(path, timezone, output=directory / "capture.fit")
     header = fits.getheader(path)
     if "DATE-AVG" not in header:
@@ -35,17 +78,14 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
     if WCS(header, fix=False).has_celestial:
         return path
 
-    cached = source.with_suffix(".new")
-    if cached == source:
-        cached = source.with_name(f"{source.stem}-solved.new")
-    if keep_solution and cached.exists() and cached.stat().st_mtime_ns >= source.stat().st_mtime_ns:
-        try:
-            previous = fits.getheader(cached)
-            same_frame = all(previous.get(key) == header.get(key) for key in ("DATE-AVG", "NAXIS1", "NAXIS2"))
-            if same_frame and WCS(previous, fix=False).has_celestial:
-                return cached
-        except (OSError, ValueError):
-            pass
+    if previous is not None:
+        same_frame = all(previous.get(key) == header.get(key) for key in ("DATE-AVG", "NAXIS1", "NAXIS2"))
+        if raw:
+            same_frame = same_frame and previous.get("RAWFILE") == header.get("RAWFILE")
+        if same_frame:
+            if raw:
+                _save_solution(cached, cached, source, source_info, timezone, raw=True)
+            return cached
 
     output = directory / "solved.new"
     marker = directory / "solved.solved"
@@ -66,15 +106,7 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
     if not WCS(fits.getheader(output), fix=False).has_celestial:
         raise PlateSolveError("Plate solving returned an image without celestial coordinates")
     if keep_solution:
-        with tempfile.NamedTemporaryFile(dir=cached.parent, delete=False) as saved:
-            temporary = Path(saved.name)
-            try:
-                with output.open("rb") as solved:
-                    shutil.copyfileobj(solved, saved)
-                saved.close()
-                temporary.replace(cached)
-            finally:
-                temporary.unlink(missing_ok=True)
+        _save_solution(output, cached, source, source_info, timezone, raw=raw)
         return cached
     return output
 

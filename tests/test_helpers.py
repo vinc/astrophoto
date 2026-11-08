@@ -65,6 +65,44 @@ class PreviewTests(unittest.TestCase):
             capture.assert_not_called()
 
 class FocusTests(unittest.TestCase):
+    def test_close_pairs_do_not_discard_other_in_focus_stars(self):
+        y, x = np.mgrid[:256, :320]
+        for radius in [12, 24]:
+            for separation, brightness in [(10, 0.5), (12, 0.2)]:
+                with self.subTest(radius=radius, separation=separation):
+                    data = np.random.default_rng(42).normal(100, 0.2, x.shape)
+                    for sx, sy in [(40.2, 40.3), (100.1, 50.4), (180.3, 120.2), (60.4, 140.1)]:
+                        data += 1000 * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * 1.5**2))
+                    for sx, peak in [(260.2, 5000), (260.2 + separation, 5000 * brightness)]:
+                        data += peak * np.exp(-((x - sx)**2 + (y - 200.3)**2) / (2 * 1.5**2))
+                    stars = focus.measure_stars(data, radius=radius)
+                    self.assertEqual(len(stars), 4)
+                    self.assertTrue(all(sx < 220 for sx, _, _ in stars))
+                    self.assertAlmostEqual(np.median([star[2] for star in stars]), 1.1774 * 1.5, delta=0.2)
+
+    def test_crowded_fields_stay_measurable_with_a_larger_aperture(self):
+        y, x = np.mgrid[:512, :512]
+        for seed in range(3):
+            rng = np.random.default_rng(seed)
+            data = rng.normal(100, 0.2, x.shape)
+            for sx, sy, peak in rng.uniform([30, 30, 100], [482, 482, 1000], (150, 3)):
+                data += peak * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * 1.5**2))
+            for radius in [12, 24]:
+                with self.subTest(seed=seed, radius=radius):
+                    stars = focus.measure_stars(data, radius=radius)
+                    self.assertEqual(len(stars), 20)
+                    self.assertAlmostEqual(np.median([star[2] for star in stars]), 1.1774 * 1.5, delta=0.2)
+
+    def test_one_broad_candidate_does_not_discard_a_sharp_star(self):
+        y, x = np.mgrid[:256, :256]
+        data = np.random.default_rng(42).normal(100, 0.2, x.shape)
+        data += 5000 * np.exp(-((x - 80.2)**2 + (y - 80.3)**2) / (2 * 8**2))
+        data += 1000 * np.exp(-((x - 180.2)**2 + (y - 180.3)**2) / (2 * 1.5**2))
+        stars = focus.measure_stars(data)
+        self.assertEqual(len(stars), 1)
+        self.assertAlmostEqual(stars[0][0], 180.2, delta=0.2)
+        self.assertAlmostEqual(stars[0][2], 1.1774 * 1.5, delta=0.2)
+
     def test_broad_gaussians_and_rings_need_a_larger_aperture(self):
         y, x = np.mgrid[:256, :256]
         distance = np.hypot(x - 128.2, y - 128.3)

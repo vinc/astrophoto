@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.nddata import Cutout2D
 from astropy.stats import sigma_clipped_stats
+from scipy.ndimage import label
 
 from camera import capture, display_limits, preview_figure, read_image
 
@@ -28,6 +29,7 @@ def measure_stars(data, saturated=None, radius=12, max_stars=20):
     ys, xs = ys + 1, xs + 1
     order = np.argsort(data[ys, xs])[::-1]
     stars = []
+    out_of_range = 0
 
     for index in order:
         x, y = int(xs[index]), int(ys[index])
@@ -50,14 +52,22 @@ def measure_stars(data, saturated=None, radius=12, max_stars=20):
             continue
         yy, xx = np.indices(stamp.shape)
         distance = np.hypot(xx - radius, yy - radius)
+        aperture = distance <= radius
         rim = (distance > radius - 1.5) & (distance <= radius)
-        # Bright wings at the aperture edge make a truncated HFR misleading
         threshold = max(5 * noise, 0.05 * (core.max() - sky))
+        # Separate stellar footprints in one aperture would inflate its HFR
+        components, _ = label((stamp - sky > threshold) & aperture, structure=np.ones((3, 3)))
+        sizes = np.bincount(components.ravel())
+        sizes[0] = 0
+        sizes[components[radius, radius]] = 0
+        if np.any(sizes >= 3):
+            continue
+        # Bright wings at the aperture edge make a truncated HFR misleading
         if np.count_nonzero(stamp[rim] - sky > threshold) >= 3:
-            raise FocusRangeError("HFR out of range: improve rough focus or increase --radius")
+            out_of_range += 1
+            continue
         signal = stamp - sky
         flux = np.maximum(signal, 0)
-        aperture = distance <= radius
         flux *= aperture
         positive_total = flux.sum()
         total = signal[aperture].sum()
@@ -78,9 +88,11 @@ def measure_stars(data, saturated=None, radius=12, max_stars=20):
         if 0 < hfr < radius / 2:
             stars.append((x + cx - radius, y + cy - radius, hfr))
         else:
-            raise FocusRangeError("HFR out of range: improve rough focus or increase --radius")
+            out_of_range += 1
         if len(stars) == max_stars:
             break
+    if not stars and out_of_range:
+        raise FocusRangeError("HFR out of range: improve rough focus or increase --radius")
     return stars
 
 def show_focus(figure, data, stars, title, interactive=True):
