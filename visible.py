@@ -285,7 +285,8 @@ def main():
     )
     age = (Time.now() - Time(data["downloaded"])).jd
     print(f"{time.utc.iso[:16]} UTC, Sun at {sun.alt.deg:.0f} degrees ({sky})")
-    print(f"Orbital elements downloaded {data['downloaded'][:10]} ({age:.0f} days ago)")
+    days = round(age)
+    print(f"Orbital elements downloaded {data['downloaded'][:10]} ({days} day{'' if days == 1 else 's'} ago)")
     if args.limit > ASTEROID_H_LIMIT + 2:
         print(f"Warning: asteroids with H > {ASTEROID_H_LIMIT} are not included", file=sys.stderr)
     print(f"Bodies above {args.min_altitude:g} degrees and brighter than magnitude {args.limit:g}:\n")
