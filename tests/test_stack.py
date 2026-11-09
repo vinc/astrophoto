@@ -14,6 +14,114 @@ from astropy.io import fits
 
 import stack
 
+class DarkTests(unittest.TestCase):
+    def test_master_dark_preserves_detector_pattern_and_rejects_a_transient(self):
+        y, x = np.mgrid[:8, :10]
+        dark = (100 + y * 3 + x % 2 * 20).astype(np.uint16)
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = []
+            for i in range(3):
+                data = dark.copy()
+                if i == 0:
+                    data[4, 5] += 1000
+                path = Path(temporary) / f"dark-{i}.fit"
+                fits.writeto(path, data, fits.Header({"ISO": 800, "EXPTIME": 5}))
+                paths.append(path)
+            result, metadata = stack.master_dark(paths)
+        np.testing.assert_array_equal(result, dark)
+        self.assertEqual(metadata, {"ISO": 800, "EXPTIME": 5})
+
+    def test_subtraction_precedes_alignment_and_keeps_negative_signal_and_metadata(self):
+        import camera
+
+        y, x = np.mgrid[:8, :10]
+        dark = (100 + y * 3 + x % 2 * 20).astype(np.uint16)
+        signal = np.full(dark.shape, 10, dtype=int)
+        signal[:2, :2] = -3
+        signal[4:6, 6:8] = 100
+        expected = signal.reshape(4, 2, 5, 2).mean(axis=(1, 3))
+        header = fits.Header({
+            "ISO": 800, "EXPTIME": 5, "INSTRUME": "test camera",
+            "BLACKLVL": 100, "WHITELEV": 4095, "RAWFILE": "test.CR2",
+        })
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            dark_paths = []
+            for i in range(3):
+                path = directory / f"dark-{i}.fit"
+                fits.writeto(path, dark, header)
+                dark_paths.append(path)
+            for i in range(2):
+                fits.writeto(directory / f"light-{i}.fit",
+                             (dark + signal).astype(np.uint16), header)
+
+            def register(image, reference):
+                np.testing.assert_array_equal(image, expected)
+                np.testing.assert_array_equal(reference, expected)
+                return image.copy(), np.zeros(image.shape, dtype=bool)
+
+            with patch.object(stack.astroalign, "register", side_effect=register) as align, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                stack.stack_directory(directory, normalize=False,
+                                      dark_files=[*dark_paths, dark_paths[0]])
+            align.assert_called_once()
+            output = directory / f"{directory.name}-stack.fit"
+            data, result = fits.getdata(output, header=True)
+            np.testing.assert_array_equal(data, expected)
+            self.assertTrue(result["DARKCOR"])
+            self.assertEqual(result["NDARKS"], 3)
+            self.assertEqual(result["NCOMBINE"], 2)
+            self.assertEqual(result["BLACKLVL"], 0)
+            self.assertNotIn("WHITELEV", result)
+            self.assertIn("Dark dark-0.fit", str(result["HISTORY"]))
+            np.testing.assert_array_equal(camera.read_image(output)[0], expected)
+
+    def test_mismatched_darks_are_rejected(self):
+        cases = [
+            ("shape", (6, 8), {}, "shape"),
+            ("camera", (8, 8), {"INSTRUME": "other camera"}, "INSTRUME"),
+            ("iso", (8, 8), {"ISO": 1600}, "ISO"),
+            ("exposure", (8, 8), {"EXPTIME": 10}, "EXPTIME"),
+            ("stack", (8, 8), {"NCOMBINE": 1}, "unstacked"),
+            ("corrected", (8, 8), {"DARKCOR": True}, "already"),
+        ]
+        for name, shape, changes, message in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                header = fits.Header({"ISO": 800, "EXPTIME": 5, "INSTRUME": "test camera"})
+                first, second = directory / "first.fit", directory / "second.fit"
+                fits.writeto(first, np.full((8, 8), 100), header)
+                header.update(changes)
+                fits.writeto(second, np.full(shape, 100), header)
+                with self.assertRaisesRegex(ValueError, message):
+                    stack.master_dark([first, second])
+
+    def test_nonfinite_dark_and_incompatible_light_fail_before_outputs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / "dark.fit"
+            dark = np.full((8, 8), 100.0)
+            dark[0, 0] = np.nan
+            fits.writeto(path, dark)
+            with self.assertRaisesRegex(ValueError, "non-finite"):
+                stack.master_dark([path])
+            fits.writeto(path, np.full((8, 8), 100),
+                         fits.Header({"ISO": 800, "EXPTIME": 5}), overwrite=True)
+            fits.writeto(directory / "light.fit", np.full((8, 8), 150),
+                         fits.Header({"ISO": 800, "EXPTIME": 10}))
+            with self.assertRaisesRegex(ValueError, "EXPTIME"), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                stack.stack_directory(directory, dark_files=[path])
+            self.assertFalse(list(directory.glob("*-stack.fit")))
+
+    def test_cli_accepts_multiple_dark_paths(self):
+        argv = ["stack.py", ".", "--dark", "dark-1.fit", "dark-2.fit"]
+        with patch.object(sys, "argv", argv), \
+                patch.object(stack, "stack_directory") as run:
+            stack.main()
+        self.assertEqual(run.call_args.kwargs["dark_files"],
+                         [Path("dark-1.fit"), Path("dark-2.fit")])
+
 class CombinationTests(unittest.TestCase):
     def test_clipped_mean_rejects_transients_and_preserves_stars(self):
         rng = np.random.default_rng(12)

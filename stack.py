@@ -11,11 +11,50 @@ from astropy.stats import mad_std, sigma_clip, sigma_clipped_stats
 from astropy.time import Time
 from matplotlib import pyplot as plt
 
-def load(path):
-    data = fits.getdata(path).astype(np.float32)
+def read_frame(path):
+    data, header = fits.getdata(path, header=True)
 
     if data.ndim != 2:
         raise ValueError(f"Expected 2D Bayer FITS: {path}")
+    if "NCOMBINE" in header or "STACKMTH" in header:
+        raise ValueError(f"Expected an unstacked Bayer FITS: {path}")
+
+    return data.astype(np.float32), header
+
+def check_dark_match(path, data, header, shape, metadata):
+    metadata = metadata or {}
+    if data.shape != shape:
+        raise ValueError(f"{path}: image shape {data.shape} does not match dark shape {shape}")
+    for key in ("INSTRUME", "ISO", "EXPTIME"):
+        if key in header and key in metadata and header[key] != metadata[key]:
+            raise ValueError(f"{path}: {key}={header[key]} does not match dark {metadata[key]}")
+    if header.get("DARKCOR", False):
+        raise ValueError(f"{path}: dark correction has already been applied")
+
+def master_dark(paths):
+    images = []
+    metadata = {}
+    for path in paths:
+        data, header = read_frame(path)
+        shape = images[0].shape if images else data.shape
+        check_dark_match(path, data, header, shape, metadata)
+        if not np.isfinite(data).all():
+            raise ValueError(f"{path}: dark frame contains non-finite pixels")
+        for key in ("INSTRUME", "ISO", "EXPTIME"):
+            if key in header:
+                metadata[key] = header[key]
+        images.append(data)
+
+    # Detector patterns stay fixed: combine without registration or normalization
+    dark, _, _ = combine_frames(images, method="median")
+    return dark, metadata
+
+def load(path, dark=None, dark_metadata=None):
+    data, header = read_frame(path)
+    if dark is not None:
+        check_dark_match(path, data, header, dark.shape, dark_metadata)
+        # The raw master includes the bias; subtract it once and retain negatives
+        data -= dark
 
     # Average each Bayer 2x2 block into one grayscale pixel
     h, w = data.shape
@@ -133,19 +172,25 @@ def coverage_crop(coverage, minimum):
     return best
 
 def stack_directory(directory, method="mean", normalize=True, sigma=3,
-                    min_coverage=0, output_prefix=None):
+                    min_coverage=0, output_prefix=None, dark_files=None):
+    dark_files = list(dict.fromkeys(Path(path).resolve() for path in (dark_files or [])))
+    dark_paths = set(dark_files)
     files = sorted(
         path for path in directory.glob("*.fit")
-        if not path.name.endswith("-stack.fit")
+        if not path.name.endswith("-stack.fit") and path.resolve() not in dark_paths
     )
 
     if not files:
         raise SystemExit(f"No FITS images found in {directory}")
 
+    dark, dark_metadata = master_dark(dark_files) if dark_files else (None, None)
+    if dark_files:
+        print(f"Combined {len(dark_files)} dark frames")
+
     # The field drifts on a fixed tripod, so align to the middle
     # frame to halve the largest offset between frames
     middle = files[len(files) // 2]
-    reference = load(middle)
+    reference = load(middle, dark, dark_metadata)
     if not np.isfinite(reference).any():
         raise ValueError(f"No finite pixels in reference frame: {middle}")
     aligned = [reference]
@@ -156,7 +201,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         if path == middle:
             continue
 
-        image = load(path)
+        image = load(path, dark, dark_metadata)
 
         try:
             registered, footprint = astroalign.register(
@@ -188,6 +233,14 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     coverage_path = directory / f"{prefix}-coverage.png"
 
     header = stack_header(middle, used)
+    if dark_files:
+        header["DARKCOR"] = (True, "Master dark subtracted before binning")
+        header["NDARKS"] = (len(dark_files), "Number of median-combined dark frames")
+        # camera.read_image must not subtract the raw bias a second time
+        header["BLACKLVL"] = (0.0, "Raw bias removed with master dark")
+        header.remove("WHITELEV", ignore_missing=True)
+        for path in dark_files:
+            header.add_history(f"Dark {path.name}")
     header["STACKMTH"] = "SIGMEAN" if method == "mean" else "MEDIAN"
     header["BGNORM"] = (normalize, "Additive background normalization")
     if method == "mean":
@@ -240,6 +293,8 @@ def main():
                         help="Crop to this fraction of aligned frames; 0 keeps the full field (default: 0)")
     parser.add_argument("--output-prefix",
                         help="Output basename within the input directory (default: directory name)")
+    parser.add_argument("--dark", nargs="+", type=Path,
+                        help="Unstacked dark FITS files; median-combine and subtract before binning")
     args = parser.parse_args()
     if not np.isfinite(args.sigma) or args.sigma <= 0:
         parser.error("--sigma must be finite and positive")
@@ -256,8 +311,11 @@ def main():
     if not directory.is_dir():
         parser.error(f"Not a directory: {directory}")
 
-    stack_directory(directory, args.method, not args.no_normalize, args.sigma,
-                    args.min_coverage, args.output_prefix)
+    try:
+        stack_directory(directory, args.method, not args.no_normalize, args.sigma,
+                        args.min_coverage, args.output_prefix, dark_files=args.dark)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
 
 if __name__ == "__main__":
     main()
