@@ -10,6 +10,10 @@ from astropy.io import fits
 from astropy.stats import mad_std, sigma_clip, sigma_clipped_stats
 from astropy.time import Time
 from matplotlib import pyplot as plt
+from scipy.ndimage import binary_dilation
+from scipy.signal import savgol_filter
+
+DEBAND_WINDOW = 65
 
 def read_frame(path):
     data, header = fits.getdata(path, header=True)
@@ -49,7 +53,35 @@ def master_dark(paths):
     dark, _, _ = combine_frames(images, method="median")
     return dark, metadata
 
-def load(path, dark=None, dark_metadata=None):
+def reduce_banding(image, amount):
+    if not np.isfinite(amount) or not 0 <= amount <= 1:
+        raise ValueError("--deband must be between 0 and 1")
+    if amount == 0 or image.shape[0] < 3:
+        return image
+
+    values = np.ma.masked_invalid(image)
+    level = np.ma.median(values, axis=1).filled(np.nan)
+    noise = mad_std(values, axis=1).filled(np.nan)
+    bright = np.isfinite(image) & (image > (level + 3 * noise)[:, None])
+    # Grow the bright-pixel mask to exclude stellar wings as well as cores
+    mask = ~np.isfinite(image) | binary_dilation(bright, iterations=2)
+    sky = np.ma.array(image, mask=mask)
+    profile = np.ma.median(sky, axis=1).filled(np.nan).astype(float)
+    valid = np.isfinite(profile) & (sky.count(axis=1) >= max(8, image.shape[1] // 4))
+    if valid.sum() < 3:
+        return image
+
+    rows = np.arange(image.shape[0])
+    profile = np.interp(rows, rows[valid], profile[valid])
+    window = min(DEBAND_WINDOW, (len(rows) - 1) // 2 * 2 + 1)
+    # A quadratic smoothing filter preserves broad gradients, including at edges
+    baseline = savgol_filter(profile, window, polyorder=2, mode="interp")
+    correction = profile - baseline
+    correction[~valid] = 0
+    correction[valid] -= correction[valid].mean()
+    return image - (amount * correction).astype(np.float32)[:, None]
+
+def load(path, dark=None, dark_metadata=None, deband=0):
     data, header = read_frame(path)
     if dark is not None:
         check_dark_match(path, data, header, dark.shape, dark_metadata)
@@ -60,9 +92,10 @@ def load(path, dark=None, dark_metadata=None):
     h, w = data.shape
     data = data[:h // 2 * 2, :w // 2 * 2]
 
-    return data.reshape(
+    binned = data.reshape(
         h // 2, 2, w // 2, 2
     ).mean(axis=(1, 3))
+    return reduce_banding(binned, deband)
 
 def stack_header(reference, files):
     header = fits.getheader(reference)
@@ -172,7 +205,7 @@ def coverage_crop(coverage, minimum):
     return best
 
 def stack_directory(directory, method="mean", normalize=True, sigma=3,
-                    min_coverage=0, output_prefix=None, dark_files=None):
+                    min_coverage=0, output_prefix=None, dark_files=None, deband=0):
     dark_files = list(dict.fromkeys(Path(path).resolve() for path in (dark_files or [])))
     dark_paths = set(dark_files)
     files = sorted(
@@ -190,7 +223,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     # The field drifts on a fixed tripod, so align to the middle
     # frame to halve the largest offset between frames
     middle = files[len(files) // 2]
-    reference = load(middle, dark, dark_metadata)
+    reference = load(middle, dark, dark_metadata, deband=deband)
     if not np.isfinite(reference).any():
         raise ValueError(f"No finite pixels in reference frame: {middle}")
     aligned = [reference]
@@ -201,7 +234,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         if path == middle:
             continue
 
-        image = load(path, dark, dark_metadata)
+        image = load(path, dark, dark_metadata, deband=deband)
 
         try:
             registered, footprint = astroalign.register(
@@ -243,6 +276,10 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
             header.add_history(f"Dark {path.name}")
     header["STACKMTH"] = "SIGMEAN" if method == "mean" else "MEDIAN"
     header["BGNORM"] = (normalize, "Additive background normalization")
+    header["DEBAND"] = (deband, "Row correction fraction before alignment")
+    if deband:
+        header["DEBWIN"] = (min(DEBAND_WINDOW, (reference.shape[0] - 1) // 2 * 2 + 1),
+                            "Smoothing window in binned detector rows")
     if method == "mean":
         header["CLIPSIG"] = (sigma, "Sigma threshold, median/MAD clipping")
         header["CLIPITER"] = (5, "Maximum clipping iterations")
@@ -295,11 +332,15 @@ def main():
                         help="Output basename within the input directory (default: directory name)")
     parser.add_argument("--dark", nargs="+", type=Path,
                         help="Unstacked dark FITS files; median-combine and subtract before binning")
+    parser.add_argument("--deband", type=float, default=0, metavar="AMOUNT",
+                        help="Horizontal row correction strength, 0 to 1 (default: 0, disabled)")
     args = parser.parse_args()
     if not np.isfinite(args.sigma) or args.sigma <= 0:
         parser.error("--sigma must be finite and positive")
     if not 0 <= args.min_coverage <= 1:
         parser.error("--min-coverage must be between 0 and 1")
+    if not np.isfinite(args.deband) or not 0 <= args.deband <= 1:
+        parser.error("--deband must be between 0 and 1")
     if args.output_prefix is not None and (
         not args.output_prefix or Path(args.output_prefix).name != args.output_prefix
         or args.output_prefix in {".", ".."}
@@ -313,7 +354,8 @@ def main():
 
     try:
         stack_directory(directory, args.method, not args.no_normalize, args.sigma,
-                        args.min_coverage, args.output_prefix, dark_files=args.dark)
+                        args.min_coverage, args.output_prefix, dark_files=args.dark,
+                        deband=args.deband)
     except (OSError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 

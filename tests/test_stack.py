@@ -14,6 +14,88 @@ from astropy.io import fits
 
 import stack
 
+class DebandingTests(unittest.TestCase):
+    def test_reduces_bands_preserves_stars_and_scales_with_amount(self):
+        y, x = np.mgrid[:256, :320]
+        truth = 100 + 0.03 * y + 0.0001 * y**2 + np.zeros_like(x)
+        positions = [(60.2, 40.3), (200.1, 120.4), (100.3, 210.2)]
+        for sx, sy in positions:
+            truth += 500 * np.exp(-((x - sx)**2 + (y - sy)**2) / 8)
+        bands = 4 * (-1.0)**np.arange(256) + 3 * np.sin(np.arange(256) * np.pi / 4)
+        image = truth + bands[:, None]
+        original = image.copy()
+        corrected = stack.reduce_banding(image, 1)
+        residual = np.median(corrected - truth, axis=1)
+        self.assertLess(np.std(residual), 0.1 * np.std(bands))
+        self.assertLess(abs(np.mean(corrected - truth)), 0.1)
+        for sx, sy in positions:
+            aperture = (x - sx)**2 + (y - sy)**2 < 6**2
+            self.assertLess(abs(np.sum((corrected - truth)[aperture])),
+                            0.01 * np.sum((truth - 100)[aperture]))
+        np.testing.assert_allclose(stack.reduce_banding(image, 0.5),
+                                   (image + corrected) / 2, atol=1e-6)
+        np.testing.assert_array_equal(stack.reduce_banding(image, 0), original)
+        np.testing.assert_array_equal(image, original)
+
+    def test_preserves_smooth_gradient_including_frame_edges(self):
+        y, x = np.mgrid[:128, :160]
+        image = 100 + 0.1 * y + 0.002 * y**2 + 0.03 * x
+        np.testing.assert_allclose(stack.reduce_banding(image, 1), image, atol=1e-6)
+
+    def test_empty_and_sparse_rows_remain_untouched(self):
+        y, x = np.mgrid[:80, :100]
+        image = (100 + 5 * (-1.0)**y + np.zeros_like(x)).astype(float)
+        image[10] = np.nan
+        image[11] = np.inf
+        image[12, 1:] = np.nan
+        result = stack.reduce_banding(image, 1)
+        self.assertTrue(np.isnan(result[10]).all())
+        self.assertTrue(np.isinf(result[11]).all())
+        self.assertEqual(result[12, 0], image[12, 0])
+        self.assertTrue(np.isfinite(result[13:]).all())
+        for height in [1, 2, 3, 4]:
+            constant = np.full((height, 10), 100.0)
+            np.testing.assert_allclose(stack.reduce_banding(constant, 1), constant)
+        empty = np.full((8, 10), np.nan)
+        np.testing.assert_array_equal(stack.reduce_banding(empty, 1), empty)
+
+    def test_dark_subtraction_and_binning_precede_debanding_and_alignment(self):
+        raw_dark = np.full((160, 200), 100, dtype=np.uint16)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            dark = directory / "dark.fit"
+            fits.writeto(dark, raw_dark)
+            for i in range(2):
+                fits.writeto(directory / f"light-{i}.fit", raw_dark + 20)
+
+            def deband(image, amount):
+                self.assertEqual(amount, 0.5)
+                self.assertEqual(image.shape, (80, 100))
+                np.testing.assert_array_equal(image, 20)
+                return image - 1
+
+            def register(image, reference):
+                np.testing.assert_array_equal(image, 19)
+                np.testing.assert_array_equal(reference, 19)
+                return image.copy(), np.zeros(image.shape, dtype=bool)
+
+            with patch.object(stack, "reduce_banding", side_effect=deband) as correction, \
+                    patch.object(stack.astroalign, "register", side_effect=register), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                stack.stack_directory(directory, dark_files=[dark], deband=0.5)
+            self.assertEqual(correction.call_count, 2)
+            output = directory / f"{directory.name}-stack.fit"
+            header = fits.getheader(output)
+            self.assertEqual(header["DEBAND"], 0.5)
+            self.assertEqual(header["DEBWIN"], 65)
+            np.testing.assert_array_equal(fits.getdata(output), 19)
+
+    def test_cli_passes_deband_amount(self):
+        with patch.object(sys, "argv", ["stack.py", ".", "--deband", "0.5"]), \
+                patch.object(stack, "stack_directory") as run:
+            stack.main()
+        self.assertEqual(run.call_args.kwargs["deband"], 0.5)
+
 class DarkTests(unittest.TestCase):
     def test_master_dark_preserves_detector_pattern_and_rejects_a_transient(self):
         y, x = np.mgrid[:8, :10]
@@ -241,6 +323,8 @@ class StackOutputTests(unittest.TestCase):
             ("--sigma", "nan"), ("--sigma", "0"),
             ("--min-coverage", "1.1"), ("--min-coverage", "nan"),
             ("--output-prefix", "../outside"),
+            ("--deband", "nan"), ("--deband", "inf"),
+            ("--deband", "-0.1"), ("--deband", "1.1"),
         ]:
             with self.subTest(option=option, value=value), \
                     patch.object(sys, "argv", ["stack.py", ".", option, value]), \
