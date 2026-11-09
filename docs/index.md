@@ -16,21 +16,36 @@ TODO
 
 ![Mars](images/mars.jpg)
 
+- Canon EOS 20D, Canon EF 75-300mm f/4-5.6, Velbon Videomate 638
+- 20 x 5s untracked, 75mm, f/4, ISO 800
+
 ### Jupiter
 
 ![Jupiter](images/jupiter.jpg)
+
+- Canon EOS 20D, Canon EF 75-300mm f/4-5.6, Velbon Videomate 638
+- 20 x 5s untracked, 75mm, f/4, ISO 800
 
 ### Saturn
 
 ![Saturn](images/saturn.jpg)
 
+- Canon EOS 20D, Canon EF 75-300mm f/4-5.6, Velbon Videomate 638
+- 20 x 5s untracked, 75mm, f/4, ISO 800
+
 ### Uranus
 
 ![Uranus](images/uranus.jpg)
 
+- Canon EOS 20D, Canon EF 75-300mm f/4-5.6, Velbon Videomate 638
+- 20 x 5s untracked, 75mm, f/4, ISO 800
+
 ### Neptune
 
 ![Neptune](images/neptune.jpg)
+
+- Canon EOS 20D, Canon EF 75-300mm f/4-5.6, Velbon Videomate 638
+- 20 x 5s untracked, 75mm, f/4, ISO 800
 
 ## Asteroids
 
@@ -44,9 +59,15 @@ TODO 2029-04-13
 
 ![Vesta](images/vesta.jpg)
 
+- Canon EOS 20D, Canon EF 75-300mm f/4-5.6, Velbon Videomate 638
+- 60 x 5s untracked, 75mm, f/4, ISO 800
+
 ### Pallas
 
 ![Pallas](images/pallas.jpg)
+
+- Canon EOS 20D, Canon EF 75-300mm f/4-5.6, Velbon Videomate 638
+- 20 x 5s untracked, 75mm, f/4, ISO 800
 
 ### Ceres
 
