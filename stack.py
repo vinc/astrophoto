@@ -7,6 +7,7 @@ import re
 import astroalign
 import numpy as np
 from astropy.io import fits
+from astropy.stats import mad_std, sigma_clip, sigma_clipped_stats
 from astropy.time import Time
 from matplotlib import pyplot as plt
 
@@ -62,7 +63,77 @@ def stack_header(reference, files):
 
     return header
 
-def stack_directory(directory):
+def normalize_background(image, reference):
+    overlap = np.isfinite(image) & np.isfinite(reference)
+    if not overlap.any():
+        raise ValueError("No finite overlap with the reference frame")
+    # Compare the same sky area, excluding stars and isolated outliers
+    _, background, _ = sigma_clipped_stats(image[overlap], sigma=3, maxiters=5)
+    _, target, _ = sigma_clipped_stats(reference[overlap], sigma=3, maxiters=5)
+    offset = float(target - background)
+    return image + offset, offset
+
+def clipping_std(values, axis=None):
+    values = np.ma.masked_invalid(values, copy=False)
+    deviation = mad_std(values, axis=axis).filled(0)
+    scale = np.ma.max(np.ma.abs(values), axis=axis).filled(0)
+    # Identical quantized samples can have zero MAD despite float32 rounding
+    tolerance = 8 * np.finfo(np.float32).eps * np.maximum(scale, 1)
+    return np.maximum(deviation, tolerance)
+
+def combine_frames(images, method="mean", sigma=3):
+    shape = images[0].shape
+    result = np.full(shape, np.nan, dtype=np.float32)
+    coverage = np.zeros(shape, dtype=np.int32)
+    accepted = np.zeros(shape, dtype=np.int32)
+
+    # Limit temporary cubes to a strip rather than copying the whole sequence
+    for y in range(0, shape[0], 128):
+        rows = slice(y, y + 128)
+        values = np.ma.masked_invalid(np.stack([image[rows] for image in images]))
+        counts = values.count(axis=0)
+        coverage[rows] = counts
+        if method == "mean":
+            clipped = sigma_clip(
+                values, sigma=sigma, maxiters=5, axis=0,
+                cenfunc="median", stdfunc=clipping_std, copy=True,
+            )
+            # Sparse borders do not have enough samples for reliable clipping
+            clipped.mask = np.where(counts >= 5, clipped.mask, values.mask)
+            combined = clipped.mean(axis=0)
+            accepted[rows] = clipped.count(axis=0)
+        else:
+            combined = np.ma.median(values, axis=0)
+            accepted[rows] = counts
+        result[rows] = combined.filled(np.nan)
+
+    return result, coverage, accepted
+
+def coverage_crop(coverage, minimum):
+    # Largest rectangle whose pixels all meet the coverage threshold
+    heights = np.zeros(coverage.shape[1], dtype=int)
+    best_area = 0
+    best = None
+    for y, row in enumerate(coverage >= minimum):
+        heights = np.where(row, heights + 1, 0)
+        columns = []
+        for x in range(len(heights) + 1):
+            height = int(heights[x]) if x < len(heights) else 0
+            start = x
+            while columns and columns[-1][1] > height:
+                start, previous = columns.pop()
+                area = previous * (x - start)
+                if area > best_area:
+                    best_area = area
+                    best = (slice(y + 1 - previous, y + 1), slice(start, x))
+            if height and (not columns or columns[-1][1] < height):
+                columns.append((start, height))
+    if best is None:
+        raise ValueError("No pixels meet the requested coverage")
+    return best
+
+def stack_directory(directory, method="mean", normalize=True, sigma=3,
+                    min_coverage=0, output_prefix=None):
     files = sorted(
         path for path in directory.glob("*.fit")
         if not path.name.endswith("-stack.fit")
@@ -75,8 +146,11 @@ def stack_directory(directory):
     # frame to halve the largest offset between frames
     middle = files[len(files) // 2]
     reference = load(middle)
+    if not np.isfinite(reference).any():
+        raise ValueError(f"No finite pixels in reference frame: {middle}")
     aligned = [reference]
     used = [middle]
+    offsets = [0.0]
 
     for path in files:
         if path == middle:
@@ -89,59 +163,101 @@ def stack_directory(directory):
                 image, reference
             )
             registered[footprint] = np.nan
+            offset = 0.0
+            if normalize:
+                registered, offset = normalize_background(registered, reference)
             aligned.append(registered)
             used.append(path)
+            offsets.append(offset)
             print(f"Aligned {path.name}")
         except Exception as exc:
             print(f"Skipped {path.name}: {exc}")
 
-    # Median stacking rejects outliers such as hot pixels
-    with np.errstate(all="ignore"):
-        stack = np.nanmedian(
-            np.stack(aligned), axis=0
-        )
+    stack, coverage, accepted = combine_frames(aligned, method, sigma)
+    rows, columns = slice(0, stack.shape[0]), slice(0, stack.shape[1])
+    if min_coverage > 0:
+        minimum = int(np.ceil(min_coverage * len(aligned)))
+        rows, columns = coverage_crop(coverage, minimum)
+        stack = stack[rows, columns]
+        coverage = coverage[rows, columns]
+        accepted = accepted[rows, columns]
 
-    prefix = directory.name
+    prefix = output_prefix or directory.name
     fits_path = directory / f"{prefix}-stack.fit"
     png_path = directory / f"{prefix}-stack.png"
+    coverage_path = directory / f"{prefix}-coverage.png"
 
-    fits.writeto(
-        fits_path,
-        stack.astype(np.float32),
-        header=stack_header(middle, used),
-        overwrite=True,
-    )
+    header = stack_header(middle, used)
+    header["STACKMTH"] = "SIGMEAN" if method == "mean" else "MEDIAN"
+    header["BGNORM"] = (normalize, "Additive background normalization")
+    if method == "mean":
+        header["CLIPSIG"] = (sigma, "Sigma threshold, median/MAD clipping")
+        header["CLIPITER"] = (5, "Maximum clipping iterations")
+    header["MINCOV"] = (min_coverage, "Minimum input coverage fraction for crop")
+    header["CROPX"] = (columns.start, "Crop origin in binned reference pixels")
+    header["CROPY"] = (rows.start, "Crop origin in binned reference pixels")
+    for path, offset in zip(used, offsets):
+        header.add_history(f"Input {path.name}; background offset {offset:.6g} ADU")
+
+    count_header = fits.Header({"BUNIT": "count"})
+    fits.HDUList([
+        fits.PrimaryHDU(stack, header),
+        fits.ImageHDU(coverage, count_header, name="COVERAGE"),
+        fits.ImageHDU(accepted, count_header, name="ACCEPTED"),
+    ]).writeto(fits_path, overwrite=True)
 
     # Contrast stretch for visual inspection
     lo, hi = np.nanpercentile(stack, [5, 99.7])
 
     plt.imsave(
         png_path,
-        np.clip((stack - lo) / (hi - lo), 0, 1),
+        np.clip((stack - lo) / max(float(hi - lo), 1e-6), 0, 1),
         cmap="gray",
     )
+    plt.imsave(coverage_path, coverage, cmap="gray", vmin=0, vmax=len(aligned))
 
     print(f"Stacked {len(aligned)} images")
     print(f"Created {fits_path}")
     print(f"Created {png_path}")
+    print(f"Created {coverage_path}")
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Align and median-stack FITS images"
+        description="Align, normalize backgrounds, and sigma-clip mean-stack FITS images"
     )
     parser.add_argument(
         "directory",
         type=Path,
         help="Directory containing the FITS images",
     )
+    parser.add_argument("--method", choices=["mean", "median"], default="mean",
+                        help="Combination method (default: sigma-clipped mean)")
+    parser.add_argument("--no-normalize", action="store_true",
+                        help="Disable additive background normalization")
+    parser.add_argument("--sigma", type=float, default=3,
+                        help="Clipping threshold for mean stacking (default: 3)")
+    parser.add_argument("--min-coverage", type=float, default=0,
+                        help="Crop to this fraction of aligned frames; 0 keeps the full field (default: 0)")
+    parser.add_argument("--output-prefix",
+                        help="Output basename within the input directory (default: directory name)")
     args = parser.parse_args()
+    if not np.isfinite(args.sigma) or args.sigma <= 0:
+        parser.error("--sigma must be finite and positive")
+    if not 0 <= args.min_coverage <= 1:
+        parser.error("--min-coverage must be between 0 and 1")
+    if args.output_prefix is not None and (
+        not args.output_prefix or Path(args.output_prefix).name != args.output_prefix
+        or args.output_prefix in {".", ".."}
+    ):
+        parser.error("--output-prefix must be a basename")
 
     directory = args.directory.resolve()
 
     if not directory.is_dir():
         parser.error(f"Not a directory: {directory}")
 
-    stack_directory(directory)
+    stack_directory(directory, args.method, not args.no_normalize, args.sigma,
+                    args.min_coverage, args.output_prefix)
 
 if __name__ == "__main__":
     main()
