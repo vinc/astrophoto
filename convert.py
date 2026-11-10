@@ -10,6 +10,8 @@ import exifread
 import rawpy
 from astropy.io import fits
 
+from color import raw_color_metadata
+
 def exif_value(tags, key):
     tag = tags.get(key)
     return str(tag) if tag is not None else None
@@ -26,6 +28,7 @@ def convert(path, tz, output=None):
         data = raw.raw_image_visible.copy()
         black_levels = list(raw.black_level_per_channel)
         white_level = int(raw.white_level)
+        colour = raw_color_metadata(raw)
 
     with path.open("rb") as f:
         tags = exifread.process_file(f, details=False)
@@ -84,6 +87,8 @@ def convert(path, tz, output=None):
         "Mean raw sensor black level",
     )
     hdr["WHITELEV"] = (white_level, "Raw sensor white level")
+    for key, value in colour.items():
+        hdr[key] = value
 
     output = Path(output) if output is not None else path.with_suffix(".fit")
     hdu.writeto(output, overwrite=True)
