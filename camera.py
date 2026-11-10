@@ -73,3 +73,20 @@ def display_limits(data):
         raise ValueError("Image contains no finite pixels")
     low, high = ZScaleInterval().get_limits(finite)
     return low, max(high, low + 1)
+
+def stack_display_limits(data, header=None):
+    if header is not None:
+        try:
+            low, high = float(header["DISPLO"]), float(header["DISPHI"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        else:
+            if np.isfinite([low, high]).all() and high > low:
+                return low, high
+
+    # Older stacks have no saved limits: reproduce their full-frame stretch
+    finite = data[np.isfinite(data)]
+    if not finite.size:
+        raise ValueError("Image contains no finite pixels")
+    low, high = np.percentile(finite, [5, 99.7])
+    return float(low), max(float(high), float(low) + 1e-6)

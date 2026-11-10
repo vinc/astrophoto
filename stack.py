@@ -13,6 +13,8 @@ from matplotlib import pyplot as plt
 from scipy.ndimage import binary_dilation
 from scipy.signal import savgol_filter
 
+from camera import stack_display_limits
+
 DEBAND_WINDOW = 65
 
 def read_frame(path):
@@ -289,6 +291,10 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     for path, offset in zip(used, offsets):
         header.add_history(f"Input {path.name}; background offset {offset:.6g} ADU")
 
+    lo, hi = stack_display_limits(stack)
+    header["DISPLO"] = (lo, "Black point used for PNG previews")
+    header["DISPHI"] = (hi, "White point used for PNG previews")
+
     count_header = fits.Header({"BUNIT": "count"})
     fits.HDUList([
         fits.PrimaryHDU(stack, header),
@@ -296,13 +302,8 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         fits.ImageHDU(accepted, count_header, name="ACCEPTED"),
     ]).writeto(fits_path, overwrite=True)
 
-    # Contrast stretch for visual inspection
-    lo, hi = np.nanpercentile(stack, [5, 99.7])
-
     plt.imsave(
-        png_path,
-        np.clip((stack - lo) / max(float(hi - lo), 1e-6), 0, 1),
-        cmap="gray",
+        png_path, stack, cmap="gray", vmin=lo, vmax=hi,
     )
     plt.imsave(coverage_path, coverage, cmap="gray", vmin=0, vmax=len(aligned))
 

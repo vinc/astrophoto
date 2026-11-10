@@ -309,6 +309,8 @@ class StackOutputTests(unittest.TestCase):
                     self.assertEqual(header["CROPY"], 0)
                     self.assertNotIn("RAWFILE", header)
                     self.assertEqual(header["DATE-AVG"], "2026-01-01T00:00:14.500")
+                    np.testing.assert_allclose([header["DISPLO"], header["DISPHI"]],
+                                               np.percentile(first, [5, 99.7]))
                 stack.stack_directory(directory, method="median", normalize=False,
                                       output_prefix="median")
                 stack.stack_directory(directory, min_coverage=1)

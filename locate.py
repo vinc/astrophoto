@@ -13,11 +13,11 @@ import matplotlib
 import matplotlib.pyplot as plt
 from astropy.io import fits
 from astropy.time import Time
-from astropy.visualization import ZScaleInterval
 from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
 
 from convert import convert
+from camera import display_limits, stack_display_limits
 
 ROOT = Path(__file__).resolve().parent
 
@@ -180,7 +180,14 @@ def save_image(path, ra, dec, time, query, target_name=None, radius=None, source
         h, w = crop.shape
         crop = crop.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
 
-    vmin, vmax = ZScaleInterval().get_limits(crop)
+    display_header = header
+    if source_path != Path(path) and source_path.suffix.lower() in {".fit", ".fits", ".new"}:
+        # Cached plate solutions may predate the saved display limits
+        display_header = fits.getheader(source_path)
+    if "NCOMBINE" in display_header or "STACKMTH" in display_header:
+        vmin, vmax = stack_display_limits(data, display_header)
+    else:
+        vmin, vmax = display_limits(crop)
 
     fig, ax = plt.subplots(figsize=(10, 7) if radius is None else None)
 
