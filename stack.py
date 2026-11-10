@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 import re
+import sys
 
 import astroalign
 import numpy as np
@@ -80,6 +81,16 @@ def master_flat(paths):
             raise ValueError(f"{path}: flat frame is saturated; use a shorter exposure")
         # Short flats use their own RAW black level, not the long-exposure dark
         data -= black_level(path, header)
+        if "WHITELEV" in header:
+            span = float(header["WHITELEV"]) - float(header["BLACKLVL"])
+            if not np.isfinite(span) or span <= 0:
+                raise ValueError(f"{path}: invalid WHITELEV; must exceed BLACKLVL")
+            level = min(float(np.median(data[y::2, x::2]))
+                        for y in range(2) for x in range(2)) / span
+            print(f"{path.name}: weakest Bayer plane at {level:.0%} of full scale")
+            if level < 0.15:
+                print(f"Warning: {path}: flat frame may be underexposed; "
+                      "consider a longer exposure", file=sys.stderr)
         images.append(normalize_flat(data))
         for key in FLAT_KEYS:
             if key in header:
