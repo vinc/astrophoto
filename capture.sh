@@ -30,7 +30,6 @@ gphoto2 \
   --set-config iso=800 \
   --set-config aperture=4.0 \
   --set-config "shutterspeed=$shutterspeed" \
-  --set-config capturetarget=1 \
   --capture-image \
   --interval 1 \
   --frames 20 || exit 1

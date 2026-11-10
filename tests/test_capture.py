@@ -43,7 +43,7 @@ class CaptureScriptTests(unittest.TestCase):
                 self.assertIn("iso=800", capture)
                 self.assertIn("aperture=4.0", capture)
                 self.assertIn("imageformat=RAW", capture)
-                self.assertIn("capturetarget=1", capture)
+                self.assertFalse(any(argument.startswith("capturetarget=") for argument in capture))
                 self.assertIn("--capture-image", capture)
                 self.assertNotIn("--capture-image-and-download", capture)
                 self.assertEqual(capture[capture.index("--interval") + 1], "1")
