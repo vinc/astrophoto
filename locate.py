@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
+import json
+import os
 from pathlib import Path
 import re
 import shutil
 import stat
 import subprocess
 import tempfile
+import warnings
 from zoneinfo import ZoneInfo
 
 import matplotlib
 import matplotlib.pyplot as plt
 from astropy.io import fits
+from astropy.table import Table, vstack
 from astropy.time import Time
 from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
@@ -20,6 +25,7 @@ from convert import convert
 from camera import display_limits, stack_display_limits
 
 ROOT = Path(__file__).resolve().parent
+EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "horizons"
 
 class PlateSolveError(RuntimeError):
     pass
@@ -110,11 +116,11 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
         return cached
     return output
 
-def get_ephemerides(query, observer, epochs):
+def _query_ephemerides(query, observer, epochs):
     def lookup(target):
         return Horizons(
             id=target,
-            location=observer,
+            location=dict(observer),
             epochs=epochs,
         ).ephemerides()
 
@@ -142,6 +148,45 @@ def get_ephemerides(query, observer, epochs):
 
         print(f"Resolved {query} to Horizons ID {matches[0]}")
         return lookup(matches[0])
+
+def get_ephemerides(query, observer, epochs):
+    # Cache individual epochs so different image lists can share positions
+    location = {key: float(value) for key, value in observer.items()}
+    location.setdefault("body", 399.0)
+    epochs = [float(epoch) for epoch in epochs]
+    paths, positions = {}, {}
+    for epoch in set(epochs):
+        identity = json.dumps([1, query.strip(), location, epoch.hex()], sort_keys=True)
+        key = hashlib.sha256(identity.encode()).hexdigest()
+        paths[epoch] = EPHEMERIS_CACHE / f"{key}.ecsv"
+        try:
+            cached = Table.read(paths[epoch], format="ascii.ecsv")
+            if len(cached) == 1 and {"RA", "DEC", "targetname"} <= set(cached.colnames):
+                positions[epoch] = cached
+        except (OSError, ValueError):
+            pass
+
+    missing = sorted(set(epochs) - positions.keys())
+    if missing:
+        result = _query_ephemerides(query, observer, missing)
+        if len(result) != len(missing):
+            raise ValueError("Horizons returned a different number of epochs than requested")
+        for index, epoch in enumerate(missing):
+            positions[epoch] = result[index:index + 1]
+            temporary = None
+            try:
+                EPHEMERIS_CACHE.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(dir=EPHEMERIS_CACHE, delete=False) as saved:
+                    temporary = Path(saved.name)
+                positions[epoch].write(temporary, format="ascii.ecsv", overwrite=True)
+                temporary.replace(paths[epoch])
+            except OSError as exc:
+                warnings.warn(f"Could not cache Horizons position: {exc}", RuntimeWarning)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+
+    return vstack([positions[epoch] for epoch in epochs], metadata_conflicts="silent")
 
 def save_image(path, ra, dec, time, query, target_name=None, radius=None, source_path=None):
     data, header = fits.getdata(path, header=True)
