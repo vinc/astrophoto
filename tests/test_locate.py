@@ -11,9 +11,12 @@ from unittest.mock import patch
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
+from astropy.time import Time
+from astropy.visualization import ZScaleInterval
 from astropy.wcs import WCS
 
 import locate
+from camera import stack_display_limits
 
 def make_header(shape, date):
     wcs = WCS(naxis=2)
@@ -33,6 +36,76 @@ def ephemerides(query, observer, epochs):
     })
 
 class LocateTests(unittest.TestCase):
+    def render(self, path, radius=None, source_path=None):
+        images = []
+        subplots = locate.plt.subplots
+        def record(*args, **kwargs):
+            figure, axes = subplots(*args, **kwargs)
+            images.append(axes)
+            return figure, axes
+        with patch.object(locate.plt, "subplots", side_effect=record), \
+                patch("matplotlib.figure.Figure.savefig"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            locate.save_image(path, 120, 20, Time("2025-01-01"), "test",
+                              radius=radius, source_path=source_path)
+        return images[0].images[0]
+
+    def test_stack_and_crop_reuse_saved_display_limits(self):
+        data = np.arange(15000, dtype=np.float32).reshape(100, 150)
+        header = make_header(data.shape, "2025-01-01T00:00:00")
+        header.update({"NCOMBINE": 20, "DISPLO": 50.0, "DISPHI": 200.0})
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "stack.new"
+            fits.writeto(path, data, header)
+            original = path.read_bytes()
+            for radius in [None, 8]:
+                image = self.render(path, radius=radius)
+                self.assertEqual(image.get_clim(), (50, 200))
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_older_stack_uses_full_frame_percentiles_even_when_cropped(self):
+        data = np.arange(15000, dtype=np.float32).reshape(100, 150)
+        data[0, :2] = [np.nan, np.inf]
+        header = make_header(data.shape, "2025-01-01T00:00:00")
+        header["NCOMBINE"] = 20
+        expected = np.percentile(data[np.isfinite(data)], [5, 99.7])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "stack.new"
+            fits.writeto(path, data, header)
+            for radius in [None, 8]:
+                image = self.render(path, radius=radius)
+                np.testing.assert_allclose(image.get_clim(), expected)
+
+    def test_cached_solution_uses_original_stacks_saved_limits(self):
+        data = np.arange(15000, dtype=np.float32).reshape(100, 150)
+        solved = make_header(data.shape, "2025-01-01T00:00:00")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source, cached = directory / "stack.fit", directory / "stack.new"
+            header = fits.Header({"NCOMBINE": 20, "DISPLO": 50.0, "DISPHI": 200.0})
+            fits.writeto(source, data, header)
+            fits.writeto(cached, data, solved)
+            self.assertEqual(self.render(cached, source_path=source).get_clim(), (50, 200))
+
+    def test_raw_preview_retains_zscale_and_stack_fallback_handles_flat_images(self):
+        data = np.arange(60000, dtype=np.float32).reshape(200, 300)
+        header = make_header(data.shape, "2025-01-01T00:00:00")
+        header["RAWFILE"] = "test.CR2"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "raw.new"
+            fits.writeto(path, data, header)
+            image = self.render(path)
+            expected = ZScaleInterval().get_limits(image.get_array())
+            np.testing.assert_allclose(image.get_clim(), expected)
+
+        low, high = stack_display_limits(np.ones((10, 10)))
+        self.assertEqual(low, 1)
+        self.assertGreater(high, low)
+        invalid = fits.Header({"DISPLO": 2, "DISPHI": 1})
+        self.assertEqual(stack_display_limits(np.ones((10, 10)), invalid), (low, high))
+        with self.assertRaisesRegex(ValueError, "no finite pixels"):
+            stack_display_limits(np.full((10, 10), np.nan))
+
     def test_importing_shared_locating_code_preserves_the_selected_backend(self):
         result = subprocess.run(
             [sys.executable, "-c", "import matplotlib; import center; import crop; print(matplotlib.get_backend())"],

@@ -1,6 +1,6 @@
 # Astrophoto
 
-A collection of mostly vibe coded astrophoto scripts.
+A personal collection of mostly vibe coded astrophotography scripts.
 
 ## Setup
 
@@ -21,8 +21,8 @@ python visible.py \
     --time 2026-12-21T21:49
 ```
 
-Center and focus the camera, capture a sequence of raw pictures, and convert
-the CR2 files into FITS files:
+Center and focus the camera, capture a sequence of raw pictures (light, dark,
+and flat frames), and convert the CR2 files into FITS files:
 
 ```sh
 python focus.py
@@ -31,14 +31,20 @@ python center.py \
     --longitude -1.83 \
     --elevation 0.10 \
     --query vesta
-sh capture.sh
+sh capture.sh light
+sh capture.sh dark
+sh capture.sh flat
 python convert.py 2026*/*.CR2
 ```
 
-Stack the FITS files in a dir:
+Stack the FITS files in a directory with optional dark and flat frames (and an
+option to remove horizontal banding on my Canon 20D):
 
 ```sh
-python stack.py 20261221-2149
+python stack.py 20261221-2149-light \
+    --dark 20261221-*-dark/*.fit \
+    --flat 20261221-*-flat/*.fit \
+    --deband 1
 ```
 
 Mark an object in the full image:
@@ -51,9 +57,6 @@ python locate.py 2026*/*-stack.fit \
     --query vesta
 ```
 
-Images are plate-solved if needed, with solutions saved as `.new` files for
-reuse.
-
 Crop a major or minor body from the image:
 
 ```sh
@@ -63,3 +66,6 @@ python crop.py 2026*/*.fit \
     --elevation 0.10 \
     --query vesta
 ```
+
+Images are plate-solved if needed, with solutions saved as `.new` files for
+reuse.
