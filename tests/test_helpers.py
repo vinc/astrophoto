@@ -414,6 +414,9 @@ class CaptureTests(unittest.TestCase):
                 raw.raw_image_visible = np.full((20, 20), 123, dtype=np.uint16)
                 raw.black_level_per_channel = [100] * 4
                 raw.white_level = 4095
+                raw.color_desc = b"RGBG"
+                raw.raw_colors_visible = np.tile([[0, 1], [3, 2]], (10, 10))
+                raw.daylight_whitebalance = [2, 1, 1.5, 0]
                 result = conversion.convert(source, ZoneInfo("UTC"), output=output)
             self.assertEqual(result, output)
             self.assertFalse(source.with_suffix(".fit").exists())
@@ -421,6 +424,10 @@ class CaptureTests(unittest.TestCase):
             self.assertTrue((data == 123).all())
             self.assertEqual(header["RAWFILE"], "original.CR2")
             self.assertEqual(header["DATE-AVG"], "2025-01-01T00:00:00.125")
+            self.assertEqual(header["BAYERPAT"], "RGGB")
+            self.assertEqual(header["WBR"], 2)
+            self.assertEqual(header["WBG"], 1)
+            self.assertEqual(header["WBB"], 1.5)
 
 if __name__ == "__main__":
     unittest.main()
