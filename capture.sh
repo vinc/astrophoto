@@ -30,7 +30,16 @@ gphoto2 \
   --set-config iso=800 \
   --set-config aperture=4.0 \
   --set-config "shutterspeed=$shutterspeed" \
-  --capture-image-and-download \
-  --interval 15 \
-  --frames 20 \
-  --filename "$dir/%Y%m%d-%H%M%S.%C"
+  --set-config capturetarget=1 \
+  --capture-image \
+  --interval 1 \
+  --frames 20 || exit 1
+
+echo "Downloading pictures to $dir ..."
+gphoto2 \
+  --folder / --recurse \
+  --filename "$dir/%Y%m%d-%H%M%S.%C" \
+  --get-all-files || exit 1
+
+echo "Deleting downloaded pictures from the camera ..."
+gphoto2 --folder / --recurse --delete-all-files
