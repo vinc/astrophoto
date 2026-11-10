@@ -24,7 +24,7 @@ class CaptureScriptTests(unittest.TestCase):
         return result, arguments, folders
 
     def test_default_dark_and_flat_modes(self):
-        for mode, suffix, shutter in [(None, "", "5"), ("dark", "-dark", "5"), ("flat", "-flat", "45")]:
+        for mode, suffix, shutter in [(None, "-light", "5"), ("dark", "-dark", "5"), ("flat", "-flat", "45")]:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 result, arguments, folders = self.run_capture(directory, *([mode] if mode else []))

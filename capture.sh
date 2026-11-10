@@ -9,7 +9,7 @@ if [ "$#" -gt 1 ]; then
 fi
 
 case "${1-}" in
-  "") ;;
+  "") dir="$dir-light" ;;
   dark) dir="$dir-dark" ;;
   flat)
     dir="$dir-flat"
