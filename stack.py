@@ -27,15 +27,68 @@ def read_frame(path):
 
     return data.astype(np.float32), header
 
-def check_dark_match(path, data, header, shape, metadata):
+def check_calibration_match(path, data, header, shape, metadata, kind, keys):
     metadata = metadata or {}
     if data.shape != shape:
-        raise ValueError(f"{path}: image shape {data.shape} does not match dark shape {shape}")
-    for key in ("INSTRUME", "ISO", "EXPTIME"):
+        raise ValueError(f"{path}: image shape {data.shape} does not match {kind} shape {shape}")
+    for key in keys:
         if key in header and key in metadata and header[key] != metadata[key]:
-            raise ValueError(f"{path}: {key}={header[key]} does not match dark {metadata[key]}")
+            raise ValueError(f"{path}: {key}={header[key]} does not match {kind} {metadata[key]}")
+
+def check_dark_match(path, data, header, shape, metadata):
+    check_calibration_match(path, data, header, shape, metadata, "dark",
+                            ("INSTRUME", "ISO", "EXPTIME"))
     if header.get("DARKCOR", False):
         raise ValueError(f"{path}: dark correction has already been applied")
+
+FLAT_KEYS = ("INSTRUME", "ISO", "OBJECTIV", "FOCALLEN", "FNUMBER")
+
+def check_flat_match(path, data, header, shape, metadata):
+    check_calibration_match(path, data, header, shape, metadata, "flat", FLAT_KEYS)
+    if header.get("FLATCOR", False) or header.get("DARKCOR", False):
+        raise ValueError(f"{path}: calibration has already been applied")
+
+def black_level(path, header):
+    if "BLACKLVL" not in header:
+        raise ValueError(f"{path}: missing BLACKLVL; convert the original RAW image first")
+    level = float(header["BLACKLVL"])
+    if not np.isfinite(level) or level < 0:
+        raise ValueError(f"{path}: invalid BLACKLVL")
+    return level
+
+def normalize_flat(data):
+    # Keep the flat illumination's colour out of the four Bayer pixel positions
+    for y in range(2):
+        for x in range(2):
+            plane = data[y::2, x::2]
+            level = float(np.median(plane))
+            if not np.isfinite(level) or level <= 0:
+                raise ValueError("Flat frame has no positive signal in a Bayer plane")
+            plane /= level
+    return data
+
+def master_flat(paths):
+    images = []
+    metadata = {}
+    for path in paths:
+        data, header = read_frame(path)
+        shape = images[0].shape if images else data.shape
+        check_flat_match(path, data, header, shape, metadata)
+        if min(data.shape) < 2 or not np.isfinite(data).all():
+            raise ValueError(f"{path}: flat frame needs finite pixels in all Bayer planes")
+        if "WHITELEV" in header and np.percentile(data, 99) >= 0.98 * header["WHITELEV"]:
+            raise ValueError(f"{path}: flat frame is saturated; use a shorter exposure")
+        # Short flats use their own RAW black level, not the long-exposure dark
+        data -= black_level(path, header)
+        images.append(normalize_flat(data))
+        for key in FLAT_KEYS:
+            if key in header:
+                metadata[key] = header[key]
+
+    flat, _, _ = combine_frames(images, method="median")
+    if not np.isfinite(flat).all() or np.any(flat <= 0):
+        raise ValueError("Master flat contains invalid or non-positive response pixels")
+    return normalize_flat(flat), metadata
 
 def master_dark(paths):
     images = []
@@ -83,12 +136,17 @@ def reduce_banding(image, amount):
     correction[valid] -= correction[valid].mean()
     return image - (amount * correction).astype(np.float32)[:, None]
 
-def load(path, dark=None, dark_metadata=None, deband=0):
+def load(path, dark=None, dark_metadata=None, deband=0, flat=None, flat_metadata=None):
     data, header = read_frame(path)
     if dark is not None:
         check_dark_match(path, data, header, dark.shape, dark_metadata)
         # The raw master includes the bias; subtract it once and retain negatives
         data -= dark
+    if flat is not None:
+        check_flat_match(path, data, header, flat.shape, flat_metadata)
+        if dark is None:
+            data -= black_level(path, header)
+        data /= flat
 
     # Average each Bayer 2x2 block into one grayscale pixel
     h, w = data.shape
@@ -207,12 +265,16 @@ def coverage_crop(coverage, minimum):
     return best
 
 def stack_directory(directory, method="mean", normalize=True, sigma=3,
-                    min_coverage=0, output_prefix=None, dark_files=None, deband=0):
+                    min_coverage=0, output_prefix=None, dark_files=None, deband=0,
+                    flat_files=None):
     dark_files = list(dict.fromkeys(Path(path).resolve() for path in (dark_files or [])))
-    dark_paths = set(dark_files)
+    flat_files = list(dict.fromkeys(Path(path).resolve() for path in (flat_files or [])))
+    if set(dark_files) & set(flat_files):
+        raise ValueError("A frame cannot be supplied as both a dark and a flat")
+    calibration_paths = set(dark_files) | set(flat_files)
     files = sorted(
         path for path in directory.glob("*.fit")
-        if not path.name.endswith("-stack.fit") and path.resolve() not in dark_paths
+        if not path.name.endswith("-stack.fit") and path.resolve() not in calibration_paths
     )
 
     if not files:
@@ -221,11 +283,15 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     dark, dark_metadata = master_dark(dark_files) if dark_files else (None, None)
     if dark_files:
         print(f"Combined {len(dark_files)} dark frames")
+    flat, flat_metadata = master_flat(flat_files) if flat_files else (None, None)
+    if flat_files:
+        print(f"Combined {len(flat_files)} flat frames")
 
     # The field drifts on a fixed tripod, so align to the middle
     # frame to halve the largest offset between frames
     middle = files[len(files) // 2]
-    reference = load(middle, dark, dark_metadata, deband=deband)
+    reference = load(middle, dark, dark_metadata, deband=deband,
+                     flat=flat, flat_metadata=flat_metadata)
     if not np.isfinite(reference).any():
         raise ValueError(f"No finite pixels in reference frame: {middle}")
     aligned = [reference]
@@ -236,7 +302,8 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         if path == middle:
             continue
 
-        image = load(path, dark, dark_metadata, deband=deband)
+        image = load(path, dark, dark_metadata, deband=deband,
+                     flat=flat, flat_metadata=flat_metadata)
 
         try:
             registered, footprint = astroalign.register(
@@ -271,11 +338,18 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     if dark_files:
         header["DARKCOR"] = (True, "Master dark subtracted before binning")
         header["NDARKS"] = (len(dark_files), "Number of median-combined dark frames")
-        # camera.read_image must not subtract the raw bias a second time
-        header["BLACKLVL"] = (0.0, "Raw bias removed with master dark")
-        header.remove("WHITELEV", ignore_missing=True)
         for path in dark_files:
             header.add_history(f"Dark {path.name}")
+    if flat_files:
+        header["FLATCOR"] = (True, "Master flat applied before binning")
+        header["NFLATS"] = (len(flat_files), "Number of normalized flat frames")
+        header["FLATBIAS"] = ("BLACKLVL", "Flat bias from RAW black-level metadata")
+        for path in flat_files:
+            header.add_history(f"Flat {path.name}")
+    if dark_files or flat_files:
+        # camera.read_image must not subtract the raw bias a second time
+        header["BLACKLVL"] = (0.0, "Raw bias removed during calibration")
+        header.remove("WHITELEV", ignore_missing=True)
     header["STACKMTH"] = "SIGMEAN" if method == "mean" else "MEDIAN"
     header["BGNORM"] = (normalize, "Additive background normalization")
     header["DEBAND"] = (deband, "Row correction fraction before alignment")
@@ -333,6 +407,8 @@ def main():
                         help="Output basename within the input directory (default: directory name)")
     parser.add_argument("--dark", nargs="+", type=Path,
                         help="Unstacked dark FITS files; median-combine and subtract before binning")
+    parser.add_argument("--flat", nargs="+", type=Path,
+                        help="Unstacked flat FITS files; normalize and divide before binning")
     parser.add_argument("--deband", type=float, default=0, metavar="AMOUNT",
                         help="Horizontal row correction strength, 0 to 1 (default: 0, disabled)")
     args = parser.parse_args()
@@ -356,7 +432,7 @@ def main():
     try:
         stack_directory(directory, args.method, not args.no_normalize, args.sigma,
                         args.min_coverage, args.output_prefix, dark_files=args.dark,
-                        deband=args.deband)
+                        deband=args.deband, flat_files=args.flat)
     except (OSError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 
