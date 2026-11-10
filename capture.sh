@@ -13,7 +13,7 @@ case "${1-}" in
   dark) dir="$dir-dark" ;;
   flat)
     dir="$dir-flat"
-    shutterspeed=45
+    shutterspeed=50
     ;;
   *)
     echo "Usage: $0 [dark|flat]" >&2
