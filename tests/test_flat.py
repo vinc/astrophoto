@@ -43,6 +43,48 @@ def write_flats(directory, response):
     return paths
 
 class FlatTests(unittest.TestCase):
+    def test_weakest_bayer_plane_warns_below_fifteen_percent_without_rejecting(self):
+        for fraction in [0.10, 0.15, 0.50]:
+            for y in range(2):
+                for x in range(2):
+                    with self.subTest(fraction=fraction, y=y, x=x), \
+                            tempfile.TemporaryDirectory() as temporary:
+                        path = Path(temporary) / "flat.fit"
+                        header = frame_header()
+                        header["WHITELEV"] = header["BLACKLVL"] + 4000
+                        span = header["WHITELEV"] - header["BLACKLVL"]
+                        data = np.full((16, 20), header["BLACKLVL"] + 0.5 * span)
+                        data[y::2, x::2] = header["BLACKLVL"] + fraction * span
+                        fits.writeto(path, data, header)
+                        output, errors = io.StringIO(), io.StringIO()
+                        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                            flat, _ = stack.master_flat([path])
+                        self.assertIn(f"weakest Bayer plane at {fraction:.0%} of full scale", output.getvalue())
+                        self.assertEqual("underexposed" in errors.getvalue(), fraction < 0.15)
+                        np.testing.assert_allclose(flat, 1)
+
+    def test_missing_white_level_skips_exposure_diagnostic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "flat.fit"
+            header = frame_header()
+            del header["WHITELEV"]
+            fits.writeto(path, np.full((16, 20), 150.0), header)
+            output, errors = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                flat, _ = stack.master_flat([path])
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(errors.getvalue(), "")
+            np.testing.assert_allclose(flat, 1)
+
+    def test_invalid_white_level_fails_clearly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "flat.fit"
+            header = frame_header()
+            header["WHITELEV"] = header["BLACKLVL"]
+            fits.writeto(path, np.full((16, 20), 100.0), header)
+            with self.assertRaisesRegex(ValueError, "invalid WHITELEV"):
+                stack.master_flat([path])
+
     def test_master_removes_bias_and_normalizes_brightness_and_bayer_positions(self):
         response = response_map()
         with tempfile.TemporaryDirectory() as temporary:
