@@ -29,14 +29,14 @@ class CaptureScriptTests(unittest.TestCase):
         folders = [path for path in directory.iterdir() if path.is_dir() and path.name != "bin"]
         return result, arguments, folders
 
-    def test_default_dark_and_flat_modes(self):
-        for mode, suffix, shutter in [(None, "-light", "5"), ("dark", "-dark", "5"), ("flat", "-flat", "50")]:
+    def test_default_light_dark_and_flat_modes(self):
+        for mode, suffix, shutter in [(None, "-light", "5"), ("light", "-light", "5"), ("dark", "-dark", "5"), ("flat", "-flat", "50")]:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 result, arguments, folders = self.run_capture(directory, *([mode] if mode else []))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(len(arguments), 3)
-                capture, download, delete = arguments
+                capture, download, cleanup = arguments
                 self.assertEqual(len(folders), 1)
                 self.assertRegex(folders[0].name, rf"^\d{{8}}-\d{{4}}{suffix}$")
                 self.assertIn(f"shutterspeed={shutter}", capture)
@@ -52,7 +52,7 @@ class CaptureScriptTests(unittest.TestCase):
                     "--folder", "/", "--recurse", "--filename",
                     f"{folders[0].name}/%Y%m%d-%H%M%S.%C", "--get-all-files",
                 ])
-                self.assertEqual(delete, ["--folder", "/", "--recurse", "--delete-all-files"])
+                self.assertEqual(cleanup, ["--folder", "/DCIM/100CANON", "--delete-file", "1..20"])
 
     def test_failed_capture_or_download_never_deletes_files(self):
         for stage, expected_calls in [("--capture-image", 1), ("--get-all-files", 2)]:
@@ -61,11 +61,11 @@ class CaptureScriptTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(len(commands), expected_calls)
                 self.assertEqual(len(folders), 1)
-                self.assertTrue(all("--delete-all-files" not in command for command in commands))
+                self.assertTrue(all("--delete-file" not in command for command in commands))
 
     def test_failed_deletion_reports_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
-            result, commands, _ = self.run_capture(Path(temporary), fail_stage="--delete-all-files")
+            result, commands, _ = self.run_capture(Path(temporary), fail_stage="--delete-file")
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(len(commands), 3)
 
