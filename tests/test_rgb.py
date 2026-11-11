@@ -14,6 +14,7 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 from scipy.ndimage import shift
+from skimage.transform import SimilarityTransform
 
 import camera
 import color
@@ -45,6 +46,44 @@ def star_field():
     return image.astype(np.float32)
 
 class BayerTests(unittest.TestCase):
+    def test_saturation_flags_handle_every_layout_and_either_green(self):
+        for pattern in color.BAYER_PATTERNS:
+            with self.subTest(pattern=pattern):
+                data = np.full((7, 9), 128.0)
+                data[:2, :2] = 4095
+                greens = [i for i, value in enumerate(pattern) if value == "G"]
+                for column, index in enumerate(greens, 1):
+                    data[2 + index // 2, 2 * column + index % 2] = 4095
+                flags = color.saturation_flags(data, header(), pattern)
+                self.assertEqual(flags.shape, (3, 4))
+                self.assertEqual(flags.dtype, np.uint8)
+                self.assertEqual(flags[0, 0], 7)
+                self.assertEqual(flags[1, 1], 2)
+                self.assertEqual(flags[1, 2], 2)
+                self.assertEqual(np.count_nonzero(flags), 3)
+        np.testing.assert_array_equal(color.saturation_flags(data, {}, "RGGB"), 0)
+
+    def test_saturation_is_detected_before_dark_flat_and_debanding(self):
+        rgb = np.full((20, 30, 3), [100.0, 200.0, 300.0])
+        rgb[8:12, 12:16] = 3967
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "light.fit"
+            fits.writeto(path, mosaic(rgb) + 128, header())
+            original = path.read_bytes()
+            dark = np.full((40, 60), 160.0)
+            for response in [0.8, 1.2]:
+                with self.subTest(response=response):
+                    flat = np.full(dark.shape, response)
+                    result, flags = stack.load(path, dark=dark, flat=flat, rgb=True,
+                                               deband=0.5, return_saturation=True)
+                    np.testing.assert_array_equal(result, stack.load(path, dark=dark, flat=flat, rgb=True, deband=0.5))
+                    np.testing.assert_array_equal(flags[8:12, 12:16], 7)
+                    self.assertEqual(np.count_nonzero(flags), 16)
+                    display = color.rgb_display_header(result, {"WBR": 2.256, "WBG": 1, "WBB": 1.269})
+                    preview = color.render_rgb(result, display, (flags != 0).astype(float))
+                    np.testing.assert_allclose(preview[9, 13, :3], 1)
+            self.assertEqual(path.read_bytes(), original)
+
     def test_all_bayer_layouts_keep_red_blue_and_average_both_greens(self):
         expected = np.full((3, 4, 3), [10.0, 25.0, 50.0])
         for pattern in color.BAYER_PATTERNS:
@@ -96,6 +135,59 @@ class BayerTests(unittest.TestCase):
             self.assertLess(residual, 0.05 * np.std(bands[..., channel]))
 
 class RGBStackTests(unittest.TestCase):
+    def test_rejected_saturated_samples_do_not_desaturate_the_stack(self):
+        images = [np.full((10, 12, 3), [100, 200, 300], dtype=np.float32) for _ in range(7)]
+        flags = [np.zeros((10, 12), dtype=np.uint8) for _ in images]
+        images[0][4, 5] = 4000
+        flags[0][4, 5] = 7
+        result, _, accepted, fraction = stack.combine_frames(images, saturation=flags)
+        np.testing.assert_array_equal(result[4, 5], [100, 200, 300])
+        np.testing.assert_array_equal(accepted[4, 5], 6)
+        np.testing.assert_array_equal(fraction, 0)
+        images = images[:4]
+        result, _, accepted, fraction = stack.combine_frames(images, saturation=flags[:4])
+        self.assertEqual(fraction[4, 5], 0.25)
+        np.testing.assert_array_equal(accepted[4, 5], 4)
+
+    def test_registered_saturation_covers_interpolation_and_excludes_footprints(self):
+        flags = np.zeros((80, 100), dtype=np.uint8)
+        flags[40, 50] = 1
+        flags[10, 20] = 4
+        transform = SimilarityTransform(translation=(6.5, -3.5), rotation=0.03)
+        footprint = np.zeros(flags.shape, dtype=bool)
+        footprint[:20] = True
+        result = stack.align_saturation(flags, transform, flags.shape, footprint)
+        x, y = transform([[50, 40]])[0]
+        self.assertEqual(result[round(y), round(x)], 1)
+        np.testing.assert_array_equal(result[:20], 0)
+        np.testing.assert_array_equal(result[60:], 0)
+
+    def test_saturated_star_masks_follow_real_registration_and_coverage_crop(self):
+        truth = star_field()
+        truth[44:50, 60:66] = 5000
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for i, offset in enumerate([-2, -1, 0, 1, 2]):
+                image = shift(truth, (offset, 2 * offset, 0), order=1, mode="nearest")
+                raw = np.minimum(mosaic(image) + 128, 4095)
+                fits.writeto(directory / f"light-{i}.fit", raw, header())
+            with contextlib.redirect_stdout(io.StringIO()):
+                stack.stack_directory(directory, rgb=True, min_coverage=1)
+            output = directory / f"{directory.name}-rgb-stack.fit"
+            with fits.open(output) as hdus:
+                rgb = np.moveaxis(hdus["RGB"].data, 0, -1)
+                saturation = hdus["SATURATED"].data
+                self.assertEqual(saturation.shape, hdus[0].data.shape)
+                y = 47 - hdus[0].header["CROPY"]
+                x = 63 - hdus[0].header["CROPX"]
+                self.assertEqual(saturation[y, x], 1)
+                self.assertEqual(saturation[0, 0], 0)
+                expected = color.render_rgb(rgb, hdus["RGB"].header, saturation)
+                np.testing.assert_array_equal(expected[y, x, :3], 1)
+                actual = plt.imread(output.with_suffix(".png"))
+                np.testing.assert_allclose(actual, expected, atol=1 / 255)
+                np.testing.assert_array_equal(color.read_saturation(output), saturation)
+
     def test_real_registration_coloured_stars_coverage_and_linear_fits(self):
         truth = star_field()
         with tempfile.TemporaryDirectory() as temporary:
@@ -156,6 +248,25 @@ class RGBStackTests(unittest.TestCase):
             stack.main()
 
 class RGBPreviewTests(unittest.TestCase):
+    def test_saturated_highlights_are_neutral_while_unsaturated_colours_and_linear_data_remain(self):
+        rgb = np.zeros((20, 30, 3), dtype=np.float32)
+        rgb[8, 10] = [3000, 3000, 3000]
+        rgb[8, 11] = [1500, 400, 200]
+        rgb[8, 12] = [100, 200, 800]
+        original = rgb.copy()
+        display = color.rgb_display_header(rgb, {"WBR": 2.256, "WBG": 1, "WBB": 1.269})
+        previous = color.render_rgb(rgb, display)
+        self.assertLess(previous[8, 10, 1], 0.5)
+        saturation = np.zeros(rgb.shape[:2], dtype=np.float32)
+        saturation[8, 10] = 1
+        preview = color.render_rgb(rgb, display, saturation)
+        np.testing.assert_array_equal(preview[8, 10, :3], 1)
+        np.testing.assert_array_equal(preview[saturation == 0], previous[saturation == 0])
+        np.testing.assert_array_equal(rgb, original)
+        saturation[8, 10] = 0.5
+        halfway = color.render_rgb(rgb, display, saturation)
+        np.testing.assert_allclose(halfway[8, 10, :3], (previous[8, 10, :3] + 1) / 2)
+
     def test_noisy_sky_estimates_each_background_and_limits_noise_amplification(self):
         rng = np.random.default_rng(123)
         background = np.array([80, 120, 60])
@@ -183,6 +294,9 @@ class RGBPreviewTests(unittest.TestCase):
 
     def test_locate_and_crop_reuse_the_full_stacks_colour_rendering(self):
         rgb = star_field()
+        rgb[48, 64] = 3967
+        saturation = np.zeros(rgb.shape[:2], dtype=np.float32)
+        saturation[48, 64] = 1
         metadata = color.rgb_display_header(rgb, {"WBR": 2, "WBG": 1, "WBB": 1.5})
         wcs = WCS(naxis=2)
         wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
@@ -196,7 +310,8 @@ class RGBPreviewTests(unittest.TestCase):
             directory = Path(temporary)
             source, cached = directory / "rgb.fit", directory / "rgb.new"
             fits.HDUList([fits.PrimaryHDU(color.luminance(rgb), source_header),
-                          fits.ImageHDU(np.moveaxis(rgb, -1, 0), metadata, name="RGB")]).writeto(source)
+                          fits.ImageHDU(np.moveaxis(rgb, -1, 0), metadata, name="RGB"),
+                          fits.ImageHDU(saturation, name="SATURATED")]).writeto(source)
             solved_header = source_header.copy()
             solved_header.update(wcs.to_header())
             fits.writeto(cached, color.luminance(rgb), solved_header)
@@ -209,12 +324,14 @@ class RGBPreviewTests(unittest.TestCase):
                                       radius=radius, source_path=source)
                 image = axes.images[0]
                 x0, x1, y0, y1 = [int(value + 0.5) for value in image.get_extent()]
-                expected = color.render_rgb(rgb, metadata)[y0:y1, x0:x1]
+                expected = color.render_rgb(rgb, metadata, saturation)[y0:y1, x0:x1]
                 np.testing.assert_allclose(image.get_array(), expected)
             self.assertEqual(source.read_bytes(), original)
 
     def test_solver_keeps_rgb_when_solve_field_only_copies_primary(self):
         rgb = star_field()
+        saturation = np.zeros(rgb.shape[:2], dtype=np.float32)
+        saturation[48, 64] = 1
         source_header = header()
         source_header["RGB"] = True
         del source_header["BAYERPAT"]
@@ -223,7 +340,8 @@ class RGBPreviewTests(unittest.TestCase):
             directory = Path(temporary)
             path = directory / "rgb.fit"
             fits.HDUList([fits.PrimaryHDU(color.luminance(rgb), source_header),
-                          fits.ImageHDU(np.moveaxis(rgb, -1, 0), metadata, name="RGB")]).writeto(path)
+                          fits.ImageHDU(np.moveaxis(rgb, -1, 0), metadata, name="RGB"),
+                          fits.ImageHDU(saturation, name="SATURATED")]).writeto(path)
             def solve(command, **kwargs):
                 wcs = WCS(naxis=2)
                 wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
@@ -238,6 +356,7 @@ class RGBPreviewTests(unittest.TestCase):
             with patch.object(locate.subprocess, "run", side_effect=solve):
                 output = locate.solve_image(path, directory, None, 3, 20, keep_solution=True)
             np.testing.assert_array_equal(color.read_rgb(output)[0], rgb)
+            np.testing.assert_array_equal(color.read_saturation(output), saturation)
 
 if __name__ == "__main__":
     unittest.main()
