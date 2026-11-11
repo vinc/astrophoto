@@ -4,6 +4,7 @@ import numpy as np
 import rawpy
 from astropy.io import fits
 from astropy.stats import sigma_clipped_stats
+from scipy.ndimage import find_objects, gaussian_filter, label
 
 BAYER_PATTERNS = ("RGGB", "BGGR", "GRBG", "GBRG")
 WHITE_BALANCE_KEYS = ("WBR", "WBG", "WBB")
@@ -85,10 +86,30 @@ def rgb_display_header(rgb, metadata):
     _, _, noise = sigma_clipped_stats(light)
     high = max(float(np.percentile(light, 99.9)), 15 * float(noise), 1e-6)
     header = fits.Header({"COLORSPC": "RGB", "RGBHIGH": high, "RGBSOFT": 3.0})
+    header["SATFEATH"] = (1.0, "Highlight feather sigma in binned pixels")
     for index, (key, gain, low) in enumerate(zip(WHITE_BALANCE_KEYS, gains, black), 1):
         header[key] = (float(gain), "Daylight gain used only for RGB previews")
         header[f"RGBLO{index}"] = (float(low), "Background level used only for RGB previews")
     return header
+
+def feather_saturation(saturation, sigma=1.0):
+    if not np.isfinite(sigma) or sigma < 0:
+        raise ValueError("Invalid saturation feather width")
+    if sigma == 0:
+        return saturation
+    regions, count = label(saturation > 0, structure=np.ones((3, 3)))
+    result = np.zeros(saturation.shape, dtype=np.float32)
+    radius = int(np.ceil(4 * sigma))
+    for index, bounds in enumerate(find_objects(regions, max_label=count), 1):
+        rows = slice(max(0, bounds[0].start - radius), min(saturation.shape[0], bounds[0].stop + radius))
+        columns = slice(max(0, bounds[1].start - radius), min(saturation.shape[1], bounds[1].stop + radius))
+        area = (rows, columns)
+        component = np.where(regions[area] == index, saturation[area], 0).astype(np.float32)
+        feathered = gaussian_filter(component, sigma=sigma, mode="constant", cval=0)
+        # Retain each highlight's peak correction without keeping a flat mask edge
+        feathered *= component.max() / feathered.max()
+        np.maximum(result[area], feathered, out=result[area])
+    return np.clip(result, 0, 1)
 
 def render_rgb(rgb, header, saturation=None):
     black = np.array([header[f"RGBLO{index}"] for index in range(1, 4)])
@@ -106,6 +127,7 @@ def render_rgb(rgb, header, saturation=None):
     if saturation is not None:
         if saturation.shape != rgb.shape[:2] or not np.isfinite(saturation).all() or np.any((saturation < 0) | (saturation > 1)):
             raise ValueError("Invalid RGB saturation fraction")
+        saturation = feather_saturation(saturation, header.get("SATFEATH", 1.0))
         # Lost colour information is neutralized only in the rendered preview
         neutral = result.max(axis=-1, keepdims=True)
         result += saturation[..., None] * (neutral - result)
