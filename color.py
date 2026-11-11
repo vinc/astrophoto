@@ -54,6 +54,18 @@ def bin_rgb(data, pattern):
         channels.append(np.mean(planes, axis=0))
     return np.stack(channels, axis=-1).astype(np.float32)
 
+def saturation_flags(data, header, pattern):
+    shape = (data.shape[0] // 2, data.shape[1] // 2)
+    if "WHITELEV" not in header:
+        return np.zeros(shape, dtype=np.uint8)
+    white = float(header["WHITELEV"])
+    if not np.isfinite(white) or white <= 0:
+        raise ValueError("Invalid WHITELEV for saturation detection")
+    clipped = np.isfinite(data) & (data >= 0.98 * white)
+    channels = bin_rgb(clipped, pattern) > 0
+    # One byte per output pixel: R=1, either green=2, B=4
+    return np.sum(channels.astype(np.uint8) * [1, 2, 4], axis=-1).astype(np.uint8)
+
 def luminance(rgb):
     # Match the existing average of one red, two green, and one blue sample
     return (rgb[..., 0] + 2 * rgb[..., 1] + rgb[..., 2]) / 4
@@ -78,7 +90,7 @@ def rgb_display_header(rgb, metadata):
         header[f"RGBLO{index}"] = (float(low), "Background level used only for RGB previews")
     return header
 
-def render_rgb(rgb, header):
+def render_rgb(rgb, header, saturation=None):
     black = np.array([header[f"RGBLO{index}"] for index in range(1, 4)])
     gains = np.array([header[key] for key in WHITE_BALANCE_KEYS])
     valid = np.isfinite(rgb).all(axis=-1)
@@ -91,6 +103,12 @@ def render_rgb(rgb, header):
     result = scaled * factor[..., None]
     # Compress bright pixels together so clipping does not change their hue
     result /= np.maximum(1, result.max(axis=-1))[..., None]
+    if saturation is not None:
+        if saturation.shape != rgb.shape[:2] or not np.isfinite(saturation).all() or np.any((saturation < 0) | (saturation > 1)):
+            raise ValueError("Invalid RGB saturation fraction")
+        # Lost colour information is neutralized only in the rendered preview
+        neutral = result.max(axis=-1, keepdims=True)
+        result += saturation[..., None] * (neutral - result)
     result[~valid] = 0
     return np.dstack((np.clip(result, 0, 1), valid.astype(float))).astype(np.float32)
 
@@ -102,3 +120,12 @@ def read_rgb(path):
         if data.ndim != 3 or data.shape[0] != 3 or data.shape[1:] != hdus[0].data.shape:
             raise ValueError(f"{path}: invalid RGB extension dimensions")
         return np.moveaxis(data, 0, -1).astype(np.float32), hdus["RGB"].header.copy()
+
+def read_saturation(path):
+    with fits.open(path) as hdus:
+        if "SATURATED" not in hdus:
+            return None
+        data = hdus["SATURATED"].data
+        if data.shape != hdus[0].data.shape:
+            raise ValueError(f"{path}: invalid saturation extension dimensions")
+        return data.astype(np.float32)
