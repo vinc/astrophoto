@@ -183,7 +183,7 @@ class RGBStackTests(unittest.TestCase):
                 self.assertEqual(saturation[y, x], 1)
                 self.assertEqual(saturation[0, 0], 0)
                 expected = color.render_rgb(rgb, hdus["RGB"].header, saturation)
-                np.testing.assert_array_equal(expected[y, x, :3], 1)
+                np.testing.assert_allclose(expected[y, x, :3], 1, atol=0.01)
                 actual = plt.imread(output.with_suffix(".png"))
                 np.testing.assert_allclose(actual, expected, atol=1 / 255)
                 np.testing.assert_array_equal(color.read_saturation(output), saturation)
@@ -248,11 +248,46 @@ class RGBStackTests(unittest.TestCase):
             stack.main()
 
 class RGBPreviewTests(unittest.TestCase):
+    def test_highlight_feather_removes_box_edges_without_blurring_rgb(self):
+        y, x = np.mgrid[:64, :64]
+        profile = np.exp(-((x - 31.5)**2 + (y - 31.5)**2) / 50)
+        rgb = (profile[..., None] * [5000, 3000, 2500]).astype(np.float32)
+        original = rgb.copy()
+        saturation = np.zeros((64, 64), dtype=np.float32)
+        saturation[28:36, 28:36] = 1
+        display = fits.Header({"WBR": 2.256, "WBG": 1, "WBB": 1.269,
+                               "RGBLO1": 0, "RGBLO2": 0, "RGBLO3": 0,
+                               "RGBHIGH": 50, "RGBSOFT": 3})
+        hard = color.render_rgb(rgb, {**display, "SATFEATH": 0}, saturation)
+        smooth = color.render_rgb(rgb, display, saturation)
+        hard_step = np.linalg.norm(hard[32, 28, :3] - hard[32, 27, :3])
+        smooth_step = np.linalg.norm(smooth[32, 28, :3] - smooth[32, 27, :3])
+        self.assertLess(smooth_step, hard_step / 2)
+        hard_white = np.count_nonzero(np.ptp(hard[28:36, 28:36, :3], axis=-1) < 1e-6)
+        smooth_white = np.count_nonzero(np.ptp(smooth[28:36, 28:36, :3], axis=-1) < 1e-6)
+        self.assertLess(smooth_white, hard_white / 4)
+        np.testing.assert_array_equal(smooth[:20], hard[:20])
+        np.testing.assert_array_equal(rgb, original)
+
+    def test_feather_retains_independent_highlight_strengths_and_handles_empty_maps(self):
+        saturation = np.zeros((40, 60), dtype=np.float32)
+        saturation[10, 10] = 1
+        saturation[30, 40] = 0.25
+        original = saturation.copy()
+        smooth = color.feather_saturation(saturation)
+        self.assertEqual(smooth[10, 10], 1)
+        self.assertEqual(smooth[30, 40], 0.25)
+        self.assertGreater(smooth[10, 11], 0)
+        self.assertGreater(smooth[31, 40], 0)
+        self.assertEqual(smooth[20, 25], 0)
+        np.testing.assert_array_equal(saturation, original)
+        np.testing.assert_array_equal(color.feather_saturation(np.zeros((4, 6))), 0)
+
     def test_saturated_highlights_are_neutral_while_unsaturated_colours_and_linear_data_remain(self):
         rgb = np.zeros((20, 30, 3), dtype=np.float32)
         rgb[8, 10] = [3000, 3000, 3000]
-        rgb[8, 11] = [1500, 400, 200]
-        rgb[8, 12] = [100, 200, 800]
+        rgb[8, 20] = [1500, 400, 200]
+        rgb[12, 20] = [100, 200, 800]
         original = rgb.copy()
         display = color.rgb_display_header(rgb, {"WBR": 2.256, "WBG": 1, "WBB": 1.269})
         previous = color.render_rgb(rgb, display)
@@ -296,7 +331,7 @@ class RGBPreviewTests(unittest.TestCase):
         rgb = star_field()
         rgb[48, 64] = 3967
         saturation = np.zeros(rgb.shape[:2], dtype=np.float32)
-        saturation[48, 64] = 1
+        saturation[45:50, 61:70] = 1
         metadata = color.rgb_display_header(rgb, {"WBR": 2, "WBG": 1, "WBB": 1.5})
         wcs = WCS(naxis=2)
         wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
@@ -316,7 +351,7 @@ class RGBPreviewTests(unittest.TestCase):
             solved_header.update(wcs.to_header())
             fits.writeto(cached, color.luminance(rgb), solved_header)
             original = source.read_bytes()
-            for radius in [None, 8]:
+            for radius in [None, 1, 3, 8]:
                 figure, axes = plt.subplots()
                 with patch.object(locate.plt, "subplots", return_value=(figure, axes)), \
                         patch("matplotlib.figure.Figure.savefig"), contextlib.redirect_stdout(io.StringIO()):
