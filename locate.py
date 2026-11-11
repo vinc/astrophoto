@@ -246,8 +246,8 @@ def save_image(path, ra, dec, time, query, target_name=None, radius=None, source
         if rgb.shape[:2] != data.shape:
             raise ValueError("RGB data dimensions do not match the plate solution")
         saturation = read_saturation(colour_path)
-        crop = render_rgb(rgb[y0:y1, x0:x1], colour_header,
-                          None if saturation is None else saturation[y0:y1, x0:x1])
+        # Feather highlights in the full image so crops keep identical transitions
+        crop = render_rgb(rgb, colour_header, saturation)[y0:y1, x0:x1]
     if "NCOMBINE" in display_header or "STACKMTH" in display_header:
         vmin, vmax = stack_display_limits(data, display_header)
     else:
