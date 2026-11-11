@@ -86,6 +86,7 @@ def rgb_display_header(rgb, metadata):
     _, _, noise = sigma_clipped_stats(light)
     high = max(float(np.percentile(light, 99.9)), 15 * float(noise), 1e-6)
     header = fits.Header({"COLORSPC": "RGB", "RGBHIGH": high, "RGBSOFT": 3.0})
+    header["RGBKNEE"] = (0.8, "Preview highlight shoulder start")
     header["SATFEATH"] = (1.0, "Highlight feather sigma in binned pixels")
     for index, (key, gain, low) in enumerate(zip(WHITE_BALANCE_KEYS, gains, black), 1):
         header[key] = (float(gain), "Daylight gain used only for RGB previews")
@@ -122,8 +123,12 @@ def render_rgb(rgb, header, saturation=None):
     stretched = np.arcsinh(softness * light) / np.arcsinh(softness)
     factor = np.divide(stretched, light, out=np.zeros_like(light), where=light > 0)
     result = scaled * factor[..., None]
-    # Compress bright pixels together so clipping does not change their hue
-    result /= np.maximum(1, result.max(axis=-1))[..., None]
+    # Keep faint colours and let overexposed channels approach white smoothly
+    knee = float(header.get("RGBKNEE", 0.8))
+    if not np.isfinite(knee) or not 0 <= knee < 1:
+        raise ValueError("Invalid RGB highlight knee")
+    shoulder = knee - (1 - knee) * np.expm1(-np.maximum(result - knee, 0) / (1 - knee))
+    result = np.where(result <= knee, result, shoulder)
     if saturation is not None:
         if saturation.shape != rgb.shape[:2] or not np.isfinite(saturation).all() or np.any((saturation < 0) | (saturation > 1)):
             raise ValueError("Invalid RGB saturation fraction")
