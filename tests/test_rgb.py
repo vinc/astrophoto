@@ -81,7 +81,8 @@ class BayerTests(unittest.TestCase):
                     self.assertEqual(np.count_nonzero(flags), 16)
                     display = color.rgb_display_header(result, {"WBR": 2.256, "WBG": 1, "WBB": 1.269})
                     preview = color.render_rgb(result, display, (flags != 0).astype(float))
-                    np.testing.assert_allclose(preview[9, 13, :3], 1)
+                    self.assertGreater(preview[9, 13, :3].min(), 0.99)
+                    np.testing.assert_array_equal(preview[9, 13, :3], preview[9, 13, 0])
             self.assertEqual(path.read_bytes(), original)
 
     def test_all_bayer_layouts_keep_red_blue_and_average_both_greens(self):
@@ -257,7 +258,7 @@ class RGBPreviewTests(unittest.TestCase):
         saturation[28:36, 28:36] = 1
         display = fits.Header({"WBR": 2.256, "WBG": 1, "WBB": 1.269,
                                "RGBLO1": 0, "RGBLO2": 0, "RGBLO3": 0,
-                               "RGBHIGH": 50, "RGBSOFT": 3})
+                               "RGBHIGH": 5000, "RGBSOFT": 3})
         hard = color.render_rgb(rgb, {**display, "SATFEATH": 0}, saturation)
         smooth = color.render_rgb(rgb, display, saturation)
         hard_step = np.linalg.norm(hard[32, 28, :3] - hard[32, 27, :3])
@@ -268,6 +269,25 @@ class RGBPreviewTests(unittest.TestCase):
         self.assertLess(smooth_white, hard_white / 4)
         np.testing.assert_array_equal(smooth[:20], hard[:20])
         np.testing.assert_array_equal(rgb, original)
+
+    def test_bright_halo_approaches_white_without_a_saturation_mask_boundary(self):
+        y, x = np.mgrid[:64, :64]
+        profile = np.exp(-((x - 31.5)**2 + (y - 31.5)**2) / 50)
+        rgb = (profile[..., None] * [5000, 3000, 2500]).astype(np.float32)
+        display = fits.Header({"WBR": 2.256, "WBG": 1, "WBB": 1.269,
+                               "RGBLO1": 0, "RGBLO2": 0, "RGBLO3": 0,
+                               "RGBHIGH": 50, "RGBSOFT": 3})
+        saturation = np.zeros((64, 64), dtype=np.float32)
+        saturation[28:36, 28:36] = 1
+        unmasked = color.render_rgb(rgb, display)
+        masked = color.render_rgb(rgb, display, saturation)
+        # The bright halo outside the square mask must also be near white
+        np.testing.assert_allclose(unmasked[32, 27, :3], 1, atol=0.001)
+        np.testing.assert_allclose(masked[26:38, 26:38, :3],
+                                   unmasked[26:38, 26:38, :3], atol=0.001)
+        # Old RGB FITS files use the same shoulder without requiring restacking
+        explicit = color.render_rgb(rgb, {**display, "RGBKNEE": 0.8}, saturation)
+        np.testing.assert_array_equal(masked, explicit)
 
     def test_feather_retains_independent_highlight_strengths_and_handles_empty_maps(self):
         saturation = np.zeros((40, 60), dtype=np.float32)
@@ -290,17 +310,20 @@ class RGBPreviewTests(unittest.TestCase):
         rgb[12, 20] = [100, 200, 800]
         original = rgb.copy()
         display = color.rgb_display_header(rgb, {"WBR": 2.256, "WBG": 1, "WBB": 1.269})
+        display["RGBHIGH"] = 5000
+        display["SATFEATH"] = 0
         previous = color.render_rgb(rgb, display)
-        self.assertLess(previous[8, 10, 1], 0.5)
+        self.assertLess(previous[8, 10, 1], 0.8)
         saturation = np.zeros(rgb.shape[:2], dtype=np.float32)
         saturation[8, 10] = 1
         preview = color.render_rgb(rgb, display, saturation)
-        np.testing.assert_array_equal(preview[8, 10, :3], 1)
+        np.testing.assert_array_equal(preview[8, 10, :3], previous[8, 10, :3].max())
         np.testing.assert_array_equal(preview[saturation == 0], previous[saturation == 0])
         np.testing.assert_array_equal(rgb, original)
         saturation[8, 10] = 0.5
         halfway = color.render_rgb(rgb, display, saturation)
-        np.testing.assert_allclose(halfway[8, 10, :3], (previous[8, 10, :3] + 1) / 2)
+        np.testing.assert_allclose(halfway[8, 10, :3],
+                                   (previous[8, 10, :3] + previous[8, 10, :3].max()) / 2)
 
     def test_noisy_sky_estimates_each_background_and_limits_noise_amplification(self):
         rng = np.random.default_rng(123)
@@ -313,19 +336,20 @@ class RGBPreviewTests(unittest.TestCase):
         preview = color.render_rgb(rgb, display)
         self.assertLess(float(np.median(color.luminance(preview[..., :3]))), 0.15)
 
-    def test_shared_stretch_preserves_ratios_and_masks_missing_pixels(self):
+    def test_shared_stretch_preserves_faint_colours_rolls_off_highlights_and_masks_missing_pixels(self):
         rgb = np.zeros((20, 30, 3), dtype=np.float32)
         rgb[10, 10] = [50, 100, 200]
         rgb[10, 11] = [10000, 20000, 40000]
         rgb[0, 0] = np.nan
         metadata = {"WBR": 2, "WBG": 1, "WBB": 1}
         display = color.rgb_display_header(rgb, metadata)
+        display["RGBHIGH"] = 1000
         result = color.render_rgb(rgb, display)
         self.assertTrue(np.isfinite(result).all())
         np.testing.assert_array_equal(result[0, 0], 0)
         self.assertAlmostEqual(result[10, 10, 0] / result[10, 10, 1], 1)
         self.assertAlmostEqual(result[10, 10, 2] / result[10, 10, 1], 2)
-        self.assertAlmostEqual(result[10, 11, 2] / result[10, 11, 1], 2)
+        np.testing.assert_allclose(result[10, 11, :3], 1, atol=0.001)
 
     def test_locate_and_crop_reuse_the_full_stacks_colour_rendering(self):
         rgb = star_field()
