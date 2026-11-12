@@ -15,7 +15,7 @@ from astropy import units as u
 from astropy.coordinates import EarthLocation
 
 from localtime import parse_local_time
-from night import MAX_HOURS, NIGHT, sun_altitude
+from night import MAX_HOURS, NIGHT, first_night, sun_altitude
 
 API = "https://api.open-meteo.com/v1/forecast"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "weather"
@@ -46,7 +46,10 @@ def parse_time(text, now=None):
 
 
 def download(params):
-    response = requests.get(API, timeout=60, params=params)
+    try:
+        response = requests.get(API, timeout=60, params=params)
+    except requests.RequestException as exc:
+        raise SystemExit(f"Open-Meteo request failed: {exc}")
     if not response.ok:
         try:
             reason = response.json().get("reason")
@@ -56,21 +59,26 @@ def download(params):
     return response.json()
 
 
+def fresh(path):
+    age = datetime.now().timestamp() - path.stat().st_mtime
+    return age < MAX_AGE.total_seconds()
+
+
 def cached_download(params, update=False):
     key = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()[:16]
     path = CACHE / f"{key}.json"
-    now = datetime.now(timezone.utc)
-    if not update and path.exists():
-        cached = json.loads(path.read_text())
-        if now - datetime.fromisoformat(cached["downloaded"]) < MAX_AGE:
-            return cached["data"]
+    if not update and path.exists() and fresh(path):
+        try:
+            return json.loads(path.read_text())
+        except ValueError:
+            pass
     data = download(params)
     CACHE.mkdir(parents=True, exist_ok=True)
     for old in CACHE.glob("*.json"):
-        if now - datetime.fromtimestamp(old.stat().st_mtime, timezone.utc) > MAX_AGE:
+        if not fresh(old):
             old.unlink(missing_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"downloaded": now.isoformat(), "data": data}))
+    tmp.write_text(json.dumps(data))
     tmp.replace(path)
     return data
 
@@ -95,16 +103,6 @@ def fetch_forecast(latitude, longitude, elevation, start, hours, model, update=F
     return times, values
 
 
-def first_night(sun):
-    """Slice of the first consecutive hours with the Sun below the night altitude"""
-    dark = np.flatnonzero(sun < NIGHT)
-    if not len(dark):
-        return slice(0, 0)
-    gaps = np.flatnonzero(np.diff(dark) > 1)
-    last = dark[gaps[0]] if len(gaps) else dark[-1]
-    return slice(int(dark[0]), int(last) + 1)
-
-
 def integer(value):
     return "-" if np.isnan(value) else str(int(round(value)))
 
@@ -117,13 +115,12 @@ def rain(value):
 
 
 def date_line(times):
-    line = list(f"{'Date':<{LABEL}}" + " " * (CELL * len(times) + 6))
+    line = "Date"
     for i, time in enumerate(times):
         if i == 0 or time.hour == 0:
-            text = f"{time:%a %d}"
             offset = LABEL + i * CELL + 1
-            line[offset:offset + len(text)] = text
-    return "".join(line).rstrip()
+            line = line[:offset].ljust(offset) + f"{time:%a %d}"
+    return line
 
 
 def ratings(values):
@@ -131,27 +128,29 @@ def ratings(values):
     # Rounded like the table, so that colors agree with the numbers shown
     cloud, gust = np.round(values["cloud_cover"]), np.round(values["wind_gusts_10m"])
     spread = np.round(values["temperature_2m"]) - np.round(values["dew_point_2m"])
-    rain = values["precipitation"]
-    result = []
-    for i in range(len(cloud)):
-        if np.isnan(cloud[i]):
-            result.append(None)
-        elif cloud[i] > CLOUDY:
-            result.append("red")
-        elif cloud[i] > HAZY or rain[i] > 0 or gust[i] >= WINDY or spread[i] <= DEW_SPREAD:
-            result.append("yellow")
-        else:
-            result.append("green")
-    return result
+    wet = values["precipitation"] > 0
+    return [
+        None if np.isnan(cloud[i]) else
+        "red" if cloud[i] > CLOUDY else
+        "yellow" if cloud[i] > HAZY or wet[i] or gust[i] >= WINDY or spread[i] <= DEW_SPREAD else
+        "green"
+        for i in range(len(cloud))
+    ]
 
 
 def use_color():
     return sys.stdout.isatty() and "NO_COLOR" not in os.environ
 
 
+def row(label, cells):
+    return (f"{label:<{LABEL}}" + "".join(f"{cell} " for cell in cells)).rstrip()
+
+
 def table(times, values, color=False):
+    hours = [f"{time.hour:>{CELL - 1}}" for time in times]
+    if color:
+        hours = [f"{COLORS[name]}{hour}{RESET}" if name else hour for hour, name in zip(hours, ratings(values))]
     groups = [
-        [("Time (h)", [str(time.hour) for time in times])],
         [
             ("Cloud (%)", [integer(value) for value in values["cloud_cover"]]),
             ("High (%)", [integer(value) for value in values["cloud_cover_high"]]),
@@ -168,17 +167,11 @@ def table(times, values, color=False):
         ],
         [("Rain (mm)", [rain(value) for value in values["precipitation"]])],
     ]
-    colors = ratings(values) if color else [None] * len(times)
     separator = "-" * (LABEL + CELL * len(times) - 1)
-    lines = [date_line(times)]
+    lines = [date_line(times), row("Time (h)", hours)]
     for group in groups:
-        if len(lines) > 1:
-            lines.append(separator)
-        for label, cells in group:
-            cells = [f"{cell:>{CELL - 1}}" for cell in cells]
-            if label == "Time (h)":
-                cells = [f"{COLORS[name]}{cell}{RESET}" if name else cell for cell, name in zip(cells, colors)]
-            lines.append((f"{label:<{LABEL}}" + "".join(cell + " " for cell in cells)).rstrip())
+        lines.append(separator)
+        lines += [row(label, (f"{cell:>{CELL - 1}}" for cell in cells)) for label, cells in group]
     return lines
 
 
@@ -191,7 +184,7 @@ def main():
     parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
     parser.add_argument("--time", help='Local time in ISO format or words like "tomorrow night" (default: now)')
     parser.add_argument("--update", action="store_true",
-                        help=f"Download a fresh forecast even if one less than {MAX_AGE.seconds // 60} minutes old is cached")
+                        help=f"Download a fresh forecast even if one less than {MAX_AGE.total_seconds() / 60:.0f} minutes old is cached")
     parser.add_argument("--model", default="meteofrance_seamless",
                         help="Open-Meteo weather model (default: meteofrance_seamless, AROME then ARPEGE)")
     args = parser.parse_args()
@@ -208,6 +201,8 @@ def main():
         args.latitude, args.longitude, args.elevation, hours[night.start], night.stop - night.start,
         args.model, args.update,
     )
+    if not times:
+        raise SystemExit(f"No forecast for this night from the {args.model} model")
 
     try:
         locale.setlocale(locale.LC_TIME, "")
@@ -215,8 +210,6 @@ def main():
         pass
     for line in table([time.astimezone() for time in times], values, use_color()):
         print(line)
-    if not times:
-        print("  (no forecast for this period)")
 
 
 if __name__ == "__main__":

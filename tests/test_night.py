@@ -19,6 +19,11 @@ class NightTest(unittest.TestCase):
         self.assertGreater(sun[0], 10)
         self.assertLess(sun[1], -18)
 
+    def test_first_night(self):
+        self.assertEqual(night.first_night(np.array([5, -13, -20, -13, -5, -15])), slice(1, 4))
+        self.assertEqual(night.first_night(np.array([-20, -15])), slice(0, 2))
+        self.assertEqual(night.first_night(np.array([10, -5, 10])), slice(0, 0))
+
     def test_dark_time_is_kept(self):
         self.assertEqual(night.night_start(utc(2026, 12, 21, 20, 49), STONEHENGE), utc(2026, 12, 21, 20, 49))
 

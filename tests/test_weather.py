@@ -1,7 +1,6 @@
 import contextlib
 from datetime import datetime, timedelta, timezone
 import io
-import json
 import os
 from pathlib import Path
 import sys
@@ -78,6 +77,12 @@ class RequestTest(unittest.TestCase):
                 with self.subTest(text=text):
                     self.assertEqual(weather.parse_time(text, now), expected.replace(tzinfo=timezone.utc))
 
+    def test_network_error_is_reported(self):
+        error = weather.requests.ConnectionError("offline")
+        with patch.object(weather.requests, "get", side_effect=error):
+            with self.assertRaisesRegex(SystemExit, "Open-Meteo request failed: offline"):
+                weather.download({})
+
     def test_api_error_reason_is_reported(self):
         with tempfile.TemporaryDirectory() as cache, patch.object(weather, "CACHE", Path(cache)), \
                 patch.object(weather.requests, "get", return_value=response({}, status=400)):
@@ -101,9 +106,8 @@ class CacheTest(unittest.TestCase):
 
     def age(self, minutes):
         for path in self.cache.glob("*.json"):
-            cached = json.loads(path.read_text())
-            cached["downloaded"] = (datetime.fromisoformat(cached["downloaded"]) - timedelta(minutes=minutes)).isoformat()
-            path.write_text(json.dumps(cached))
+            when = datetime.now().timestamp() - minutes * 60
+            os.utime(path, (when, when))
 
     def test_repeat_request_reads_the_cache(self):
         self.assertEqual(self.download(self.params), ({"hourly": {"time": []}}, 1))
@@ -129,10 +133,14 @@ class CacheTest(unittest.TestCase):
     def test_expired_files_are_removed(self):
         self.download(self.params)
         old = next(self.cache.glob("*.json"))
-        stale = datetime.now().timestamp() - 3600
-        os.utime(old, (stale, stale))
+        self.age(60)
         self.download(dict(self.params, latitude=48.0))
         self.assertFalse(old.exists())
+
+    def test_corrupt_cache_is_downloaded_again(self):
+        self.download(self.params)
+        next(self.cache.glob("*.json")).write_text("{")
+        self.assertEqual(self.download(self.params), ({"hourly": {"time": []}}, 1))
 
 class TableTest(unittest.TestCase):
     def test_rows_and_dates(self):
@@ -141,11 +149,11 @@ class TableTest(unittest.TestCase):
         self.assertEqual(cells(output, "Cloud (%)")[:2], ["0", "80"])
         self.assertEqual(cells(output, "Rain (mm)")[:2], ["0", "1"])
         self.assertEqual(cells(output, "Wind (m/s)")[:2], ["2", "2"])
-        self.assertEqual([line.split()[0][0] if line.startswith("-") else line.split()[0] for line in output.splitlines()],
-                         ["Date", "Time", "-", "Cloud", "High", "Mid", "Low", "-", "Wind", "Gust",
-                          "-", "Temp", "Dew", "-", "Rain"])
         lines = output.splitlines()
-        self.assertEqual(lines[2], "-" * len(lines[1]))
+        separator = "-" * len(lines[1])
+        self.assertEqual([line if line == separator else line.split()[0] for line in lines],
+                         ["Date", "Time", separator, "Cloud", "High", "Mid", "Low", separator, "Wind", "Gust",
+                          separator, "Temp", "Dew", separator, "Rain"])
         self.assertIn("Mon 21", output)
         self.assertIn("Tue 22", output)
 
@@ -166,10 +174,10 @@ class TableTest(unittest.TestCase):
         hours = cells(output, "Time (h)")
         self.assertEqual([hours[0], hours[-1]], ["19", "7"])
 
-    def test_first_night(self):
-        self.assertEqual(weather.first_night(np.array([5, -13, -20, -13, -5, -15])), slice(1, 4))
-        self.assertEqual(weather.first_night(np.array([-20, -15])), slice(0, 2))
-        self.assertEqual(weather.first_night(np.array([10, -5, 10])), slice(0, 0))
+    def test_night_beyond_the_forecast_is_reported(self):
+        with patch.object(weather, "fetch_forecast", return_value=([], {})):
+            with self.assertRaisesRegex(SystemExit, "No forecast for this night"):
+                run(["--time", "2026-12-21T19:00"])
 
     def test_no_night_is_reported(self):
         with patch.object(weather, "sun_altitude", return_value=np.full(weather.MAX_HOURS, -5.0)):
