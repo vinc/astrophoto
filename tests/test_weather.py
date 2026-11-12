@@ -1,7 +1,9 @@
 import contextlib
 from datetime import datetime, timedelta, timezone
 import io
+import os
 import sys
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -39,9 +41,18 @@ def cells(output, label):
     line = line.ljust(weather.LABEL + weather.CELL * count)
     return [line[weather.LABEL + i * weather.CELL:weather.LABEL + (i + 1) * weather.CELL].strip() for i in range(count)]
 
-def run(arguments, **overrides):
+@contextlib.contextmanager
+def local_time_zone(name):
+    try:
+        with patch.dict(os.environ, {"TZ": name}):
+            time.tzset()
+            yield
+    finally:
+        time.tzset()
+
+def run(arguments, zone="UTC", **overrides):
     output = io.StringIO()
-    with patch.object(sys, "argv", ARGS + arguments), \
+    with local_time_zone(zone), patch.object(sys, "argv", ARGS + arguments), \
             patch.object(weather.requests, "get", side_effect=lambda *_, params, **__: forecast(params, **overrides)) as get, \
             contextlib.redirect_stdout(output):
         weather.main()
@@ -75,7 +86,7 @@ class TableTest(unittest.TestCase):
         self.assertEqual(cells(output, "Cloud (%)")[:2], ["0", "80"])
         self.assertEqual(cells(output, "Rain (mm)")[:2], ["0", "1"])
         self.assertEqual(cells(output, "Wind (m/s)")[:2], ["2", "2"])
-        self.assertEqual([line.split()[0] for line in output.splitlines()[3:]],
+        self.assertEqual([line.split()[0] for line in output.splitlines()],
                          ["Date", "Time", "Cloud", "High", "Mid", "Low", "Rain", "Wind", "Gust", "Temp", "Dew"])
         self.assertIn("Mon 21", output)
         self.assertIn("Tue 22", output)
@@ -90,6 +101,12 @@ class TableTest(unittest.TestCase):
                 output, _ = run(["--time", start])
                 time = cells(output, "Time (h)")
                 self.assertEqual([time[0], time[-1]], hours)
+
+    def test_times_are_shown_in_the_local_time_zone(self):
+        output, params = run(["--time", "2026-12-21T12:00"], zone="Europe/Paris")
+        self.assertEqual(params["start_hour"], "2026-12-21T18:00")
+        hours = cells(output, "Time (h)")
+        self.assertEqual([hours[0], hours[-1]], ["19", "7"])
 
     def test_first_night(self):
         self.assertEqual(weather.first_night(np.array([5, -13, -20, -13, -5, -15])), slice(1, 4))

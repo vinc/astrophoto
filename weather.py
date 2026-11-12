@@ -2,6 +2,7 @@
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import locale
 
 import numpy as np
 import requests
@@ -140,10 +141,11 @@ def main():
         args.latitude, args.longitude, args.elevation, hours[night.start], night.stop - night.start, args.model,
     )
 
-    print(f"Forecast for {args.latitude:g}, {args.longitude:g} at {args.elevation * 1000:.0f} m "
-          f"from the {args.model} model (Open-Meteo)")
-    print(f"Times in UTC, for the hours with the Sun below {NIGHT}°\n")
-    for line in table(times, values):
+    try:
+        locale.setlocale(locale.LC_TIME, "")
+    except locale.Error:
+        pass
+    for line in table([time.astimezone() for time in times], values):
         print(line)
     if not times:
         print("  (no forecast for this period)")
