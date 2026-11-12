@@ -124,8 +124,8 @@ def render_rgb(rgb, header, saturation=None):
     if noise > 0:
         light = luminance(balanced)[..., None]
         chroma = balanced - light
-        # Only sky-level pixels feed the colour blur, so stars don't tint the sky or fade
-        faint = np.clip(1 - light / (10 * noise), 0, 1)
+        # Only valid sky-level pixels feed the colour blur, so stars and gaps don't tint the sky
+        faint = np.where(valid[..., None], np.clip(1 - light / (10 * noise), 0, 1), 0)
         blurred = gaussian_filter(chroma * faint, sigma=(1.5, 1.5, 0))
         weight = gaussian_filter(faint, sigma=(1.5, 1.5, 0))
         blurred = np.divide(blurred, weight, out=chroma.copy(), where=weight > 1e-3)

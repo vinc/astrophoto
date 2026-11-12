@@ -364,6 +364,36 @@ class RGBPreviewTests(unittest.TestCase):
         ring[50, 50] = False
         self.assertLess(float(np.abs(preview - without)[ring].max()), 0.01 * float(preview[50, 50].max()))
 
+    def test_missing_pixels_do_not_tint_the_sky_beside_them(self):
+        rng = np.random.default_rng(9)
+        sky = rng.normal([60, 90, 50], [4, 2.8, 4], (120, 120, 3)).astype(np.float32)
+        display = color.rgb_display_header(sky, {"WBR": 2.256, "WBG": 1, "WBB": 1.269})
+        gapped = sky.copy()
+        gapped[:, :40] = np.nan
+        difference = color.render_rgb(gapped, display)[:, 40:, :3] - color.render_rgb(sky, display)[:, 40:, :3]
+        self.assertLess(float(np.abs(difference.mean(axis=0)).max()), 0.05)
+
+    def test_faint_coloured_stars_keep_their_colour(self):
+        rng = np.random.default_rng(10)
+        gains = np.array([2.256, 1, 1.269])
+        sky = lambda: rng.normal([60, 90, 50], [4, 2.8, 4], (60, 60, 3)).astype(np.float32)
+        display = color.rgb_display_header(sky(), dict(zip(color.WHITE_BALANCE_KEYS, gains)))
+        # Keep stars below the highlight shoulder so only the colour blur is measured
+        display["RGBHIGH"] = 400 * display["RGBNOISE"]
+        y, x = np.mgrid[-6:7, -6:7]
+        psf = np.exp(-(x ** 2 + y ** 2) / 2)[..., None]
+        colour = np.array([1, 0.6, 0.3]) / gains
+        for snr in (10, 20, 50):
+            with self.subTest(snr=snr):
+                ratios = []
+                for _ in range(40):
+                    rgb = sky()
+                    rgb[24:37, 24:37] += psf * colour * snr * display["RGBNOISE"] / color.luminance(colour * gains)
+                    preview = color.render_rgb(rgb, display)[..., :3]
+                    flux = (preview[27:34, 27:34] - np.median(preview[:15, :15].reshape(-1, 3), axis=0)).sum(axis=(0, 1))
+                    ratios.append(flux[0] / flux[1])
+                self.assertAlmostEqual(float(np.mean(ratios)) / (1 / 0.6), 1, delta=0.1)
+
     def test_invalid_sky_noise_is_rejected(self):
         rgb = star_field()
         display = color.rgb_display_header(rgb, {"WBR": 2, "WBG": 1, "WBB": 1.5})
