@@ -88,13 +88,20 @@ class ChartTests(unittest.TestCase):
         self.assertAlmostEqual(abs((ra + 180) % 360 - 180), 0.5, places=3)
         self.assertAlmostEqual(dec, 10, places=3)
 
-    def test_default_fov_fits_the_images_within_limits(self):
-        small = [chart.footprint(make_header())]
-        self.assertEqual(chart.default_fov(small, chart.chart_center(small)), 30)
-        wide = [chart.footprint(make_header(scale=0.0049))]
-        fov = chart.default_fov(wide, chart.chart_center(wide))
-        self.assertGreater(fov, 30)
-        self.assertLessEqual(fov, 120)
+    def test_default_fov_keeps_context_around_a_single_image(self):
+        outlines = [chart.footprint(make_header())]
+        self.assertEqual(chart.default_fov(outlines, chart.chart_center(outlines)), 30)
+
+    def test_every_image_of_a_night_lands_on_the_chart(self):
+        spots = [(300, 30), (16.4, -4.6), (83.8, -1), (150, 12)]
+        for count in range(2, len(spots) + 1):
+            outlines = [chart.footprint(make_header(ra=ra, dec=dec, scale=0.0049)) for ra, dec in spots[:count]]
+            center = chart.chart_center(outlines)
+            wcs = chart.chart_wcs(center, chart.default_fov(outlines, center))
+            for ra, dec in outlines:
+                x, y = wcs.world_to_pixel_values(ra, dec)
+                self.assertTrue(np.all(chart.inside(np.asarray(x), np.asarray(y))), spots[:count])
+                self.assertTrue(np.all(chart.separation(ra, dec, center) < chart.chart_reach(wcs)))
 
     def test_chart_draws_outline_on_canvas_with_nearby_stars_only(self):
         outline = chart.footprint(make_header())

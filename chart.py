@@ -56,12 +56,23 @@ def footprint(header, samples=32):
 
 def chart_center(outlines):
     total = sum(unit_vectors(ra, dec).sum(axis=0) for ra, dec in outlines)
+    if np.linalg.norm(total) < 1e-9:
+        total = unit_vectors(*outlines[0]).sum(axis=0)
     ra, dec = to_radec(total / np.linalg.norm(total))
     return float(ra), float(dec)
 
 def default_fov(outlines, center):
-    radius = max(separation(ra, dec, center).max() for ra, dec in outlines)
-    return float(np.clip(4 * radius, 30, 120))
+    # Fit the projected outlines rather than their angular spread, which
+    # underestimates how far the projection pushes distant images out
+    unit = chart_wcs(center, WIDTH)
+    x, y = unit.world_to_pixel_values(*map(np.concatenate, zip(*outlines)))
+    half_width = np.abs(x - (WIDTH - 1) / 2).max()
+    half_height = np.abs(y - (HEIGHT - 1) / 2).max() * WIDTH / HEIGHT
+    return float(max(30, 2.5 * max(half_width, half_height)))
+
+def chart_reach(wcs):
+    corners = wcs.pixel_to_world_values([-0.5, WIDTH - 0.5, WIDTH - 0.5, -0.5], [-0.5, -0.5, HEIGHT - 0.5, HEIGHT - 0.5])
+    return float(min(separation(*corners, wcs.wcs.crval).max() + 5, 170))
 
 def chart_wcs(center, fov):
     wcs = WCS(naxis=2)
@@ -114,9 +125,8 @@ def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=Non
     center = chart_center(outlines)
     if fov is None:
         fov = default_fov(outlines, center)
-    # Beyond ~90° the stereographic projection stretches far off the canvas
-    reach = min(0.8 * fov, 89)
     wcs = chart_wcs(center, fov)
+    reach = chart_reach(wcs)
 
     fig = plt.figure(figsize=(12, 9), facecolor=SURFACE)
     ax = fig.add_subplot(projection=wcs)
@@ -195,7 +205,7 @@ def main():
     matplotlib.use("Agg")
     parser = argparse.ArgumentParser(description="Draw a star chart locating plate-solved images in the sky")
     parser.add_argument("files", nargs="+", type=Path, help="Saved RAW or FITS images, including stacks")
-    parser.add_argument("--fov", type=float, help="Chart width in degrees (default: fit the images, 30 to 120)")
+    parser.add_argument("--fov", type=float, help="Chart width in degrees at its centre (default: fit the images, at least 30)")
     parser.add_argument("--magnitude", type=float, default=6.0, help="Faintest star magnitude, up to 6 (default: 6)")
     parser.add_argument("--output", type=Path, help="PNG path (default: next to the earliest image)")
     parser.add_argument("--query", help="Solar System body to mark at each image time")
@@ -212,8 +222,8 @@ def main():
         parser.error("--query needs --latitude, --longitude and --elevation")
     if args.query and not (-90 <= args.latitude <= 90 and -180 <= args.longitude <= 180):
         parser.error("Invalid observer latitude or longitude")
-    if args.fov is not None and not (0 < args.fov <= 120):
-        parser.error("--fov must be between 0 and 120 degrees")
+    if args.fov is not None and not (0 < args.fov <= 360):
+        parser.error("--fov must be between 0 and 360 degrees")
     if not (0 < args.scale_low < args.scale_high):
         parser.error("Scale limits must satisfy 0 < --scale-low < --scale-high")
     if args.cpu_limit <= 0:
