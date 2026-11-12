@@ -30,6 +30,11 @@ def forecast(times, **overrides):
         hourly[name] = value if isinstance(value, list) else [value] * len(times)
     return hourly
 
+def cells(output, label, count):
+    line = next(line for line in output.splitlines() if line.startswith(label))
+    line = line.ljust(weather.LABEL + weather.CELL * count)
+    return [line[weather.LABEL + i * weather.CELL:weather.LABEL + (i + 1) * weather.CELL].strip() for i in range(count)]
+
 def run(arguments, hourly):
     output = io.StringIO()
     with patch.object(sys, "argv", ARGS + arguments), \
@@ -66,25 +71,38 @@ class TableTest(unittest.TestCase):
         output, _ = run(["--time", "2026-12-21T12:00", "--hours", "4"], forecast(
             times, cloud_cover=[0, 0, 80, 0], precipitation=[0, 0, 0, 0.4],
         ))
-        rows = output.splitlines()[-4:]
-        self.assertEqual([row[0] for row in rows], [" ", "*", " ", " "])
-        self.assertIn("day", rows[0])
-        self.assertIn("dark", rows[1])
-        self.assertIn("WSW", rows[1])
+        self.assertEqual(cells(output, "Time (h)", 4), ["12", "22", "23", "0"])
+        self.assertEqual(cells(output, "Clear", 4), ["", "*", "", ""])
+        self.assertEqual(cells(output, "Rain (mm)", 4), ["0", "0", "0", "0.4"])
+        self.assertEqual(cells(output, "Wind dir", 4), ["WSW"] * 4)
+        self.assertIn("Mon 21", output)
+        self.assertIn("Tue 22", output)
+
+    def test_long_forecasts_are_split_into_blocks(self):
+        times = [f"2026-12-{21 + hour // 24}T{hour % 24:02d}:00" for hour in range(30)]
+        output, _ = run(["--time", "2026-12-21T00:00", "--hours", "30"], forecast(times))
+        rows = [line for line in output.splitlines() if line.startswith("Time (h)")]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1].split()[2:], [str(hour) for hour in range(6)])
 
     def test_missing_values_print_as_dashes(self):
         output, _ = run(["--time", "2026-12-21T22:00", "--hours", "1"],
                         forecast(["2026-12-21T22:00"], cloud_cover=[None], dew_point_2m=[None]))
-        row = output.splitlines()[-1]
-        self.assertEqual(row[0], " ")
-        self.assertIn(" - ", row)
+        self.assertEqual(cells(output, "Cloud (%)", 1), ["-"])
+        self.assertEqual(cells(output, "Dew pt (°C)", 1), ["-"])
+        self.assertEqual(cells(output, "Clear", 1), [""])
 
     def test_dew_and_frost_risk(self):
         self.assertEqual(weather.dew_risk(6.0, 1.0), "")
-        self.assertEqual(weather.dew_risk(6.0, 2.5), "dew?")
+        self.assertEqual(weather.dew_risk(6.0, 2.5), "d?")
         self.assertEqual(weather.dew_risk(6.0, 4.5), "dew")
-        self.assertEqual(weather.dew_risk(1.0, -0.5), "frost")
+        self.assertEqual(weather.dew_risk(1.0, -0.5), "ice")
+        self.assertEqual(weather.dew_risk(2.0, -1.5), "i?")
         self.assertEqual(weather.dew_risk(np.nan, 1.0), "")
+
+    def test_values_fit_in_a_cell(self):
+        self.assertEqual([weather.decimal(value) for value in (0.04, 0.4, 9.94, 12.6, -1.2)], ["0", "0.4", "9.9", "13", "-1"])
+        self.assertEqual([weather.integer(value) for value in (-0.4, 99.6, np.nan)], ["0", "100", "-"])
 
 class SkyTest(unittest.TestCase):
     def test_winter_solstice_at_stonehenge(self):
@@ -93,7 +111,6 @@ class SkyTest(unittest.TestCase):
         sun, moon, illumination = weather.sun_and_moon(times, location)
         self.assertGreater(sun[0], 10)
         self.assertLess(sun[1], -18)
-        self.assertEqual([weather.sky_state(altitude) for altitude in sun], ["day", "dark"])
         self.assertTrue(np.all((illumination >= 0) & (illumination <= 1)))
 
 if __name__ == "__main__":

@@ -23,6 +23,10 @@ COMPASS = "N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW".split()
 DEW_SPREAD = 2
 DEW_RISK_SPREAD = 4
 
+LABEL = 12
+CELL = 4  # Three characters and a space
+BLOCK = 24  # Hours per block to fit a terminal
+
 
 def parse_time(text):
     time = datetime.fromisoformat(text) if text else datetime.now(timezone.utc)
@@ -75,45 +79,72 @@ def sun_and_moon(times, location):
         )
 
 
-def sky_state(sun_altitude):
-    return (
-        "day" if sun_altitude > -0.8 else
-        "civil" if sun_altitude > -6 else
-        "naut" if sun_altitude > -12 else
-        "astro" if sun_altitude > -18 else "dark"
-    )
-
-
 def dew_risk(temperature, dew_point):
     spread = temperature - dew_point
     if np.isnan(spread) or spread > DEW_RISK_SPREAD:
         return ""
-    kind = "frost" if dew_point <= 0 else "dew"
-    return kind if spread <= DEW_SPREAD else kind + "?"
+    kind = "ice" if dew_point <= 0 else "dew"
+    return kind if spread <= DEW_SPREAD else kind[0] + "?"
 
 
-def number(value, width, decimals=0):
-    return f"{'-':>{width}}" if np.isnan(value) else f"{value:{width}.{decimals}f}"
+def integer(value):
+    return "-" if np.isnan(value) else str(int(round(value)))
 
 
-def rows(times, values, sun, moon, illumination, max_cloud):
+def decimal(value):
+    """One decimal when it fits in a cell"""
+    if np.isnan(value):
+        return "-"
+    value = round(value, 1)
+    return "0" if value == 0 else f"{value:.1f}" if 0 < value < 10 else str(int(round(value)))
+
+
+def compass(direction):
+    return "-" if np.isnan(direction) else COMPASS[int((direction + 11.25) // 22.5) % 16]
+
+
+def date_line(times):
+    line = list(f"{'Date':<{LABEL}}" + " " * (CELL * len(times) + 6))
     for i, time in enumerate(times):
-        cloud = values["cloud_cover"][i]
-        rain = values["precipitation"][i]
-        clear = sun[i] < -12 and cloud <= max_cloud and not rain > 0
-        direction = values["wind_direction_10m"][i]
-        compass = "-" if np.isnan(direction) else COMPASS[int((direction + 11.25) // 22.5) % 16]
-        moon_text = f"{moon[i]:+3.0f} {illumination[i] * 100:3.0f}%" if moon[i] > 0 else "-"
-        temperature, dew_point = values["temperature_2m"][i], values["dew_point_2m"][i]
-        yield (
-            f"{'*' if clear else ' '} {time:%m-%d %H:%M}  {sky_state(sun[i]):<5}  {moon_text:>8}  "
-            f"{number(cloud, 5)}  {number(values['cloud_cover_low'][i], 3)}  "
-            f"{number(values['cloud_cover_mid'][i], 3)}  {number(values['cloud_cover_high'][i], 4)}  "
-            f"{number(rain, 4, 1)}  {number(values['wind_speed_10m'][i], 4)}  "
-            f"{number(values['wind_gusts_10m'][i], 4)}  {compass:<3}  "
-            f"{number(temperature, 5, 1)}  {number(dew_point, 5, 1)}  "
-            f"{number(temperature - dew_point, 6, 1)}  {dew_risk(temperature, dew_point)}"
-        ).rstrip()
+        if i == 0 or time.hour == 0:
+            text = f"{time:%a %d}"
+            offset = LABEL + i * CELL + 1
+            line[offset:offset + len(text)] = text
+    return "".join(line).rstrip()
+
+
+def table(times, values, sun, moon, illumination, max_cloud):
+    temperature, dew_point = values["temperature_2m"], values["dew_point_2m"]
+    clear = (sun < -12) & (values["cloud_cover"] <= max_cloud) & ~(values["precipitation"] > 0)
+    up = moon > 0
+    rows = [
+        ("Time (h)", [str(time.hour) for time in times]),
+        ("Clear", ["*" if hour else "" for hour in clear]),
+        ("Sun (°)", [integer(altitude) for altitude in sun]),
+        ("Moon (°)", [integer(altitude) if above else "" for altitude, above in zip(moon, up)]),
+        ("Moon (%)", [integer(lit * 100) if above else "" for lit, above in zip(illumination, up)]),
+        ("Cloud (%)", [integer(value) for value in values["cloud_cover"]]),
+        ("Low (%)", [integer(value) for value in values["cloud_cover_low"]]),
+        ("Mid (%)", [integer(value) for value in values["cloud_cover_mid"]]),
+        ("High (%)", [integer(value) for value in values["cloud_cover_high"]]),
+        ("Rain (mm)", [decimal(value) for value in values["precipitation"]]),
+        ("Wind (km/h)", [integer(value) for value in values["wind_speed_10m"]]),
+        ("Gust (km/h)", [integer(value) for value in values["wind_gusts_10m"]]),
+        ("Wind dir", [compass(value) for value in values["wind_direction_10m"]]),
+        ("Temp (°C)", [integer(value) for value in temperature]),
+        ("Dew pt (°C)", [integer(value) for value in dew_point]),
+        ("Spread (°C)", [decimal(value) for value in temperature - dew_point]),
+        ("Dew risk", [dew_risk(*pair) for pair in zip(temperature, dew_point)]),
+    ]
+    lines = []
+    for first in range(0, len(times), BLOCK):
+        block = slice(first, first + BLOCK)
+        if lines:
+            lines.append("")
+        lines.append(date_line(times[block]))
+        for label, cells in rows:
+            lines.append((f"{label:<{LABEL}}" + "".join(f"{cell:>{CELL - 1}} " for cell in cells[block])).rstrip())
+    return lines
 
 
 def main():
@@ -144,13 +175,9 @@ def main():
 
     print(f"Forecast for {args.latitude:g}, {args.longitude:g} at {args.elevation * 1000:.0f} m "
           f"from the {args.model} model (Open-Meteo)")
-    print(f"Times in UTC, * marks dark hours with at most {args.max_cloud:g}% cloud and no rain\n")
-    print(f"  {'Time':<11}  {'Sky':<5}  {'Moon':>8}  {'Cloud':>5}  {'Low':>3}  {'Mid':>3}  {'High':>4}  "
-          f"{'Rain':>4}  {'Wind':>4}  {'Gust':>4}  {'Dir':<3}  {'Temp':>5}  {'Dew':>5}  {'Spread':>6}")
-    print(f"  {'':<11}  {'':<5}  {'alt ill':>8}  {'%':>5}  {'%':>3}  {'%':>3}  {'%':>4}  "
-          f"{'mm':>4}  {'km/h':>4}  {'km/h':>4}  {'':<3}  {'°C':>5}  {'°C':>5}  {'°C':>6}")
-    for row in rows(times, values, sun, moon, illumination, args.max_cloud):
-        print(row)
+    print(f"Times in UTC, * marks hours with the Sun below -12°, at most {args.max_cloud:g}% cloud, and no rain\n")
+    for line in table(times, values, sun, moon, illumination, args.max_cloud):
+        print(line)
     if not times:
         print("  (no forecast for this period)")
 
