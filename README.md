@@ -21,6 +21,18 @@ python visible.py \
     --time 2026-12-21T21:49
 ```
 
+Check the hourly weather forecast for the night (cloud layers, rain, wind,
+temperature, and dew risk) from [Open-Meteo](https://open-meteo.com):
+
+```sh
+python weather.py \
+    --latitude 51.18 \
+    --longitude -1.83 \
+    --elevation 0.10 \
+    --time 2026-12-21T16:00 \
+    --hours 16
+```
+
 Center and focus the camera, capture a sequence of raw pictures (light, dark,
 and flat frames), and convert the CR2 files into FITS files:
 
