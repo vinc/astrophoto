@@ -176,13 +176,8 @@ def load(path, dark=None, dark_metadata=None, deband=0, flat=None, flat_metadata
         image = reduce_banding(bin_rgb(data, metadata["BAYERPAT"]), deband)
         return (image, saturated) if return_saturation else image
 
-    # Average each Bayer 2x2 block into one grayscale pixel
     h, w = data.shape
-    data = data[:h // 2 * 2, :w // 2 * 2]
-
-    binned = data.reshape(
-        h // 2, 2, w // 2, 2
-    ).mean(axis=(1, 3))
+    binned = data[:h // 2 * 2, :w // 2 * 2].reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
     return reduce_banding(binned, deband)
 
 def stack_header(reference, files):
@@ -449,8 +444,8 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         header["RGB"] = (True, "Linear colour data in RGB extension")
         header["RAWPATT"] = (colour["BAYERPAT"], "Reference RAW Bayer layout")
     lo, hi = stack_display_limits(primary)
-    header["DISPLO"] = (lo, "Black point used for PNG previews")
-    header["DISPHI"] = (hi, "White point used for PNG previews")
+    header["DISPLO"] = (lo, "Black point for the rendered PNG")
+    header["DISPHI"] = (hi, "White point for the rendered PNG")
 
     count_header = fits.Header({"BUNIT": "count"})
     accepted_header = count_header.copy()
