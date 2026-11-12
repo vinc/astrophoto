@@ -29,9 +29,6 @@ def parse_time(text, now=None):
     """Start of the hour in UTC"""
     if text:
         time = parse_local_time(text, now)
-        # A bare date like "saturday" is midnight, inside the previous night
-        if (time.hour, time.minute, time.second) == (0, 0, 0):
-            time = time.replace(hour=12)
     else:
         time = datetime.now(timezone.utc)
     return time.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)

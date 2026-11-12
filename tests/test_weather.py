@@ -64,7 +64,7 @@ class RequestTest(unittest.TestCase):
             datetime(2026, 12, 21, 21, tzinfo=timezone.utc),
         )
 
-    def test_bare_days_are_noon_in_utc_to_the_hour(self):
+    def test_start_is_in_utc_to_the_hour(self):
         now = datetime(2026, 12, 21, 18, 45)  # A Monday
         with local_time_zone("Europe/Paris"):
             for text, expected in [

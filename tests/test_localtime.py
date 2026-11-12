@@ -37,7 +37,8 @@ class ParseLocalTimeTest(unittest.TestCase):
             for text, expected in [
                 ("tonight", utc(2026, 12, 21, 19)),
                 ("tomorrow night", utc(2026, 12, 22, 19)),
-                ("saturday", utc(2026, 12, 25, 23)),
+                ("saturday", utc(2026, 12, 26, 11)),
+                ("2026-12-24", utc(2026, 12, 24, 11)),
             ]:
                 with self.subTest(text=text):
                     self.assertEqual(parse_local_time(text, now), expected)
