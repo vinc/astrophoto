@@ -23,6 +23,7 @@ from astroquery.jplhorizons import Horizons
 
 from convert import convert
 from camera import display_limits, stack_display_limits
+from color import read_rgb, read_saturation, render_rgb
 
 ROOT = Path(__file__).resolve().parent
 EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "horizons"
@@ -111,6 +112,13 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
         raise PlateSolveError("Plate solving failed; check focus, exposure, indexes, and scale limits")
     if not WCS(fits.getheader(output), fix=False).has_celestial:
         raise PlateSolveError("Plate solving returned an image without celestial coordinates")
+    if header.get("RGB", False):
+        # Some solve-field versions only copy the primary image into the result
+        with fits.open(path) as source_hdus, fits.open(output, mode="update") as solved_hdus:
+            for name in ("RGB", "SATURATED"):
+                if name in source_hdus and name not in solved_hdus:
+                    solved_hdus.append(source_hdus[name].copy())
+            solved_hdus[0].header["RGB"] = True
     if keep_solution:
         _save_solution(output, cached, source, source_info, timezone, raw=raw)
         return cached
@@ -229,6 +237,17 @@ def save_image(path, ra, dec, time, query, target_name=None, radius=None, source
     if source_path != Path(path) and source_path.suffix.lower() in {".fit", ".fits", ".new"}:
         # Cached plate solutions may predate the saved display limits
         display_header = fits.getheader(source_path)
+    colour_path = source_path if source_path.suffix.lower() in {".fit", ".fits", ".new"} else Path(path)
+    rgb, colour_header = read_rgb(colour_path)
+    if rgb is None and colour_path != Path(path):
+        colour_path = Path(path)
+        rgb, colour_header = read_rgb(colour_path)
+    if rgb is not None:
+        if rgb.shape[:2] != data.shape:
+            raise ValueError("RGB data dimensions do not match the plate solution")
+        saturation = read_saturation(colour_path)
+        # Feather highlights in the full image so crops keep identical transitions
+        crop = render_rgb(rgb, colour_header, saturation)[y0:y1, x0:x1]
     if "NCOMBINE" in display_header or "STACKMTH" in display_header:
         vmin, vmax = stack_display_limits(data, display_header)
     else:

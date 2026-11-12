@@ -13,8 +13,10 @@ from astropy.time import Time
 from matplotlib import pyplot as plt
 from scipy.ndimage import binary_dilation
 from scipy.signal import savgol_filter
+from skimage.transform import warp
 
 from camera import stack_display_limits
+from color import BAYER_PATTERNS, bin_rgb, color_metadata, luminance, rgb_display_header, render_rgb, saturation_flags
 
 DEBAND_WINDOW = 65
 
@@ -124,6 +126,9 @@ def reduce_banding(image, amount):
         raise ValueError("--deband must be between 0 and 1")
     if amount == 0 or image.shape[0] < 3:
         return image
+    if image.ndim == 3:
+        return np.stack([reduce_banding(image[..., channel], amount)
+                         for channel in range(3)], axis=-1)
 
     values = np.ma.masked_invalid(image)
     level = np.ma.median(values, axis=1).filled(np.nan)
@@ -147,8 +152,14 @@ def reduce_banding(image, amount):
     correction[valid] -= correction[valid].mean()
     return image - (amount * correction).astype(np.float32)[:, None]
 
-def load(path, dark=None, dark_metadata=None, deband=0, flat=None, flat_metadata=None):
+def load(path, dark=None, dark_metadata=None, deband=0, flat=None, flat_metadata=None,
+         rgb=False, bayer_pattern=None, return_saturation=False):
     data, header = read_frame(path)
+    if rgb:
+        metadata = color_metadata(path, header, bayer_pattern)
+        if return_saturation:
+            # Detect sensor clipping before dark/flat correction changes the levels
+            saturated = saturation_flags(data, header, metadata["BAYERPAT"])
     if dark is not None:
         check_dark_match(path, data, header, dark.shape, dark_metadata)
         # The raw master includes the bias; subtract it once and retain negatives
@@ -158,6 +169,12 @@ def load(path, dark=None, dark_metadata=None, deband=0, flat=None, flat_metadata
         if dark is None:
             data -= black_level(path, header)
         data /= flat
+
+    if rgb:
+        if dark is None and flat is None:
+            data -= black_level(path, header)
+        image = reduce_banding(bin_rgb(data, metadata["BAYERPAT"]), deband)
+        return (image, saturated) if return_saturation else image
 
     # Average each Bayer 2x2 block into one grayscale pixel
     h, w = data.shape
@@ -172,7 +189,7 @@ def stack_header(reference, files):
     header = fits.getheader(reference)
 
     # Data is rewritten as unscaled float32 2x2-binned pixels
-    for key in ("BZERO", "BSCALE", "RAWFILE"):
+    for key in ("BZERO", "BSCALE", "RAWFILE", "BAYERPAT"):
         header.remove(key, ignore_missing=True)
 
     # Registration and binning invalidate the reference frame's coordinates
@@ -207,6 +224,10 @@ def stack_header(reference, files):
     return header
 
 def normalize_background(image, reference):
+    if image.ndim == 3:
+        channels = [normalize_background(image[..., channel], reference[..., channel])
+                    for channel in range(3)]
+        return np.stack([data for data, _ in channels], axis=-1), [offset for _, offset in channels]
     overlap = np.isfinite(image) & np.isfinite(reference)
     if not overlap.any():
         raise ValueError("No finite overlap with the reference frame")
@@ -224,11 +245,27 @@ def clipping_std(values, axis=None):
     tolerance = 8 * np.finfo(np.float32).eps * np.maximum(scale, 1)
     return np.maximum(deviation, tolerance)
 
-def combine_frames(images, method="mean", sigma=3):
+def align_saturation(flags, transform, shape, footprint):
+    result = np.zeros(shape, dtype=np.uint8)
+    for bit in (1, 2, 4):
+        mask = (flags & bit) != 0
+        if not mask.any():
+            continue
+        # Include the full 4x4 source support of cubic image interpolation
+        mask = binary_dilation(mask, structure=np.ones((3, 3)))
+        aligned = warp(mask.astype(np.float32), inverse_map=transform.inverse,
+                       output_shape=shape, order=1, mode="constant", cval=0,
+                       preserve_range=True)
+        result[aligned > 0] |= bit
+    result[footprint] = 0
+    return result
+
+def combine_frames(images, method="mean", sigma=3, saturation=None):
     shape = images[0].shape
     result = np.full(shape, np.nan, dtype=np.float32)
     coverage = np.zeros(shape, dtype=np.int32)
     accepted = np.zeros(shape, dtype=np.int32)
+    saturated = np.zeros(shape, dtype=np.int32) if saturation is not None else None
 
     # Limit temporary cubes to a strip rather than copying the whole sequence
     for y in range(0, shape[0], 128):
@@ -245,11 +282,20 @@ def combine_frames(images, method="mean", sigma=3):
             clipped.mask = np.where(counts >= 5, clipped.mask, values.mask)
             combined = clipped.mean(axis=0)
             accepted[rows] = clipped.count(axis=0)
+            contributors = clipped
         else:
             combined = np.ma.median(values, axis=0)
             accepted[rows] = counts
+            contributors = values
         result[rows] = combined.filled(np.nan)
+        if saturation is not None:
+            flags = np.stack([mask[rows] for mask in saturation])
+            channels = (flags[..., None] & np.array([1, 2, 4], dtype=np.uint8)) != 0
+            saturated[rows] = np.sum(channels & ~np.ma.getmaskarray(contributors), axis=0)
 
+    if saturation is not None:
+        fraction = np.divide(saturated, accepted, out=np.zeros(shape, dtype=np.float32), where=accepted > 0)
+        return result, coverage, accepted, fraction.max(axis=-1)
     return result, coverage, accepted
 
 def coverage_crop(coverage, minimum):
@@ -277,7 +323,7 @@ def coverage_crop(coverage, minimum):
 
 def stack_directory(directory, method="mean", normalize=True, sigma=3,
                     min_coverage=0, output_prefix=None, dark_files=None, deband=0,
-                    flat_files=None):
+                    flat_files=None, rgb=False, bayer_pattern=None):
     dark_files = list(dict.fromkeys(Path(path).resolve() for path in (dark_files or [])))
     flat_files = list(dict.fromkeys(Path(path).resolve() for path in (flat_files or [])))
     if set(dark_files) & set(flat_files):
@@ -301,37 +347,56 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     # The field drifts on a fixed tripod, so align to the middle
     # frame to halve the largest offset between frames
     middle = files[len(files) // 2]
+    colour = color_metadata(middle, fits.getheader(middle), bayer_pattern) if rgb else None
+    colour_options = {"rgb": True, "bayer_pattern": bayer_pattern, "return_saturation": True} if rgb else {}
     reference = load(middle, dark, dark_metadata, deband=deband,
-                     flat=flat, flat_metadata=flat_metadata)
+                     flat=flat, flat_metadata=flat_metadata, **colour_options)
+    if rgb:
+        reference, reference_saturation = reference
+        saturation = [reference_saturation]
     if not np.isfinite(reference).any():
         raise ValueError(f"No finite pixels in reference frame: {middle}")
     aligned = [reference]
     used = [middle]
-    offsets = [0.0]
+    offsets = [[0.0] * 3 if rgb else 0.0]
 
     for path in files:
         if path == middle:
             continue
 
         image = load(path, dark, dark_metadata, deband=deband,
-                     flat=flat, flat_metadata=flat_metadata)
+                     flat=flat, flat_metadata=flat_metadata, **colour_options)
+        if rgb:
+            image, image_saturation = image
 
         try:
-            registered, footprint = astroalign.register(
-                image, reference
-            )
+            if rgb:
+                transform, _ = astroalign.find_transform(luminance(image), luminance(reference))
+                channels = [astroalign.apply_transform(transform, image[..., channel], reference[..., channel])
+                            for channel in range(3)]
+                registered = np.stack([data for data, _ in channels], axis=-1)
+                footprint = np.logical_or.reduce([mask for _, mask in channels])
+                registered_saturation = align_saturation(image_saturation, transform, reference.shape[:2], footprint)
+            else:
+                registered, footprint = astroalign.register(image, reference)
             registered[footprint] = np.nan
-            offset = 0.0
+            offset = [0.0] * 3 if rgb else 0.0
             if normalize:
                 registered, offset = normalize_background(registered, reference)
             aligned.append(registered)
             used.append(path)
             offsets.append(offset)
+            if rgb:
+                saturation.append(registered_saturation)
             print(f"Aligned {path.name}")
         except Exception as exc:
             print(f"Skipped {path.name}: {exc}")
 
-    stack, coverage, accepted = combine_frames(aligned, method, sigma)
+    if rgb:
+        stack, coverage, accepted, saturation = combine_frames(aligned, method, sigma, saturation=saturation)
+        coverage = coverage.min(axis=-1)
+    else:
+        stack, coverage, accepted = combine_frames(aligned, method, sigma)
     rows, columns = slice(0, stack.shape[0]), slice(0, stack.shape[1])
     if min_coverage > 0:
         minimum = int(np.ceil(min_coverage * len(aligned)))
@@ -339,8 +404,10 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         stack = stack[rows, columns]
         coverage = coverage[rows, columns]
         accepted = accepted[rows, columns]
+        if rgb:
+            saturation = saturation[rows, columns]
 
-    prefix = output_prefix or directory.name
+    prefix = output_prefix or (f"{directory.name}-rgb" if rgb else directory.name)
     fits_path = directory / f"{prefix}-stack.fit"
     png_path = directory / f"{prefix}-stack.png"
     coverage_path = directory / f"{prefix}-coverage.png"
@@ -357,7 +424,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         header["FLATBIAS"] = ("BLACKLVL", "Flat bias from RAW black-level metadata")
         for path in flat_files:
             header.add_history(f"Flat {path.name}")
-    if dark_files or flat_files:
+    if dark_files or flat_files or rgb:
         # camera.read_image must not subtract the raw bias a second time
         header["BLACKLVL"] = (0.0, "Raw bias removed during calibration")
         header.remove("WHITELEV", ignore_missing=True)
@@ -374,22 +441,40 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     header["CROPX"] = (columns.start, "Crop origin in binned reference pixels")
     header["CROPY"] = (rows.start, "Crop origin in binned reference pixels")
     for path, offset in zip(used, offsets):
-        header.add_history(f"Input {path.name}; background offset {offset:.6g} ADU")
+        text = ", ".join(f"{value:.6g}" for value in offset) if rgb else f"{offset:.6g}"
+        header.add_history(f"Input {path.name}; background offset {text} ADU")
 
-    lo, hi = stack_display_limits(stack)
+    primary = luminance(stack) if rgb else stack
+    if rgb:
+        header["RGB"] = (True, "Linear colour data in RGB extension")
+        header["RAWPATT"] = (colour["BAYERPAT"], "Reference RAW Bayer layout")
+    lo, hi = stack_display_limits(primary)
     header["DISPLO"] = (lo, "Black point used for PNG previews")
     header["DISPHI"] = (hi, "White point used for PNG previews")
 
     count_header = fits.Header({"BUNIT": "count"})
-    fits.HDUList([
-        fits.PrimaryHDU(stack, header),
+    accepted_header = count_header.copy()
+    if rgb:
+        accepted_header["COLORSPC"] = "RGB"
+    hdus = [
+        fits.PrimaryHDU(primary, header),
         fits.ImageHDU(coverage, count_header, name="COVERAGE"),
-        fits.ImageHDU(accepted, count_header, name="ACCEPTED"),
-    ]).writeto(fits_path, overwrite=True)
+        fits.ImageHDU(np.moveaxis(accepted, -1, 0) if rgb else accepted, accepted_header, name="ACCEPTED"),
+    ]
+    if rgb:
+        colour_header = rgb_display_header(stack, colour)
+        colour_header["BUNIT"] = "ADU"
+        colour_header["SATEXT"] = ("SATURATED", "Accepted sensor clipping fractions")
+        hdus.append(fits.ImageHDU(np.moveaxis(stack, -1, 0), colour_header, name="RGB"))
+        saturation_header = fits.Header({"BUNIT": "fraction", "SATTHR": 0.98})
+        saturation_header.add_comment("Maximum accepted clipping fraction across R, G and B")
+        hdus.append(fits.ImageHDU(saturation, saturation_header, name="SATURATED"))
+    fits.HDUList(hdus).writeto(fits_path, overwrite=True)
 
-    plt.imsave(
-        png_path, stack, cmap="gray", vmin=lo, vmax=hi,
-    )
+    if rgb:
+        plt.imsave(png_path, render_rgb(stack, colour_header, saturation))
+    else:
+        plt.imsave(png_path, stack, cmap="gray", vmin=lo, vmax=hi)
     plt.imsave(coverage_path, coverage, cmap="gray", vmin=0, vmax=len(aligned))
 
     print(f"Stacked {len(aligned)} images")
@@ -422,9 +507,15 @@ def main():
                         help="Unstacked flat FITS files; normalize and divide before binning")
     parser.add_argument("--deband", type=float, default=0, metavar="AMOUNT",
                         help="Horizontal row correction strength, 0 to 1 (default: 0, disabled)")
+    parser.add_argument("--rgb", action="store_true",
+                        help="Keep RGB colour at the usual 2x2-binned size; save with an -rgb prefix")
+    parser.add_argument("--bayer-pattern", choices=BAYER_PATTERNS,
+                        help="Bayer layout override for older FITS files; requires --rgb")
     args = parser.parse_args()
     if not np.isfinite(args.sigma) or args.sigma <= 0:
         parser.error("--sigma must be finite and positive")
+    if args.bayer_pattern is not None and not args.rgb:
+        parser.error("--bayer-pattern requires --rgb")
     if not 0 <= args.min_coverage <= 1:
         parser.error("--min-coverage must be between 0 and 1")
     if not np.isfinite(args.deband) or not 0 <= args.deband <= 1:
@@ -443,7 +534,8 @@ def main():
     try:
         stack_directory(directory, args.method, not args.no_normalize, args.sigma,
                         args.min_coverage, args.output_prefix, dark_files=args.dark,
-                        deband=args.deband, flat_files=args.flat)
+                        deband=args.deband, flat_files=args.flat, rgb=args.rgb,
+                        bayer_pattern=args.bayer_pattern)
     except (OSError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 
