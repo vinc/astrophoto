@@ -16,8 +16,8 @@ from astropy.wcs import WCS
 from scipy.ndimage import shift
 from skimage.transform import SimilarityTransform
 
-import camera
-import color
+from lib import camera
+from lib import color
 import locate
 import stack
 

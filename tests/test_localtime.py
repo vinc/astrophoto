@@ -5,7 +5,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from localtime import parse_local_time
+from lib.localtime import parse_local_time
 
 @contextlib.contextmanager
 def local_time_zone(name):

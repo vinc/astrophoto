@@ -22,8 +22,8 @@ from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
 
 from convert import convert
-from camera import display_limits, stack_display_limits
-from color import read_rgb, read_saturation, render_rgb
+from lib.camera import display_limits, stack_display_limits
+from lib.color import read_rgb, read_saturation, render_rgb
 
 ROOT = Path(__file__).resolve().parent
 EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "horizons"

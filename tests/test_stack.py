@@ -114,7 +114,7 @@ class DarkTests(unittest.TestCase):
         self.assertEqual(metadata, {"ISO": 800, "EXPTIME": 5})
 
     def test_subtraction_precedes_alignment_and_keeps_negative_signal_and_metadata(self):
-        import camera
+        from lib import camera
 
         y, x = np.mgrid[:8, :10]
         dark = (100 + y * 3 + x % 2 * 20).astype(np.uint16)

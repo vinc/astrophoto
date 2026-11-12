@@ -16,7 +16,7 @@ from astropy.time import Time
 from astropy.utils import iers
 from astropy.wcs import NoConvergence, WCS
 
-from camera import capture, display_limits, preview_figure, read_image
+from lib.camera import capture, display_limits, preview_figure, read_image
 from locate import PlateSolveError, get_ephemerides, solve_image
 
 def pointing_offset(center, target, time, observer, target_time=None):

@@ -10,7 +10,7 @@ import exifread
 import rawpy
 from astropy.io import fits
 
-from color import raw_color_metadata
+from lib.color import raw_color_metadata
 
 def exif_value(tags, key):
     tag = tags.get(key)
