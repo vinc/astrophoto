@@ -21,6 +21,8 @@ from locate import ROOT, get_ephemerides, solve_image
 CATALOG = ROOT / "index"
 WIDTH, HEIGHT = 1200, 900
 WIDE = 120
+SPREAD = 150
+ANTIPODE = 175
 SURFACE = "#1a1a19"
 TEXT = "#f0efec"
 MUTED = "#c3c2b7"
@@ -68,11 +70,42 @@ def footprint(header, samples=32):
     ra, dec = wcs.pixel_to_world_values(x, y)
     return np.asarray(ra) % 360, np.asarray(dec)
 
+def enclosing_center(points):
+    # Smallest enclosing cap: coarse search over evenly spread directions,
+    # then local refinement with a shrinking step
+    i = np.arange(2000) + 0.5
+    z = 1 - 2 * i / len(i)
+    phi = np.pi * (1 + np.sqrt(5)) * i
+    candidates = np.stack([np.sqrt(1 - z ** 2) * np.cos(phi), np.sqrt(1 - z ** 2) * np.sin(phi), z], axis=-1)
+    center = candidates[np.argmax((candidates @ points[::4].T).min(axis=1))]
+    step = np.radians(5)
+    while step > 1e-6:
+        u = np.cross(center, [0, 0, 1] if abs(center[2]) < 0.9 else [1, 0, 0])
+        u /= np.linalg.norm(u)
+        v = np.cross(center, u)
+        moves = [center + step * (a * u + b * v) for a in (-1, 0, 1) for b in (-1, 0, 1)]
+        moves = np.array(moves) / np.linalg.norm(moves, axis=1, keepdims=True)
+        best = moves[np.argmax((moves @ points.T).min(axis=1))]
+        if np.allclose(best, center):
+            step /= 2
+        center = best
+    return center
+
 def chart_center(outlines):
-    total = sum(unit_vectors(ra, dec).sum(axis=0) for ra, dec in outlines)
-    if np.linalg.norm(total) < 1e-9:
-        total = unit_vectors(*outlines[0]).sum(axis=0)
-    ra, dec = to_radec(total / np.linalg.norm(total))
+    points = np.concatenate([unit_vectors(ra, dec) for ra, dec in outlines])
+    center = points.sum(axis=0)
+    norm = np.linalg.norm(center)
+    # The mean direction suits images within a hemisphere; beyond, it can land
+    # near the antipode of some of them, where the projection blows up
+    if norm < 1e-9 or (points @ (center / norm)).min() < 0:
+        center = enclosing_center(points)
+    else:
+        center = center / norm
+    radius = np.degrees(np.arccos(np.clip((points @ center).min(), -1, 1)))
+    if radius > SPREAD:
+        raise SystemExit(f"Images are spread over too much of the sky to chart together "
+                         f"(more than {SPREAD}° from any centre); chart fewer at a time")
+    ra, dec = to_radec(center)
     return float(ra), float(dec)
 
 def default_fov(outlines, center):
@@ -112,16 +145,18 @@ def load_stars(magnitude):
 def figure_lines(center, reach):
     for feature in load_features("constellations.lines.json"):
         for line in feature["geometry"]["coordinates"]:
-            ra, dec = np.array(line, dtype=float).T
-            vectors = unit_vectors(ra, dec)
-            distances = separation(ra, dec, center)
-            for i, (a, b) in enumerate(zip(vectors, vectors[1:])):
-                if max(distances[i], distances[i + 1]) > reach:
-                    continue
-                # Normalised linear interpolation stays on the great circle
-                t = np.linspace(0, 1, 16)[:, None]
+            vectors = unit_vectors(*np.array(line, dtype=float).T)
+            for a, b in zip(vectors, vectors[1:]):
+                # Sampling every degree keeps a segment crossing the chart even
+                # when both of its stars lie beyond the reach margin
+                angle = np.degrees(np.arccos(np.clip(a @ b, -1, 1)))
+                t = np.linspace(0, 1, int(np.ceil(angle)) + 2)[:, None]
                 path = (1 - t) * a + t * b
-                yield to_radec(path / np.linalg.norm(path, axis=1, keepdims=True))
+                ra, dec = to_radec(path / np.linalg.norm(path, axis=1, keepdims=True))
+                distances = separation(ra, dec, center)
+                if distances.min() > reach:
+                    continue
+                yield ra, np.where(distances > ANTIPODE, np.nan, dec)
 
 def figure_names(center, reach):
     for feature in load_features("constellations.json"):

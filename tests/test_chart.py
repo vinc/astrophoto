@@ -155,6 +155,42 @@ class ChartTests(unittest.TestCase):
         ax = self.render([chart.footprint(make_header())], fov=chart.WIDE + 1)
         self.assertEqual(len(ax.texts), 0)
 
+    def test_constellation_segment_crossing_the_chart_is_kept(self):
+        (self.path / "constellations.lines.json").write_text(json.dumps({"type": "FeatureCollection", "features": [
+            {"type": "Feature", "id": "Tau", "geometry": {"type": "MultiLineString",
+             "coordinates": [[[16.75, 24.1], [96.75, 24.1]]]}},
+        ]}))
+        outline = chart.footprint(make_header())
+        center = chart.chart_center([outline])
+        reach = chart.chart_reach(chart.chart_wcs(center, chart.default_fov([outline], center)))
+        self.assertTrue(np.all(chart.separation(np.array([16.75, 96.75]), np.array([24.1, 24.1]), center) > reach))
+        ax = self.render([outline])
+        figures = [line for line in ax.lines if line.get_color() == chart.FIGURES]
+        self.assertEqual(len(figures), 1)
+        x, y = figures[0].get_data()
+        self.assertTrue(np.any(chart.inside(np.asarray(x), np.asarray(y))))
+
+    def test_opposite_images_share_a_chart(self):
+        outlines = [chart.footprint(make_header(ra=ra, dec=0, scale=0.0049)) for ra in (0, 180)]
+        center = chart.chart_center(outlines)
+        for ra, dec in outlines:
+            self.assertLess(chart.separation(ra, dec, center).max(), 100)
+        fov = chart.default_fov(outlines, center)
+        self.assertTrue(np.isfinite(fov))
+        wcs = chart.chart_wcs(center, fov)
+        for ra, dec in outlines:
+            x, y = wcs.world_to_pixel_values(ra, dec)
+            self.assertTrue(np.all(chart.inside(np.asarray(x), np.asarray(y))))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self.render(outlines, labels=["a", "b"])
+
+    def test_images_all_over_the_sky_fail_clearly(self):
+        spots = [(ra, dec) for ra in range(0, 360, 18) for dec in (-60, -30, 0, 30, 60)]
+        with self.assertRaises(SystemExit) as raised:
+            chart.chart_center([chart.footprint(make_header(ra=ra, dec=dec)) for ra, dec in spots])
+        self.assertIn("chart fewer at a time", str(raised.exception))
+
     def test_missing_catalog_points_to_download_script(self):
         (self.path / "stars.6.json").unlink()
         with self.assertRaises(SystemExit) as raised:

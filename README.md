@@ -67,25 +67,5 @@ python crop.py 2026*/*.fit \
     --query vesta
 ```
 
-Draw a star chart locating images in the sky, with an optional track of a
-major or minor body across the images (one outline per image):
-
-```sh
-python chart.py 2026*/*-stack.fit \
-    --latitude 51.18 \
-    --longitude -1.83 \
-    --elevation 0.10 \
-    --query vesta
-```
-
-With `--query`, images where the body is outside the frame are skipped. Without
-it, only the outlines are drawn. A chart of a single image is saved next to it;
-a chart of several is saved in the current directory as `<kind>-chart-NNNN.png`,
-numbered after the existing charts of the same name. Times are shown on the
-camera clock (`--timezone`). Use `--fov` to set the chart
-width in degrees and `--magnitude` to hide fainter stars. Star and
-constellation data come from [d3-celestial](https://github.com/ofrohn/d3-celestial)
-(BSD-3-Clause) and are fetched by `index/download.sh`.
-
 Images are plate-solved if needed, with solutions saved as `.new` files for
 reuse.
