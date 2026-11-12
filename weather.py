@@ -18,7 +18,8 @@ VARIABLES = [
 
 LABEL = 12
 CELL = 4  # Three characters and a space
-BLOCK = 24  # Hours per block to fit a terminal
+HORIZON = -0.833  # Sun altitude at sunrise, with refraction and its radius
+MAX_HOURS = 26  # Enough to reach the next sunrise from any start time
 
 
 def parse_time(text):
@@ -73,16 +74,22 @@ def sun_and_moon(times, location):
         )
 
 
+def night_length(sun):
+    """Number of hours until the first sunrise following a dark hour"""
+    dark = sun < HORIZON
+    after_sunrise = np.flatnonzero(~dark & np.logical_or.accumulate(dark))
+    return int(after_sunrise[0]) if len(after_sunrise) else len(sun)
+
+
 def integer(value):
     return "-" if np.isnan(value) else str(int(round(value)))
 
 
-def decimal(value):
-    """One decimal when it fits in a cell"""
+def rain(value):
     if np.isnan(value):
         return "-"
-    value = round(value, 1)
-    return "0" if value == 0 else f"{value:.1f}" if 0 < value < 10 else str(int(round(value)))
+    # Even a trace of rain must not read as none, and round(0.5) is 0
+    return ">0" if 0 < value < 0.5 else str(max(1, round(value)) if value > 0 else 0)
 
 
 def date_line(times):
@@ -108,21 +115,16 @@ def table(times, values, sun, moon, illumination, max_cloud):
         ("High (%)", [integer(value) for value in values["cloud_cover_high"]]),
         ("Mid (%)", [integer(value) for value in values["cloud_cover_mid"]]),
         ("Low (%)", [integer(value) for value in values["cloud_cover_low"]]),
-        ("Rain (mm)", [decimal(value) for value in values["precipitation"]]),
-        ("Wind (m/s)", [decimal(value) for value in values["wind_speed_10m"]]),
-        ("Gust (m/s)", [decimal(value) for value in values["wind_gusts_10m"]]),
+        ("Rain (mm)", [rain(value) for value in values["precipitation"]]),
+        ("Wind (m/s)", [integer(value) for value in values["wind_speed_10m"]]),
+        ("Gust (m/s)", [integer(value) for value in values["wind_gusts_10m"]]),
         ("Temp (°C)", [integer(value) for value in values["temperature_2m"]]),
         ("Dew (°C)", [integer(value) for value in values["dew_point_2m"]]),
     ]
-    lines = []
-    for first in range(0, len(times), BLOCK):
-        block = slice(first, first + BLOCK)
-        if lines:
-            lines.append("")
-        lines.append(date_line(times[block]))
-        for label, cells in rows:
-            lines.append((f"{label:<{LABEL}}" + "".join(f"{cell:>{CELL - 1}} " for cell in cells[block])).rstrip())
-    return lines
+    return [date_line(times)] + [
+        (f"{label:<{LABEL}}" + "".join(f"{cell:>{CELL - 1}} " for cell in cells)).rstrip()
+        for label, cells in rows
+    ]
 
 
 def main():
@@ -133,27 +135,26 @@ def main():
     parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
     parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
     parser.add_argument("--time", help="UTC start time in ISO format (default: now)")
-    parser.add_argument("--hours", type=int, default=24, help="Number of hours to forecast (default: 24)")
     parser.add_argument("--model", default="meteofrance_seamless",
                         help="Open-Meteo weather model (default: meteofrance_seamless, AROME then ARPEGE)")
     parser.add_argument("--max-cloud", type=float, default=20,
                         help="Highest total cloud cover in percent for a clear hour (default: 20)")
     args = parser.parse_args()
-    if args.hours < 1:
-        parser.error("--hours must be at least 1")
 
     start = parse_time(args.time)
-    times, values = fetch_forecast(
-        args.latitude, args.longitude, args.elevation, start, args.hours, args.model,
-    )
     location = EarthLocation.from_geodetic(
         args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.km,
     )
-    sun, moon, illumination = sun_and_moon(times, location)
+    hours = [start + timedelta(hours=hour) for hour in range(MAX_HOURS)]
+    sun, moon, illumination = sun_and_moon(hours, location)
+    times, values = fetch_forecast(
+        args.latitude, args.longitude, args.elevation, start, night_length(sun), args.model,
+    )
+    sun, moon, illumination = sun[:len(times)], moon[:len(times)], illumination[:len(times)]
 
     print(f"Forecast for {args.latitude:g}, {args.longitude:g} at {args.elevation * 1000:.0f} m "
           f"from the {args.model} model (Open-Meteo)")
-    print(f"Times in UTC, * marks hours with the Sun below -12°, at most {args.max_cloud:g}% cloud, and no rain\n")
+    print(f"Times in UTC until sunrise, * marks hours with the Sun below -12°, at most {args.max_cloud:g}% cloud, and no rain\n")
     for line in table(times, values, sun, moon, illumination, args.max_cloud):
         print(line)
     if not times:
