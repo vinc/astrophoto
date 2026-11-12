@@ -2,8 +2,11 @@
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 import locale
 import os
+from pathlib import Path
 import sys
 
 import numpy as np
@@ -15,6 +18,8 @@ from localtime import parse_local_time
 from night import MAX_HOURS, NIGHT, sun_altitude
 
 API = "https://api.open-meteo.com/v1/forecast"
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "weather"
+MAX_AGE = timedelta(minutes=15)  # Models update a few times a day, so a short wait loses nothing
 VARIABLES = [
     "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
     "precipitation", "wind_speed_10m", "wind_gusts_10m", "temperature_2m", "dew_point_2m",
@@ -40,9 +45,39 @@ def parse_time(text, now=None):
     return time.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
 
-def fetch_forecast(latitude, longitude, elevation, start, hours, model):
+def download(params):
+    response = requests.get(API, timeout=60, params=params)
+    if not response.ok:
+        try:
+            reason = response.json().get("reason")
+        except ValueError:
+            reason = None
+        raise SystemExit(f"Open-Meteo request failed: {reason or f'HTTP {response.status_code}'}")
+    return response.json()
+
+
+def cached_download(params, update=False):
+    key = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()[:16]
+    path = CACHE / f"{key}.json"
+    now = datetime.now(timezone.utc)
+    if not update and path.exists():
+        cached = json.loads(path.read_text())
+        if now - datetime.fromisoformat(cached["downloaded"]) < MAX_AGE:
+            return cached["data"]
+    data = download(params)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    for old in CACHE.glob("*.json"):
+        if now - datetime.fromtimestamp(old.stat().st_mtime, timezone.utc) > MAX_AGE:
+            old.unlink(missing_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"downloaded": now.isoformat(), "data": data}))
+    tmp.replace(path)
+    return data
+
+
+def fetch_forecast(latitude, longitude, elevation, start, hours, model, update=False):
     end = start + timedelta(hours=hours - 1)
-    response = requests.get(API, timeout=60, params={
+    hourly = cached_download({
         "latitude": latitude,
         "longitude": longitude,
         "elevation": elevation * 1000,
@@ -51,14 +86,7 @@ def fetch_forecast(latitude, longitude, elevation, start, hours, model):
         "wind_speed_unit": "ms",
         "start_hour": start.strftime("%Y-%m-%dT%H:%M"),
         "end_hour": end.strftime("%Y-%m-%dT%H:%M"),
-    })
-    if not response.ok:
-        try:
-            reason = response.json().get("reason")
-        except ValueError:
-            reason = None
-        raise SystemExit(f"Open-Meteo request failed: {reason or f'HTTP {response.status_code}'}")
-    hourly = response.json()["hourly"]
+    }, update)["hourly"]
     times = [datetime.fromisoformat(time).replace(tzinfo=timezone.utc) for time in hourly["time"]]
     values = {
         name: np.array([np.nan if value is None else value for value in hourly.get(name, [None] * len(times))], dtype=float)
@@ -162,6 +190,8 @@ def main():
     parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
     parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
     parser.add_argument("--time", help='Local time in ISO format or words like "tomorrow night" (default: now)')
+    parser.add_argument("--update", action="store_true",
+                        help=f"Download a fresh forecast even if one less than {MAX_AGE.seconds // 60} minutes old is cached")
     parser.add_argument("--model", default="meteofrance_seamless",
                         help="Open-Meteo weather model (default: meteofrance_seamless, AROME then ARPEGE)")
     args = parser.parse_args()
@@ -175,7 +205,8 @@ def main():
     if night.start == night.stop:
         raise SystemExit(f"The Sun stays above {NIGHT}° in the next {MAX_HOURS} hours")
     times, values = fetch_forecast(
-        args.latitude, args.longitude, args.elevation, hours[night.start], night.stop - night.start, args.model,
+        args.latitude, args.longitude, args.elevation, hours[night.start], night.stop - night.start,
+        args.model, args.update,
     )
 
     try:

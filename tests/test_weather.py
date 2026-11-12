@@ -1,8 +1,11 @@
 import contextlib
 from datetime import datetime, timedelta, timezone
 import io
+import json
 import os
+from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -41,7 +44,8 @@ def cells(output, label):
 
 def run(arguments, zone="UTC", **overrides):
     output = io.StringIO()
-    with local_time_zone(zone), patch.object(sys, "argv", ARGS + arguments), \
+    with tempfile.TemporaryDirectory() as cache, patch.object(weather, "CACHE", Path(cache)), \
+            local_time_zone(zone), patch.object(sys, "argv", ARGS + arguments), \
             patch.object(weather.requests, "get", side_effect=lambda *_, params, **__: forecast(params, **overrides)) as get, \
             contextlib.redirect_stdout(output):
         weather.main()
@@ -75,9 +79,60 @@ class RequestTest(unittest.TestCase):
                     self.assertEqual(weather.parse_time(text, now), expected.replace(tzinfo=timezone.utc))
 
     def test_api_error_reason_is_reported(self):
-        with patch.object(weather.requests, "get", return_value=response({}, status=400)):
+        with tempfile.TemporaryDirectory() as cache, patch.object(weather, "CACHE", Path(cache)), \
+                patch.object(weather.requests, "get", return_value=response({}, status=400)):
             with self.assertRaisesRegex(SystemExit, "Bad model"):
                 weather.fetch_forecast(51.18, -1.83, 0.1, datetime(2026, 12, 21, tzinfo=timezone.utc), 2, "nope")
+
+class CacheTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.cache = Path(directory.name) / "weather"
+        cache_patch = patch.object(weather, "CACHE", self.cache)
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
+        self.params = {"latitude": 51.18, "start_hour": "2026-12-21T18:00"}
+
+    def download(self, params, update=False, status=200):
+        with patch.object(weather.requests, "get", return_value=response({"time": []}, status=status)) as get:
+            data = weather.cached_download(params, update)
+        return data, get.call_count
+
+    def age(self, minutes):
+        for path in self.cache.glob("*.json"):
+            cached = json.loads(path.read_text())
+            cached["downloaded"] = (datetime.fromisoformat(cached["downloaded"]) - timedelta(minutes=minutes)).isoformat()
+            path.write_text(json.dumps(cached))
+
+    def test_repeat_request_reads_the_cache(self):
+        self.assertEqual(self.download(self.params), ({"hourly": {"time": []}}, 1))
+        self.assertEqual(self.download(self.params), ({"hourly": {"time": []}}, 0))
+
+    def test_other_parameters_are_downloaded(self):
+        self.download(self.params)
+        self.assertEqual(self.download(dict(self.params, latitude=48.0))[1], 1)
+        self.assertEqual(len(list(self.cache.glob("*.json"))), 2)
+
+    def test_expired_or_forced_requests_are_downloaded_again(self):
+        self.download(self.params)
+        self.assertEqual(self.download(self.params, update=True)[1], 1)
+        self.age(16)
+        self.assertEqual(self.download(self.params)[1], 1)
+        self.assertEqual(self.download(self.params)[1], 0)
+
+    def test_errors_are_not_cached(self):
+        with self.assertRaises(SystemExit):
+            self.download(self.params, status=500)
+        self.assertEqual(list(self.cache.glob("*.json")) if self.cache.exists() else [], [])
+
+    def test_expired_files_are_removed(self):
+        self.download(self.params)
+        old = next(self.cache.glob("*.json"))
+        stale = datetime.now().timestamp() - 3600
+        os.utime(old, (stale, stale))
+        self.download(dict(self.params, latitude=48.0))
+        self.assertFalse(old.exists())
 
 class TableTest(unittest.TestCase):
     def test_rows_and_dates(self):
