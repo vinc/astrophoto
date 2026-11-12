@@ -46,7 +46,7 @@ python stack.py 20261221-2149-light \
 ```
 
 Add `--deband 1.0` to remove horizontal banding on older Canon cameras,
-and `--rgb` to render a RGB image.
+and `--rgb` to render an RGB image.
 
 Mark an object in the full image:
 
@@ -58,7 +58,7 @@ python locate.py 2026*/*-stack.fit \
     --query vesta
 ```
 
-Crop a major or minor body from one or more image:
+Crop a major or minor body from one or more images:
 
 ```sh
 python crop.py 2026*/*.fit \
@@ -68,7 +68,7 @@ python crop.py 2026*/*.fit \
     --query vesta
 ```
 
-Draw a start chart around one or more images with an optional filter query:
+Draw a star chart around one or more images with an optional filter query:
 
 ```sh
 python chart.py 2026*/*-stack.fit \
