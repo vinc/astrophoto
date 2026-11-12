@@ -12,11 +12,12 @@ def parse_local_time(text, now=None):
     parser = DateDataParser(settings={
         "RELATIVE_BASE": now or datetime.now(),
         "PREFER_DATES_FROM": "future",
+        "RETURN_TIME_AS_PERIOD": True,
     })
-    time = parser.get_date_data(text).date_obj
-    if time is None:
+    data = parser.get_date_data(text)
+    if data.date_obj is None:
         raise SystemExit(f"Could not understand the time: {text}")
-    time = time.astimezone()
-    if (time.hour, time.minute, time.second) == (0, 0, 0):
+    time = data.date_obj.astimezone()
+    if data.period == "day" and (time.hour, time.minute, time.second) == (0, 0, 0):
         time = time.replace(hour=12)
     return time

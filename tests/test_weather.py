@@ -161,6 +161,8 @@ class TableTest(unittest.TestCase):
         for start, hours in [
             ("2026-12-21T12:00", ["18", "6"]),
             ("2026-12-22T02:00", ["2", "6"]),
+            ("2026-12-22T00:00", ["0", "6"]),
+            ("2026-12-22", ["18", "6"]),
             ("2026-12-22T07:00", ["18", "6"]),
         ]:
             with self.subTest(start=start):
@@ -195,6 +197,16 @@ class TableTest(unittest.TestCase):
         values["temperature_2m"][5], values["dew_point_2m"][5] = 4.6, 2.6
         values["cloud_cover"][6] = np.nan
         self.assertEqual(weather.ratings(values), ["green", "red", "yellow", "yellow", "yellow", "yellow", None])
+
+    def test_any_missing_condition_is_not_rated(self):
+        for name in ("cloud_cover", "precipitation", "wind_gusts_10m", "temperature_2m", "dew_point_2m"):
+            with self.subTest(name=name):
+                values = {
+                    "cloud_cover": np.zeros(2), "precipitation": np.zeros(2), "wind_gusts_10m": np.ones(2),
+                    "temperature_2m": np.full(2, 5.0), "dew_point_2m": np.zeros(2),
+                }
+                values[name][1] = np.nan
+                self.assertEqual(weather.ratings(values), ["green", None])
 
     def test_only_the_time_row_is_colored(self):
         times = [datetime(2026, 12, 21, hour, tzinfo=timezone.utc) for hour in (20, 21)]

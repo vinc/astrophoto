@@ -43,6 +43,20 @@ class ParseLocalTimeTest(unittest.TestCase):
                 with self.subTest(text=text):
                     self.assertEqual(parse_local_time(text, now), expected)
 
+    def test_bare_date_is_noon_but_explicit_midnight_is_kept(self):
+        now = datetime(2026, 12, 21, 18, 45)
+        with local_time_zone("UTC"):
+            for text, expected in [
+                ("2026-12-24", utc(2026, 12, 24, 12)),
+                ("2026-12-24T00:00", utc(2026, 12, 24)),
+                ("2026-12-24 00:00", utc(2026, 12, 24)),
+                ("saturday 00:00", utc(2026, 12, 26)),
+                ("midnight", utc(2026, 12, 22)),
+                ("tomorrow", utc(2026, 12, 22, 18, 45)),
+            ]:
+                with self.subTest(text=text):
+                    self.assertEqual(parse_local_time(text, now), expected)
+
     def test_unknown_time_is_reported(self):
         with self.assertRaisesRegex(SystemExit, "Could not understand the time: soonish"):
             parse_local_time("soonish")

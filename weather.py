@@ -129,8 +129,9 @@ def ratings(values):
     cloud, gust = np.round(values["cloud_cover"]), np.round(values["wind_gusts_10m"])
     spread = np.round(values["temperature_2m"]) - np.round(values["dew_point_2m"])
     wet = values["precipitation"] > 0
+    missing = np.isnan(cloud) | np.isnan(gust) | np.isnan(spread) | np.isnan(values["precipitation"])
     return [
-        None if np.isnan(cloud[i]) else
+        None if missing[i] else
         "red" if cloud[i] > CLOUDY else
         "yellow" if cloud[i] > HAZY or wet[i] or gust[i] >= WINDY or spread[i] <= DEW_SPREAD else
         "green"
