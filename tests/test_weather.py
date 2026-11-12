@@ -6,8 +6,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 import numpy as np
-from astropy import units as u
-from astropy.coordinates import EarthLocation
 
 import weather
 from tests.test_localtime import local_time_zone
@@ -128,14 +126,6 @@ class TableTest(unittest.TestCase):
         self.assertEqual([weather.integer(value) for value in (-0.4, 2.5, 99.6, np.nan)], ["0", "2", "100", "-"])
         self.assertEqual([weather.rain(value) for value in (0, 0.1, 0.4, 0.5, 1.1, 1.5, 2.5, np.nan)],
                          ["0", ">0", ">0", "1", "1", "2", "2", "-"])
-
-class SkyTest(unittest.TestCase):
-    def test_winter_solstice_at_stonehenge(self):
-        location = EarthLocation.from_geodetic(-1.83 * u.deg, 51.18 * u.deg, 0.1 * u.km)
-        times = [datetime(2026, 12, 21, 12, tzinfo=timezone.utc), datetime(2026, 12, 21, 22, tzinfo=timezone.utc)]
-        sun = weather.sun_altitude(times, location)
-        self.assertGreater(sun[0], 10)
-        self.assertLess(sun[1], -18)
 
 if __name__ == "__main__":
     unittest.main()

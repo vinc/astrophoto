@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
-from datetime import timezone
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -17,6 +17,7 @@ from astropy.time import Time
 from astropy.utils import iers
 
 from localtime import parse_local_time
+from night import night_start
 
 SBDB = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "minor-bodies.json"
@@ -263,10 +264,11 @@ def main():
     parser.add_argument("--update", action="store_true", help="Download fresh orbital elements from JPL")
     args = parser.parse_args()
 
-    time = Time(parse_local_time(args.time)) if args.time else Time.now()
     location = EarthLocation.from_geodetic(
         args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.km,
     )
+    start = parse_local_time(args.time) if args.time else datetime.now(timezone.utc)
+    time = Time(night_start(start.replace(second=0, microsecond=0), location))
     data = load_minor_bodies(args.update)
 
     # Bundled Earth rotation data is plenty for this, even when slightly out of date

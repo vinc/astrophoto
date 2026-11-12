@@ -7,11 +7,10 @@ import locale
 import numpy as np
 import requests
 from astropy import units as u
-from astropy.coordinates import AltAz, EarthLocation, get_body
-from astropy.time import Time
-from astropy.utils import iers
+from astropy.coordinates import EarthLocation
 
 from localtime import parse_local_time
+from night import MAX_HOURS, NIGHT, sun_altitude
 
 API = "https://api.open-meteo.com/v1/forecast"
 VARIABLES = [
@@ -21,8 +20,6 @@ VARIABLES = [
 
 LABEL = 12
 CELL = 4  # Three characters and a space
-NIGHT = -12  # Sun altitude in degrees below which the sky is dark enough
-MAX_HOURS = 26  # Enough to reach the next night from any start time
 
 
 def parse_time(text, now=None):
@@ -59,16 +56,6 @@ def fetch_forecast(latitude, longitude, elevation, start, hours, model):
         for name in VARIABLES
     }
     return times, values
-
-
-def sun_altitude(times, location):
-    time = Time(times)
-    # Bundled Earth rotation data is plenty for this, even when slightly out of date
-    with iers.conf.set_temp("auto_download", False), \
-            iers.conf.set_temp("auto_max_age", None), \
-            iers.conf.set_temp("iers_degraded_accuracy", "warn"):
-        frame = AltAz(obstime=time, location=location)
-        return get_body("sun", time, location).transform_to(frame).alt.deg
 
 
 def first_night(sun):

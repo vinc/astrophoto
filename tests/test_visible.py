@@ -131,5 +131,15 @@ class MainTest(unittest.TestCase):
             visible.main()
         self.assertTrue(stdout.getvalue().startswith("2026-11-07 21:11 CET, Sun at"))
 
+    def test_daytime_moves_to_the_start_of_the_night(self):
+        data = cache_data(Time.now().isot)
+        argv = ARGS + ["--time", "2026-12-21T14:00"]
+        with local_time_zone("Europe/Paris"), \
+                patch.object(visible, "load_minor_bodies", return_value=data), \
+                patch.object(sys, "argv", argv), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout:
+            visible.main()
+        self.assertTrue(stdout.getvalue().startswith("2026-12-21 18:25 CET, Sun at -12 degrees"))
+
 if __name__ == "__main__":
     unittest.main()
