@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import warnings
 from unittest.mock import patch
 
 import matplotlib
@@ -81,6 +82,19 @@ class ChartTests(unittest.TestCase):
     def test_footprint_requires_a_plate_solution(self):
         with self.assertRaises(ValueError):
             chart.footprint(fits.Header({"NAXIS": 2, "NAXIS1": 10, "NAXIS2": 10}))
+
+    def test_solved_headers_are_read_without_warnings(self):
+        header = make_header()
+        header["CTYPE1"], header["CTYPE2"] = "RA---TAN-SIP", "DEC--TAN-SIP"
+        header["A_ORDER"] = header["B_ORDER"] = 2
+        header["A_2_0"], header["B_0_2"], header["A_1_1"] = 2e-6, -2e-6, 1e-6
+        header["DATE-OBS"], header["DATE-AVG"] = "2026-11-06T19:03:00", "2026-11-06T19:05:00"
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            outline = chart.footprint(header)
+            self.assertTrue(chart.contains(header, outline, 56.75, 24.1))
+            for ra, dec in [(60, 24.1), (150, 12), (236.75, -24.1)]:
+                self.assertFalse(chart.contains(header, outline, ra, dec))
 
     def test_center_survives_right_ascension_wrap(self):
         outline = chart.footprint(make_header(ra=359.5, dec=10, angle=0))

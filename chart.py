@@ -41,14 +41,23 @@ def separation(ra, dec, center):
     cosine = unit_vectors(ra, dec) @ unit_vectors(*center)
     return np.degrees(np.arccos(np.clip(cosine, -1, 1)))
 
-def contains(header, ra, dec):
-    x, y = WCS(header).celestial.world_to_pixel_values(ra, dec)
+def image_wcs(header):
+    # The default fixes only add MJD keywords derived from DATE-OBS and DATE-AVG,
+    # warning about it each time
+    return WCS(header, fix=False).celestial
+
+def contains(header, outline, ra, dec):
+    center = chart_center([outline])
+    # Far from the frame the SIP distortion inversion diverges
+    if separation(ra, dec, center) > separation(*outline, center).max():
+        return False
+    x, y = image_wcs(header).world_to_pixel_values(ra, dec)
     return bool(0 <= x < header["NAXIS1"] and 0 <= y < header["NAXIS2"])
 
 def footprint(header, samples=32):
     # Edges are sampled rather than joined corner to corner because
     # straight lines on the sensor are curves on the chart
-    wcs = WCS(header).celestial
+    wcs = image_wcs(header)
     if not wcs.has_celestial:
         raise ValueError("Image has no plate solution")
     width, height = header["NAXIS1"], header["NAXIS2"]
@@ -278,7 +287,7 @@ def main():
         positions = zip(np.asarray(result["RA"], dtype=float), np.asarray(result["DEC"], dtype=float))
         visible = []
         for observation, (ra, dec) in zip(observations, positions):
-            if contains(observation[1], ra, dec):
+            if contains(observation[1], observation[2], ra, dec):
                 visible.append((observation, ra, dec))
             else:
                 print(f"{observation[0]}: Skipped: {name} is outside the image")
