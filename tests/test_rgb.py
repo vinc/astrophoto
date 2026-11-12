@@ -336,6 +336,44 @@ class RGBPreviewTests(unittest.TestCase):
         preview = color.render_rgb(rgb, display)
         self.assertLess(float(np.median(color.luminance(preview[..., :3]))), 0.15)
 
+    def test_red_heavy_sky_noise_renders_neutral_instead_of_half_clipped(self):
+        rng = np.random.default_rng(7)
+        # Like a 20D stack: single red and blue photosites, two greens averaged, then daylight gains
+        rgb = rng.normal([60, 90, 50], [4, 4 / np.sqrt(2), 4], (300, 400, 3)).astype(np.float32)
+        display = color.rgb_display_header(rgb, {"WBR": 2.256, "WBG": 1, "WBB": 1.269})
+        self.assertGreater(display["RGBNOISE"], 0)
+        preview = color.render_rgb(rgb, display)[..., :3].reshape(-1, 3)
+        mean = preview.mean(axis=0)
+        np.testing.assert_allclose(mean / mean[1], 1, atol=0.1)
+        self.assertLess(float((preview == 0).mean()), 0.3)
+        spread = preview.std(axis=0)
+        self.assertLess(spread[0] / spread[1], 1.6)
+
+    def test_colour_smoothing_keeps_star_colours_without_leaking_them_into_the_sky(self):
+        rng = np.random.default_rng(8)
+        sky = rng.normal([60, 90, 50], [4, 2.8, 4], (100, 100, 3)).astype(np.float32)
+        rgb = sky.copy()
+        rgb[50, 50] += [900, 300, 60]
+        display = color.rgb_display_header(sky, {"WBR": 2, "WBG": 1, "WBB": 1.5})
+        display["RGBHIGH"] = 20000
+        preview = color.render_rgb(rgb, display)[..., :3]
+        balanced = (rgb[50, 50] - [display[f"RGBLO{index}"] for index in range(1, 4)]) * [2, 1, 1.5] + display["RGBNOISE"]
+        self.assertAlmostEqual(preview[50, 50, 0] / preview[50, 50, 1], balanced[0] / balanced[1], places=4)
+        without = color.render_rgb(sky, display)[..., :3]
+        ring = np.ones((100, 100), dtype=bool)
+        ring[50, 50] = False
+        self.assertLess(float(np.abs(preview - without)[ring].max()), 0.01 * float(preview[50, 50].max()))
+
+    def test_previews_of_stacks_without_stored_noise_estimate_it(self):
+        rgb = star_field()
+        display = color.rgb_display_header(rgb, {"WBR": 2, "WBG": 1, "WBB": 1.5})
+        stored = color.render_rgb(rgb, display)
+        del display["RGBNOISE"]
+        np.testing.assert_allclose(color.render_rgb(rgb, display), stored, atol=1e-6)
+        display["RGBNOISE"] = -1
+        with self.assertRaisesRegex(ValueError, "sky noise"):
+            color.render_rgb(rgb, display)
+
     def test_shared_stretch_preserves_faint_colours_rolls_off_highlights_and_masks_missing_pixels(self):
         rgb = np.zeros((20, 30, 3), dtype=np.float32)
         rgb[10, 10] = [50, 100, 200]
