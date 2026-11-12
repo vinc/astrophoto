@@ -74,6 +74,29 @@ class RequestTest(unittest.TestCase):
             datetime(2026, 12, 21, 21, tzinfo=timezone.utc),
         )
 
+    def test_time_without_offset_is_local(self):
+        with local_time_zone("Europe/Paris"):
+            self.assertEqual(weather.parse_time("2026-12-21T22:30"), datetime(2026, 12, 21, 21, tzinfo=timezone.utc))
+        with local_time_zone("Pacific/Auckland"):
+            self.assertEqual(weather.parse_time("2026-12-21T22:30"), datetime(2026, 12, 21, 9, tzinfo=timezone.utc))
+
+    def test_relative_times_are_local_and_bare_days_are_noon(self):
+        now = datetime(2026, 12, 21, 18, 45)  # A Monday
+        with local_time_zone("Europe/Paris"):
+            for text, expected in [
+                ("tonight", datetime(2026, 12, 21, 19)),
+                ("tomorrow night", datetime(2026, 12, 22, 19)),
+                ("tomorrow", datetime(2026, 12, 22, 17)),
+                ("saturday", datetime(2026, 12, 26, 11)),
+                ("2026-12-24", datetime(2026, 12, 24, 11)),
+            ]:
+                with self.subTest(text=text):
+                    self.assertEqual(weather.parse_time(text, now), expected.replace(tzinfo=timezone.utc))
+
+    def test_unknown_time_is_reported(self):
+        with self.assertRaisesRegex(SystemExit, "Could not understand the time: soonish"):
+            weather.parse_time("soonish")
+
     def test_api_error_reason_is_reported(self):
         with patch.object(weather.requests, "get", return_value=response({}, status=400)):
             with self.assertRaisesRegex(SystemExit, "Bad model"):

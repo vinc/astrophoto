@@ -1,6 +1,7 @@
 astroalign
 astropy>=7.0,<9
 astroquery>=0.4.10,<1
+dateparser>=1.2,<2
 exifread
 matplotlib>=3.8,<4
 numpy>=1.24
