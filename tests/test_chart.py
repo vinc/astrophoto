@@ -167,14 +167,17 @@ class DefaultOutputTests(unittest.TestCase):
         self.assertEqual(chart.default_output([path]), path.with_name("20261106-2010-light-stack-chart.png"))
         self.assertEqual(chart.default_output([path], "4 Vesta").name, "20261106-2010-light-stack-chart-4-vesta.png")
 
-    def test_several_images_get_the_next_number_in_the_directory(self):
+    def test_several_images_get_the_next_number_for_their_name(self):
         paths = [Path("20261106-2003-light/20261106-2003-light-rgb-stack.fit"), Path("20261108-2110-light/20261108-2110-light-stack.fit")]
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            self.assertEqual(chart.default_output(paths, directory=directory), directory / "0001-light-rgb-stack-chart.png")
-            for name in ["0001-light-stack-chart.png", "0003-light-stack-chart-vesta.png", "0009-notes.png"]:
+            self.assertEqual(chart.default_output(paths, directory=directory), directory / "light-rgb-stack-chart-0001.png")
+            for name in ["light-rgb-stack-chart-0001.png", "light-rgb-stack-chart-0002.png",
+                         "light-rgb-stack-chart-vesta-0005.png", "light-stack-chart-0009.png"]:
                 (directory / name).touch()
-            self.assertEqual(chart.default_output(paths, "vesta", directory), directory / "0004-light-rgb-stack-chart-vesta.png")
+            self.assertEqual(chart.default_output(paths, directory=directory), directory / "light-rgb-stack-chart-0003.png")
+            self.assertEqual(chart.default_output(paths, "Vesta", directory), directory / "light-rgb-stack-chart-vesta-0006.png")
+            self.assertEqual(chart.default_output(paths, "pallas", directory), directory / "light-rgb-stack-chart-pallas-0001.png")
 
 class ChartCommandTests(unittest.TestCase):
     def run_main(self, argv, **patches):
@@ -224,7 +227,7 @@ class ChartCommandTests(unittest.TestCase):
                 os.chdir(cwd)
 
         self.assertEqual(calls["epochs"], sorted(epochs))
-        self.assertEqual(calls["output"], Path("0001-light-stack-chart-vesta.png"))
+        self.assertEqual(calls["output"], Path("light-stack-chart-vesta-0001.png"))
         self.assertAlmostEqual(chart.chart_center(calls["outlines"][:1])[0], 57, places=3)
         name, ra, dec = calls["track"]
         self.assertEqual(name, "4 Vesta (A807 FA)")

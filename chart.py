@@ -212,9 +212,9 @@ def default_output(paths, query=None, directory=Path(".")):
     suffix = "" if not query else "-" + re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
     if len(paths) == 1:
         return paths[0].with_name(f"{paths[0].stem}-chart{suffix}.png")
-    kind = re.sub(r"^\d{8}-\d{4}-", "", paths[0].stem)
-    numbers = [int(path.name[:4]) for path in directory.glob("[0-9][0-9][0-9][0-9]-*-chart*.png")]
-    return directory / f"{max(numbers, default=0) + 1:04d}-{kind}-chart{suffix}.png"
+    name = re.sub(r"^\d{8}-\d{4}-", "", paths[0].stem) + f"-chart{suffix}"
+    numbers = [int(path.stem[-4:]) for path in directory.glob(f"{name}-[0-9][0-9][0-9][0-9].png")]
+    return directory / f"{name}-{max(numbers, default=0) + 1:04d}.png"
 
 def main():
     matplotlib.use("Agg")
@@ -222,7 +222,7 @@ def main():
     parser.add_argument("files", nargs="+", type=Path, help="Saved RAW or FITS images, including stacks")
     parser.add_argument("--fov", type=float, help="Chart width in degrees at its centre (default: fit the images, at least 30)")
     parser.add_argument("--magnitude", type=float, default=6.0, help="Faintest star magnitude, up to 6 (default: 6)")
-    parser.add_argument("--output", type=Path, help="PNG path (default: next to a single image, or NNNN-<kind>-chart.png in the current directory)")
+    parser.add_argument("--output", type=Path, help="PNG path (default: next to a single image, or <kind>-chart-NNNN.png in the current directory)")
     parser.add_argument("--query", help="Solar System body to mark at each image time")
     parser.add_argument("--latitude", type=float, help="Observer latitude in degrees, with --query")
     parser.add_argument("--longitude", type=float, help="Observer longitude in degrees, with --query")

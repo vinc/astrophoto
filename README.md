@@ -79,10 +79,10 @@ python chart.py 2026*/*-stack.fit \
 ```
 
 With `--query`, images where the body is outside the frame are skipped. Without
-it, only the outlines are drawn. A chart of a single image is
-saved next to it; a chart of several is saved in the current directory as
-`NNNN-<kind>-chart.png`, numbered after the existing ones. Times are shown on
-the camera clock (`--timezone`). Use `--fov` to set the chart
+it, only the outlines are drawn. A chart of a single image is saved next to it;
+a chart of several is saved in the current directory as `<kind>-chart-NNNN.png`,
+numbered after the existing charts of the same name. Times are shown on the
+camera clock (`--timezone`). Use `--fov` to set the chart
 width in degrees and `--magnitude` to hide fainter stars. Star and
 constellation data come from [d3-celestial](https://github.com/ofrohn/d3-celestial)
 (BSD-3-Clause) and are fetched by `index/download.sh`.
