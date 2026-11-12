@@ -78,7 +78,10 @@ python chart.py 2026*/*-stack.fit \
     --query vesta
 ```
 
-Without `--query` only the outlines are drawn. Use `--fov` to set the chart
+Without `--query` only the outlines are drawn. A chart of a single image is
+saved next to it; a chart of several is saved in the current directory as
+`NNNN-<kind>-chart.png`, numbered after the existing ones. Times are shown on
+the camera clock (`--timezone`). Use `--fov` to set the chart
 width in degrees and `--magnitude` to hide fainter stars. Star and
 constellation data come from [d3-celestial](https://github.com/ofrohn/d3-celestial)
 (BSD-3-Clause) and are fetched by `index/download.sh`.

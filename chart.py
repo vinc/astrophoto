@@ -20,6 +20,7 @@ from locate import ROOT, get_ephemerides, solve_image
 
 CATALOG = ROOT / "index"
 WIDTH, HEIGHT = 1200, 900
+WIDE = 120
 SURFACE = "#1a1a19"
 TEXT = "#f0efec"
 MUTED = "#c3c2b7"
@@ -150,10 +151,11 @@ def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=Non
         x, y = wcs.world_to_pixel_values(ra, dec)
         ax.plot(x, y, color=FIGURES, linewidth=0.8, zorder=1)
 
-    for ra, dec, name in figure_names(center, reach):
-        x, y = wcs.world_to_pixel_values(ra, dec)
-        if inside(x, y, margin=40):
-            ax.text(x, y, name.upper(), color=NAMES, fontsize=8, ha="center", va="center", zorder=1)
+    if fov <= WIDE:
+        for ra, dec, name in figure_names(center, reach):
+            x, y = wcs.world_to_pixel_values(ra, dec)
+            if inside(x, y, margin=40):
+                ax.text(x, y, name.upper(), color=NAMES, fontsize=8, ha="center", va="center", zorder=1)
 
     ra, dec, mag = load_stars(magnitude)
     near = separation(ra, dec, center) <= reach
@@ -162,16 +164,12 @@ def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=Non
     ax.scatter(x[order], y[order], s=star_sizes(mag[near][order], magnitude),
                color=TEXT, edgecolors=SURFACE, linewidths=0.5, zorder=2)
 
-    legend = labels is not None and len(outlines) > 1
     # Past the palette, a shared colour beats generated hues nobody can tell apart
     shared = len(outlines) > len(SERIES)
+    legend = labels is not None and len(outlines) > 1 and not shared
     for index, (ra, dec) in enumerate(outlines):
         x, y = wcs.world_to_pixel_values(np.append(ra, ra[0]), np.append(dec, dec[0]))
-        label = None
-        if legend and not shared:
-            label = labels[index]
-        elif legend and index == 0:
-            label = f"{len(outlines)} images"
+        label = labels[index] if legend else None
         ax.plot(x, y, color=SERIES[0 if shared else index], linewidth=2, label=label, zorder=3)
 
     if track is not None:
@@ -195,11 +193,24 @@ def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=Non
     plt.close(fig)
     return output
 
-def describe_times(times):
-    days = sorted({time.utc.iso[:10] for time in times})
+def local_time(time, timezone):
+    return time.to_datetime(timezone=timezone).strftime("%Y-%m-%d %H:%M %Z")
+
+def describe_times(times, timezone):
     if len(times) == 1:
-        return f"{times[0].utc.iso.split('.')[0][:16]} UTC"
-    return days[0] if len(days) == 1 else f"{days[0]} to {days[-1]}"
+        return local_time(times[0], timezone)
+    first, last = local_time(times[0], timezone), local_time(times[-1], timezone)
+    if first[:10] == last[:10]:
+        return f"{first[:10]} {first[11:16]} to {last[11:]}"
+    return f"{first[:10]} to {last[:10]}"
+
+def default_output(paths, query=None, directory=Path(".")):
+    suffix = "" if not query else "-" + re.sub(r"[^a-z0-9_-]+", "-", query.lower()).strip("-")
+    if len(paths) == 1:
+        return paths[0].with_name(f"{paths[0].stem}-chart{suffix}.png")
+    kind = re.sub(r"^\d{8}-\d{4}-", "", paths[0].stem)
+    numbers = [int(path.name[:4]) for path in directory.glob("[0-9][0-9][0-9][0-9]-*-chart*.png")]
+    return directory / f"{max(numbers, default=0) + 1:04d}-{kind}-chart{suffix}.png"
 
 def main():
     matplotlib.use("Agg")
@@ -207,7 +218,7 @@ def main():
     parser.add_argument("files", nargs="+", type=Path, help="Saved RAW or FITS images, including stacks")
     parser.add_argument("--fov", type=float, help="Chart width in degrees at its centre (default: fit the images, at least 30)")
     parser.add_argument("--magnitude", type=float, default=6.0, help="Faintest star magnitude, up to 6 (default: 6)")
-    parser.add_argument("--output", type=Path, help="PNG path (default: next to the earliest image)")
+    parser.add_argument("--output", type=Path, help="PNG path (default: next to a single image, or NNNN-<kind>-chart.png in the current directory)")
     parser.add_argument("--query", help="Solar System body to mark at each image time")
     parser.add_argument("--latitude", type=float, help="Observer latitude in degrees, with --query")
     parser.add_argument("--longitude", type=float, help="Observer longitude in degrees, with --query")
@@ -253,10 +264,9 @@ def main():
 
     observations.sort(key=lambda observation: observation[2].jd)
     paths, outlines, times = map(list, zip(*observations))
-    labels = [f"{time.utc.iso[:16]} UTC" for time in times]
+    labels = [local_time(time, timezone) for time in times]
 
     track = None
-    title = None
     if args.query:
         observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
         result = get_ephemerides(args.query, observer, [time.jd for time in times])
@@ -264,15 +274,15 @@ def main():
             raise SystemExit("Horizons returned a different number of epochs than requested")
         name = str(result["targetname"][0])
         track = (name, np.asarray(result["RA"], dtype=float), np.asarray(result["DEC"], dtype=float))
-        title = f"{name}\n{describe_times(times)}"
+    elif len(outlines) == 1:
+        name = get_constellation(SkyCoord(*chart_center(outlines), unit="deg"))
     else:
-        center = SkyCoord(*chart_center(outlines), unit="deg")
-        title = f"{get_constellation(center)}\n{describe_times(times)}"
+        name = f"{len(outlines)} images"
+    title = f"{name}\n{describe_times(times, timezone)}"
 
     output = args.output
     if output is None:
-        suffix = "" if not args.query else "-" + re.sub(r"[^a-z0-9_-]+", "-", args.query.lower()).strip("-")
-        output = paths[0].with_name(f"{paths[0].stem}-chart{suffix}.png")
+        output = default_output(paths, args.query)
     draw_chart(outlines, output, labels=labels, fov=args.fov,
                magnitude=min(args.magnitude, 6.0), track=track, title=title)
     print(f"Saved {output}")

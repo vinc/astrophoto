@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -134,13 +135,46 @@ class ChartTests(unittest.TestCase):
         outlines = [chart.footprint(make_header(ra=50 + i, dec=24.1)) for i in range(len(chart.SERIES) + 1)]
         ax = self.render(outlines, labels=[str(i) for i in range(len(outlines))])
         self.assertEqual({line.get_color() for line in ax.lines[-len(outlines):]}, {chart.SERIES[0]})
-        self.assertEqual([text.get_text() for text in ax.get_legend().get_texts()], [f"{len(outlines)} images"])
+        self.assertIsNone(ax.get_legend())
+
+    def test_wide_charts_leave_out_constellation_names(self):
+        ax = self.render([chart.footprint(make_header())], fov=chart.WIDE + 1)
+        self.assertEqual(len(ax.texts), 0)
 
     def test_missing_catalog_points_to_download_script(self):
         (self.path / "stars.6.json").unlink()
         with self.assertRaises(SystemExit) as raised:
             self.render([chart.footprint(make_header())])
         self.assertIn("download.sh", str(raised.exception))
+
+class DescribeTimesTests(unittest.TestCase):
+    paris = chart.ZoneInfo("Europe/Paris")
+
+    def test_times_are_shown_on_the_camera_clock(self):
+        self.assertEqual(chart.describe_times([Time("2026-11-06T19:12:00")], self.paris), "2026-11-06 20:12 CET")
+
+    def test_one_night_shows_its_time_span(self):
+        times = [Time("2026-11-06T19:12:00"), Time("2026-11-06T22:40:00")]
+        self.assertEqual(chart.describe_times(times, self.paris), "2026-11-06 20:12 to 23:40 CET")
+
+    def test_several_nights_show_their_date_span(self):
+        times = [Time("2026-11-06T19:12:00"), Time("2026-11-08T23:30:00")]
+        self.assertEqual(chart.describe_times(times, self.paris), "2026-11-06 to 2026-11-09")
+
+class DefaultOutputTests(unittest.TestCase):
+    def test_single_image_chart_sits_next_to_it(self):
+        path = Path("20261106-2010-light") / "20261106-2010-light-stack.fit"
+        self.assertEqual(chart.default_output([path]), path.with_name("20261106-2010-light-stack-chart.png"))
+        self.assertEqual(chart.default_output([path], "4 Vesta").name, "20261106-2010-light-stack-chart-4-vesta.png")
+
+    def test_several_images_get_the_next_number_in_the_directory(self):
+        paths = [Path("20261106-2003-light/20261106-2003-light-rgb-stack.fit"), Path("20261108-2110-light/20261108-2110-light-stack.fit")]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.assertEqual(chart.default_output(paths, directory=directory), directory / "0001-light-rgb-stack-chart.png")
+            for name in ["0001-light-stack-chart.png", "0003-light-stack-chart-vesta.png", "0009-notes.png"]:
+                (directory / name).touch()
+            self.assertEqual(chart.default_output(paths, "vesta", directory), directory / "0004-light-rgb-stack-chart-vesta.png")
 
 class ChartCommandTests(unittest.TestCase):
     def run_main(self, argv, **patches):
@@ -174,24 +208,29 @@ class ChartCommandTests(unittest.TestCase):
             for i, time in enumerate(times):
                 header = make_header(ra=56 + i, scale=0.14, size=(30, 20))
                 header["DATE-AVG"] = time
-                path = Path(temporary) / f"night-{i}-stack.fit"
+                path = Path(temporary) / f"{time[:10].replace('-', '')}-2130-light-stack.fit"
                 fits.writeto(path, np.zeros((20, 30), dtype=np.float32), header)
                 paths.append(str(path))
-            self.run_main(
-                [*paths, "--query", "Vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10"],
-                solve_image={"side_effect": lambda path, *args, **kwargs: path},
-                get_ephemerides={"side_effect": ephemerides},
-                draw_chart={"side_effect": draw},
-            )
+            cwd = os.getcwd()
+            os.chdir(temporary)
+            try:
+                self.run_main(
+                    [*paths, "--query", "Vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10"],
+                    solve_image={"side_effect": lambda path, *args, **kwargs: path},
+                    get_ephemerides={"side_effect": ephemerides},
+                    draw_chart={"side_effect": draw},
+                )
+            finally:
+                os.chdir(cwd)
 
         self.assertEqual(calls["epochs"], sorted(epochs))
-        self.assertEqual(calls["output"].name, "night-1-stack-chart-vesta.png")
+        self.assertEqual(calls["output"], Path("0001-light-stack-chart-vesta.png"))
         self.assertAlmostEqual(chart.chart_center(calls["outlines"][:1])[0], 57, places=3)
         name, ra, dec = calls["track"]
         self.assertEqual(name, "4 Vesta (A807 FA)")
         np.testing.assert_array_equal(ra, [56.0, 57.0])
         self.assertEqual(calls["title"], "4 Vesta (A807 FA)\n2026-11-11 to 2026-11-12")
-        self.assertEqual(len(calls["labels"]), 2)
+        self.assertEqual(calls["labels"], ["2026-11-11 22:30 CET", "2026-11-12 22:30 CET"])
 
     def test_without_query_title_names_the_constellation(self):
         calls = {}
@@ -205,7 +244,7 @@ class ChartCommandTests(unittest.TestCase):
                 solve_image={"side_effect": lambda path, *args, **kwargs: path},
                 draw_chart={"side_effect": lambda outlines, output, **kwargs: calls.update(kwargs, output=output)},
             )
-        self.assertEqual(calls["title"], "Taurus\n2026-11-11 21:49 UTC")
+        self.assertEqual(calls["title"], "Taurus\n2026-11-11 22:49 CET")
         self.assertEqual(calls["fov"], 50)
         self.assertIsNone(calls["track"])
         self.assertEqual(calls["output"].name, "stack-chart.png")
