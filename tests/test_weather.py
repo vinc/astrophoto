@@ -86,8 +86,11 @@ class TableTest(unittest.TestCase):
         self.assertEqual(cells(output, "Cloud (%)")[:2], ["0", "80"])
         self.assertEqual(cells(output, "Rain (mm)")[:2], ["0", "1"])
         self.assertEqual(cells(output, "Wind (m/s)")[:2], ["2", "2"])
-        self.assertEqual([line.split()[0] for line in output.splitlines()],
-                         ["Date", "Time", "Cloud", "High", "Mid", "Low", "Rain", "Wind", "Gust", "Temp", "Dew"])
+        self.assertEqual([line.split()[0][0] if line.startswith("-") else line.split()[0] for line in output.splitlines()],
+                         ["Date", "Time", "-", "Cloud", "High", "Mid", "Low", "-", "Wind", "Gust",
+                          "-", "Temp", "Dew", "-", "Rain"])
+        lines = output.splitlines()
+        self.assertEqual(lines[2], "-" * len(lines[1]))
         self.assertIn("Mon 21", output)
         self.assertIn("Tue 22", output)
 

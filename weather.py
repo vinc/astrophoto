@@ -122,25 +122,35 @@ def use_color():
 
 
 def table(times, values, color=False):
-    rows = [
-        ("Time (h)", [str(time.hour) for time in times]),
-        ("Cloud (%)", [integer(value) for value in values["cloud_cover"]]),
-        ("High (%)", [integer(value) for value in values["cloud_cover_high"]]),
-        ("Mid (%)", [integer(value) for value in values["cloud_cover_mid"]]),
-        ("Low (%)", [integer(value) for value in values["cloud_cover_low"]]),
-        ("Rain (mm)", [rain(value) for value in values["precipitation"]]),
-        ("Wind (m/s)", [integer(value) for value in values["wind_speed_10m"]]),
-        ("Gust (m/s)", [integer(value) for value in values["wind_gusts_10m"]]),
-        ("Temp (°C)", [integer(value) for value in values["temperature_2m"]]),
-        ("Dew (°C)", [integer(value) for value in values["dew_point_2m"]]),
+    groups = [
+        [("Time (h)", [str(time.hour) for time in times])],
+        [
+            ("Cloud (%)", [integer(value) for value in values["cloud_cover"]]),
+            ("High (%)", [integer(value) for value in values["cloud_cover_high"]]),
+            ("Mid (%)", [integer(value) for value in values["cloud_cover_mid"]]),
+            ("Low (%)", [integer(value) for value in values["cloud_cover_low"]]),
+        ],
+        [
+            ("Wind (m/s)", [integer(value) for value in values["wind_speed_10m"]]),
+            ("Gust (m/s)", [integer(value) for value in values["wind_gusts_10m"]]),
+        ],
+        [
+            ("Temp (°C)", [integer(value) for value in values["temperature_2m"]]),
+            ("Dew (°C)", [integer(value) for value in values["dew_point_2m"]]),
+        ],
+        [("Rain (mm)", [rain(value) for value in values["precipitation"]])],
     ]
     colors = ratings(values) if color else [None] * len(times)
+    separator = "-" * (LABEL + CELL * len(times) - 1)
     lines = [date_line(times)]
-    for label, cells in rows:
-        cells = [f"{cell:>{CELL - 1}}" for cell in cells]
-        if label == "Time (h)":
-            cells = [f"{COLORS[name]}{cell}{RESET}" if name else cell for cell, name in zip(cells, colors)]
-        lines.append((f"{label:<{LABEL}}" + "".join(cell + " " for cell in cells)).rstrip())
+    for group in groups:
+        if len(lines) > 1:
+            lines.append(separator)
+        for label, cells in group:
+            cells = [f"{cell:>{CELL - 1}}" for cell in cells]
+            if label == "Time (h)":
+                cells = [f"{COLORS[name]}{cell}{RESET}" if name else cell for cell, name in zip(cells, colors)]
+            lines.append((f"{label:<{LABEL}}" + "".join(cell + " " for cell in cells)).rstrip())
     return lines
 
 
