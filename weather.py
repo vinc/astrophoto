@@ -36,6 +36,7 @@ def fetch_forecast(latitude, longitude, elevation, start, hours, model):
         "elevation": elevation * 1000,
         "hourly": ",".join(VARIABLES),
         "models": model,
+        "wind_speed_unit": "ms",
         "start_hour": start.strftime("%Y-%m-%dT%H:%M"),
         "end_hour": end.strftime("%Y-%m-%dT%H:%M"),
     })
@@ -108,8 +109,8 @@ def table(times, values, sun, moon, illumination, max_cloud):
         ("Mid (%)", [integer(value) for value in values["cloud_cover_mid"]]),
         ("Low (%)", [integer(value) for value in values["cloud_cover_low"]]),
         ("Rain (mm)", [decimal(value) for value in values["precipitation"]]),
-        ("Wind (km/h)", [integer(value) for value in values["wind_speed_10m"]]),
-        ("Gust (km/h)", [integer(value) for value in values["wind_gusts_10m"]]),
+        ("Wind (m/s)", [decimal(value) for value in values["wind_speed_10m"]]),
+        ("Gust (m/s)", [decimal(value) for value in values["wind_gusts_10m"]]),
         ("Temp (°C)", [integer(value) for value in values["temperature_2m"]]),
         ("Dew (°C)", [integer(value) for value in values["dew_point_2m"]]),
     ]

@@ -22,7 +22,7 @@ def forecast(times, **overrides):
     hourly = {"time": times}
     defaults = {
         "cloud_cover": 5, "cloud_cover_low": 0, "cloud_cover_mid": 5, "cloud_cover_high": 10,
-        "precipitation": 0.0, "wind_speed_10m": 8, "wind_gusts_10m": 20,
+        "precipitation": 0.0, "wind_speed_10m": 2.2, "wind_gusts_10m": 5.6,
         "temperature_2m": 4.0, "dew_point_2m": -3.0,
     }
     for name in weather.VARIABLES:
@@ -52,6 +52,7 @@ class RequestTest(unittest.TestCase):
         self.assertEqual(params["start_hour"], "2026-12-21T21:00")
         self.assertEqual(params["end_hour"], "2026-12-21T22:00")
         self.assertEqual(params["models"], "icon_seamless")
+        self.assertEqual(params["wind_speed_unit"], "ms")
         self.assertEqual(params["hourly"].split(","), weather.VARIABLES)
 
     def test_time_with_offset_is_converted_to_utc(self):
@@ -74,6 +75,7 @@ class TableTest(unittest.TestCase):
         self.assertEqual(cells(output, "Time (h)", 4), ["12", "22", "23", "0"])
         self.assertEqual(cells(output, "Clear", 4), ["", "*", "", ""])
         self.assertEqual(cells(output, "Rain (mm)", 4), ["0", "0", "0", "0.4"])
+        self.assertEqual(cells(output, "Wind (m/s)", 4), ["2.2"] * 4)
         self.assertIn("Mon 21", output)
         self.assertIn("Tue 22", output)
 
