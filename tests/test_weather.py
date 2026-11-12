@@ -52,7 +52,7 @@ class RequestTest(unittest.TestCase):
         _, params = run(["--time", "2026-12-21T21:49", "--model", "icon_seamless"])
         self.assertEqual(params["elevation"], 100)
         self.assertEqual(params["start_hour"], "2026-12-21T21:00")
-        self.assertEqual(params["end_hour"], "2026-12-22T08:00")
+        self.assertEqual(params["end_hour"], "2026-12-22T06:00")
         self.assertEqual(params["models"], "icon_seamless")
         self.assertEqual(params["wind_speed_unit"], "ms")
         self.assertEqual(params["hourly"].split(","), weather.VARIABLES)
@@ -69,33 +69,42 @@ class RequestTest(unittest.TestCase):
                 weather.fetch_forecast(51.18, -1.83, 0.1, datetime(2026, 12, 21, tzinfo=timezone.utc), 2, "nope")
 
 class TableTest(unittest.TestCase):
-    def test_only_dark_clear_dry_hours_are_marked(self):
-        output, _ = run(["--time", "2026-12-21T19:00"],
-                        cloud_cover=[0, 0, 80, 0], precipitation=[0, 0, 0, 0.5])
-        self.assertEqual(cells(output, "Time (h)")[:4], ["19", "20", "21", "22"])
-        self.assertEqual(cells(output, "Clear")[:4], ["*", "*", "", ""])
-        self.assertEqual(cells(output, "Rain (mm)")[:4], ["0", "0", "0", "1"])
-        self.assertEqual(cells(output, "Wind (m/s)")[:4], ["2"] * 4)
+    def test_rows_and_dates(self):
+        output, _ = run(["--time", "2026-12-21T19:00"], cloud_cover=[0, 80], precipitation=[0, 0.5])
+        self.assertEqual(cells(output, "Time (h)")[:2], ["19", "20"])
+        self.assertEqual(cells(output, "Cloud (%)")[:2], ["0", "80"])
+        self.assertEqual(cells(output, "Rain (mm)")[:2], ["0", "1"])
+        self.assertEqual(cells(output, "Wind (m/s)")[:2], ["2", "2"])
+        self.assertEqual([line.split()[0] for line in output.splitlines()[3:]],
+                         ["Date", "Time", "Cloud", "High", "Mid", "Low", "Rain", "Wind", "Gust", "Temp", "Dew"])
         self.assertIn("Mon 21", output)
         self.assertIn("Tue 22", output)
 
-    def test_table_ends_at_the_next_sunrise(self):
-        for start, first, count in [("2026-12-21T12:00", "12", 21), ("2026-12-22T02:00", "2", 7)]:
+    def test_only_hours_of_the_next_night_are_shown(self):
+        for start, hours in [
+            ("2026-12-21T12:00", ["18", "6"]),
+            ("2026-12-22T02:00", ["2", "6"]),
+            ("2026-12-22T07:00", ["18", "6"]),
+        ]:
             with self.subTest(start=start):
                 output, _ = run(["--time", start])
-                hours = cells(output, "Time (h)")
-                self.assertEqual((hours[0], hours[-1], len(hours)), (first, "8", count))
+                time = cells(output, "Time (h)")
+                self.assertEqual([time[0], time[-1]], hours)
 
-    def test_night_length_without_sunrise_keeps_every_hour(self):
-        self.assertEqual(weather.night_length(np.array([5, -1, -10, -1, 3, 10])), 4)
-        self.assertEqual(weather.night_length(np.array([-10, -5, -2])), 3)
-        self.assertEqual(weather.night_length(np.array([10, 20, 10])), 3)
+    def test_first_night(self):
+        self.assertEqual(weather.first_night(np.array([5, -13, -20, -13, -5, -15])), slice(1, 4))
+        self.assertEqual(weather.first_night(np.array([-20, -15])), slice(0, 2))
+        self.assertEqual(weather.first_night(np.array([10, -5, 10])), slice(0, 0))
+
+    def test_no_night_is_reported(self):
+        with patch.object(weather, "sun_altitude", return_value=np.full(weather.MAX_HOURS, -5.0)):
+            with self.assertRaisesRegex(SystemExit, "stays above"):
+                run(["--time", "2026-06-21T12:00"])
 
     def test_missing_values_print_as_dashes(self):
         output, _ = run(["--time", "2026-12-21T22:00"], cloud_cover=[None], dew_point_2m=[None])
         self.assertEqual(cells(output, "Cloud (%)")[0], "-")
         self.assertEqual(cells(output, "Dew (°C)")[0], "-")
-        self.assertEqual(cells(output, "Clear")[:2], ["", "*"])
 
     def test_values_are_rounded_but_rain_is_never_rounded_to_none(self):
         self.assertEqual([weather.integer(value) for value in (-0.4, 2.5, 99.6, np.nan)], ["0", "2", "100", "-"])
@@ -106,10 +115,9 @@ class SkyTest(unittest.TestCase):
     def test_winter_solstice_at_stonehenge(self):
         location = EarthLocation.from_geodetic(-1.83 * u.deg, 51.18 * u.deg, 0.1 * u.km)
         times = [datetime(2026, 12, 21, 12, tzinfo=timezone.utc), datetime(2026, 12, 21, 22, tzinfo=timezone.utc)]
-        sun, moon, illumination = weather.sun_and_moon(times, location)
+        sun = weather.sun_altitude(times, location)
         self.assertGreater(sun[0], 10)
         self.assertLess(sun[1], -18)
-        self.assertTrue(np.all((illumination >= 0) & (illumination <= 1)))
 
 if __name__ == "__main__":
     unittest.main()

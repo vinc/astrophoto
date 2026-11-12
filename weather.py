@@ -18,8 +18,8 @@ VARIABLES = [
 
 LABEL = 12
 CELL = 4  # Three characters and a space
-HORIZON = -0.833  # Sun altitude at sunrise, with refraction and its radius
-MAX_HOURS = 26  # Enough to reach the next sunrise from any start time
+NIGHT = -12  # Sun altitude in degrees below which the sky is dark enough
+MAX_HOURS = 26  # Enough to reach the next night from any start time
 
 
 def parse_time(text):
@@ -56,29 +56,24 @@ def fetch_forecast(latitude, longitude, elevation, start, hours, model):
     return times, values
 
 
-def sun_and_moon(times, location):
-    """Sun and Moon altitudes (degrees) and Moon illuminated fraction"""
+def sun_altitude(times, location):
     time = Time(times)
     # Bundled Earth rotation data is plenty for this, even when slightly out of date
     with iers.conf.set_temp("auto_download", False), \
             iers.conf.set_temp("auto_max_age", None), \
             iers.conf.set_temp("iers_degraded_accuracy", "warn"):
         frame = AltAz(obstime=time, location=location)
-        sun = get_body("sun", time, location)
-        moon = get_body("moon", time, location)
-        elongation = sun.separation(moon).deg
-        return (
-            sun.transform_to(frame).alt.deg,
-            moon.transform_to(frame).alt.deg,
-            (1 - np.cos(np.radians(elongation))) / 2,
-        )
+        return get_body("sun", time, location).transform_to(frame).alt.deg
 
 
-def night_length(sun):
-    """Number of hours until the first sunrise following a dark hour"""
-    dark = sun < HORIZON
-    after_sunrise = np.flatnonzero(~dark & np.logical_or.accumulate(dark))
-    return int(after_sunrise[0]) if len(after_sunrise) else len(sun)
+def first_night(sun):
+    """Slice of the first consecutive hours with the Sun below the night altitude"""
+    dark = np.flatnonzero(sun < NIGHT)
+    if not len(dark):
+        return slice(0, 0)
+    gaps = np.flatnonzero(np.diff(dark) > 1)
+    last = dark[gaps[0]] if len(gaps) else dark[-1]
+    return slice(int(dark[0]), int(last) + 1)
 
 
 def integer(value):
@@ -102,15 +97,9 @@ def date_line(times):
     return "".join(line).rstrip()
 
 
-def table(times, values, sun, moon, illumination, max_cloud):
-    clear = (sun < -12) & (values["cloud_cover"] <= max_cloud) & ~(values["precipitation"] > 0)
-    up = moon > 0
+def table(times, values):
     rows = [
         ("Time (h)", [str(time.hour) for time in times]),
-        ("Clear", ["*" if hour else "" for hour in clear]),
-        ("Sun (°)", [integer(altitude) for altitude in sun]),
-        ("Moon (°)", [integer(altitude) if above else "" for altitude, above in zip(moon, up)]),
-        ("Moon (%)", [integer(lit * 100) if above else "" for lit, above in zip(illumination, up)]),
         ("Cloud (%)", [integer(value) for value in values["cloud_cover"]]),
         ("High (%)", [integer(value) for value in values["cloud_cover_high"]]),
         ("Mid (%)", [integer(value) for value in values["cloud_cover_mid"]]),
@@ -137,8 +126,6 @@ def main():
     parser.add_argument("--time", help="UTC start time in ISO format (default: now)")
     parser.add_argument("--model", default="meteofrance_seamless",
                         help="Open-Meteo weather model (default: meteofrance_seamless, AROME then ARPEGE)")
-    parser.add_argument("--max-cloud", type=float, default=20,
-                        help="Highest total cloud cover in percent for a clear hour (default: 20)")
     args = parser.parse_args()
 
     start = parse_time(args.time)
@@ -146,16 +133,17 @@ def main():
         args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.km,
     )
     hours = [start + timedelta(hours=hour) for hour in range(MAX_HOURS)]
-    sun, moon, illumination = sun_and_moon(hours, location)
+    night = first_night(sun_altitude(hours, location))
+    if night.start == night.stop:
+        raise SystemExit(f"The Sun stays above {NIGHT}° in the next {MAX_HOURS} hours")
     times, values = fetch_forecast(
-        args.latitude, args.longitude, args.elevation, start, night_length(sun), args.model,
+        args.latitude, args.longitude, args.elevation, hours[night.start], night.stop - night.start, args.model,
     )
-    sun, moon, illumination = sun[:len(times)], moon[:len(times)], illumination[:len(times)]
 
     print(f"Forecast for {args.latitude:g}, {args.longitude:g} at {args.elevation * 1000:.0f} m "
           f"from the {args.model} model (Open-Meteo)")
-    print(f"Times in UTC until sunrise, * marks hours with the Sun below -12°, at most {args.max_cloud:g}% cloud, and no rain\n")
-    for line in table(times, values, sun, moon, illumination, args.max_cloud):
+    print(f"Times in UTC, for the hours with the Sun below {NIGHT}°\n")
+    for line in table(times, values):
         print(line)
     if not times:
         print("  (no forecast for this period)")
