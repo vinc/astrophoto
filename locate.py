@@ -218,8 +218,7 @@ def save_image(path, ra, dec, time, query, target_name=None, radius=None, source
         y0 = max(0, int(y) - radius)
         y1 = min(height, int(y) + radius)
 
-    # Frames from convert.py hold the raw Bayer mosaic: average each
-    # 2x2 block so the colour channels don't show as a checkerboard
+    # Average 2x2 Bayer blocks so the colour channels don't show as a checkerboard
     bayer = "RAWFILE" in header
 
     if bayer:
@@ -235,7 +234,7 @@ def save_image(path, ra, dec, time, query, target_name=None, radius=None, source
 
     display_header = header
     if source_path != Path(path) and source_path.suffix.lower() in {".fit", ".fits", ".new"}:
-        # Cached plate solutions may predate the saved display limits
+        # Cached plate solutions can lack the display limits saved in the stack
         display_header = fits.getheader(source_path)
     colour_path = source_path if source_path.suffix.lower() in {".fit", ".fits", ".new"} else Path(path)
     rgb, colour_header = read_rgb(colour_path)

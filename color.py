@@ -23,7 +23,7 @@ def raw_color_metadata(raw):
 def color_metadata(path, header, pattern=None):
     metadata = {key: header[key] for key in ("BAYERPAT", *WHITE_BALANCE_KEYS) if key in header}
     if "BAYERPAT" not in metadata or not all(key in metadata for key in WHITE_BALANCE_KEYS):
-        # Older converted FITS files can recover colour metadata from the original
+        # FITS converted before colour metadata was saved can read it from the CR2
         original = Path(path).with_name(Path(header.get("RAWFILE", "missing.CR2")).name)
         if original.is_file() and original.suffix.lower() == ".cr2":
             with rawpy.imread(str(original)) as raw:
@@ -68,7 +68,7 @@ def saturation_flags(data, header, pattern):
     return np.sum(channels.astype(np.uint8) * [1, 2, 4], axis=-1).astype(np.uint8)
 
 def luminance(rgb):
-    # Match the existing average of one red, two green, and one blue sample
+    # Same weights as the grayscale 2x2 binning
     return (rgb[..., 0] + 2 * rgb[..., 1] + rgb[..., 2]) / 4
 
 def rgb_display_header(rgb, metadata):
@@ -86,11 +86,12 @@ def rgb_display_header(rgb, metadata):
     _, _, noise = sigma_clipped_stats(light)
     high = max(float(np.percentile(light, 99.9)), 15 * float(noise), 1e-6)
     header = fits.Header({"COLORSPC": "RGB", "RGBHIGH": high, "RGBSOFT": 3.0})
-    header["RGBKNEE"] = (0.8, "Preview highlight shoulder start")
+    header["RGBNOISE"] = (float(noise), "Sky noise for the RGB rendering")
+    header["RGBKNEE"] = (0.8, "Highlight shoulder start for the RGB rendering")
     header["SATFEATH"] = (1.0, "Highlight feather sigma in binned pixels")
     for index, (key, gain, low) in enumerate(zip(WHITE_BALANCE_KEYS, gains, black), 1):
-        header[key] = (float(gain), "Daylight gain used only for RGB previews")
-        header[f"RGBLO{index}"] = (float(low), "Background level used only for RGB previews")
+        header[key] = (float(gain), "Daylight gain for the RGB rendering")
+        header[f"RGBLO{index}"] = (float(low), "Background level for the RGB rendering")
     return header
 
 def feather_saturation(saturation, sigma=1.0):
@@ -116,14 +117,28 @@ def render_rgb(rgb, header, saturation=None):
     black = np.array([header[f"RGBLO{index}"] for index in range(1, 4)])
     gains = np.array([header[key] for key in WHITE_BALANCE_KEYS])
     valid = np.isfinite(rgb).all(axis=-1)
-    balanced = np.maximum((np.where(valid[..., None], rgb, 0) - black) * gains, 0)
+    balanced = (np.where(valid[..., None], rgb, 0) - black) * gains
+    noise = float(header.get("RGBNOISE", 0))
+    if not np.isfinite(noise) or noise < 0:
+        raise ValueError("Invalid RGB sky noise")
+    if noise > 0:
+        light = luminance(balanced)[..., None]
+        chroma = balanced - light
+        # Only valid sky-level pixels feed the colour blur, so stars and gaps don't tint the sky
+        faint = np.where(valid[..., None], np.clip(1 - light / (10 * noise), 0, 1), 0)
+        blurred = gaussian_filter(chroma * faint, sigma=(1.5, 1.5, 0))
+        weight = gaussian_filter(faint, sigma=(1.5, 1.5, 0))
+        blurred = np.divide(blurred, weight, out=chroma.copy(), where=weight > 1e-3)
+        # The pedestal stops sky noise being half clipped, which turns it red after white balance
+        balanced = light + faint * blurred + (1 - faint) * chroma + noise
+    balanced = np.maximum(balanced, 0)
     scaled = balanced / header["RGBHIGH"]
     light = luminance(scaled)
     softness = header["RGBSOFT"]
     stretched = np.arcsinh(softness * light) / np.arcsinh(softness)
     factor = np.divide(stretched, light, out=np.zeros_like(light), where=light > 0)
     result = scaled * factor[..., None]
-    # Keep faint colours and let overexposed channels approach white smoothly
+    # Per-channel shoulder: overexposed channels roll off towards white instead of clipping hue
     knee = float(header.get("RGBKNEE", 0.8))
     if not np.isfinite(knee) or not 0 <= knee < 1:
         raise ValueError("Invalid RGB highlight knee")
@@ -133,7 +148,7 @@ def render_rgb(rgb, header, saturation=None):
         if saturation.shape != rgb.shape[:2] or not np.isfinite(saturation).all() or np.any((saturation < 0) | (saturation > 1)):
             raise ValueError("Invalid RGB saturation fraction")
         saturation = feather_saturation(saturation, header.get("SATFEATH", 1.0))
-        # Lost colour information is neutralized only in the rendered preview
+        # Clipped photosites lost their colour, so render them grey
         neutral = result.max(axis=-1, keepdims=True)
         result += saturation[..., None] * (neutral - result)
     result[~valid] = 0

@@ -84,7 +84,7 @@ def stack_display_limits(data, header=None):
             if np.isfinite([low, high]).all() and high > low:
                 return low, high
 
-    # Older stacks have no saved limits: reproduce their full-frame stretch
+    # Without saved limits, fall back to the full-frame stretch
     finite = data[np.isfinite(data)]
     if not finite.size:
         raise ValueError("Image contains no finite pixels")
