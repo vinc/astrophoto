@@ -41,6 +41,10 @@ def separation(ra, dec, center):
     cosine = unit_vectors(ra, dec) @ unit_vectors(*center)
     return np.degrees(np.arccos(np.clip(cosine, -1, 1)))
 
+def contains(header, ra, dec):
+    x, y = WCS(header).celestial.world_to_pixel_values(ra, dec)
+    return bool(0 <= x < header["NAXIS1"] and 0 <= y < header["NAXIS2"])
+
 def footprint(header, samples=32):
     # Edges are sampled rather than joined corner to corner because
     # straight lines on the sensor are curves on the chart
@@ -254,7 +258,7 @@ def main():
                 )
                 header = fits.getheader(solved)
                 time = Time(header["DATE-AVG"], format="isot", scale="utc")
-                observations.append((path, footprint(header), time))
+                observations.append((path, header, footprint(header), time))
             except Exception as exc:
                 print(f"{path}: ERROR: {exc}")
                 failed = True
@@ -262,21 +266,33 @@ def main():
     if not observations:
         raise SystemExit("No valid observations")
 
-    observations.sort(key=lambda observation: observation[2].jd)
-    paths, outlines, times = map(list, zip(*observations))
-    labels = [local_time(time, timezone) for time in times]
+    observations.sort(key=lambda observation: observation[3].jd)
 
     track = None
     if args.query:
         observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
-        result = get_ephemerides(args.query, observer, [time.jd for time in times])
-        if len(result) != len(times):
+        result = get_ephemerides(args.query, observer, [observation[3].jd for observation in observations])
+        if len(result) != len(observations):
             raise SystemExit("Horizons returned a different number of epochs than requested")
         name = str(result["targetname"][0])
-        track = (name, np.asarray(result["RA"], dtype=float), np.asarray(result["DEC"], dtype=float))
-    elif len(outlines) == 1:
+        positions = zip(np.asarray(result["RA"], dtype=float), np.asarray(result["DEC"], dtype=float))
+        visible = []
+        for observation, (ra, dec) in zip(observations, positions):
+            if contains(observation[1], ra, dec):
+                visible.append((observation, ra, dec))
+            else:
+                print(f"{observation[0]}: Skipped: {name} is outside the image")
+        if not visible:
+            raise SystemExit(f"{name} is in none of the images")
+        observations, ra, dec = map(list, zip(*visible))
+        track = (name, np.array(ra), np.array(dec))
+
+    paths, _, outlines, times = map(list, zip(*observations))
+    labels = [local_time(time, timezone) for time in times]
+
+    if track is None and len(outlines) == 1:
         name = get_constellation(SkyCoord(*chart_center(outlines), unit="deg"))
-    else:
+    elif track is None:
         name = f"{len(outlines)} images"
     title = f"{name}\n{describe_times(times, timezone)}"
 

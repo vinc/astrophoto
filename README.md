@@ -78,7 +78,8 @@ python chart.py 2026*/*-stack.fit \
     --query vesta
 ```
 
-Without `--query` only the outlines are drawn. A chart of a single image is
+With `--query`, images where the body is outside the frame are skipped. Without
+it, only the outlines are drawn. A chart of a single image is
 saved next to it; a chart of several is saved in the current directory as
 `NNNN-<kind>-chart.png`, numbered after the existing ones. Times are shown on
 the camera clock (`--timezone`). Use `--fov` to set the chart

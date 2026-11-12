@@ -232,6 +232,44 @@ class ChartCommandTests(unittest.TestCase):
         self.assertEqual(calls["title"], "4 Vesta (A807 FA)\n2026-11-11 to 2026-11-12")
         self.assertEqual(calls["labels"], ["2026-11-11 22:30 CET", "2026-11-12 22:30 CET"])
 
+    def chart_target(self, positions):
+        times = ["2026-11-06T19:10:00", "2026-11-08T20:00:00", "2026-11-11T21:30:00"]
+        calls = {}
+
+        def ephemerides(query, observer, requested):
+            ra, dec = zip(*positions)
+            return Table({"RA": ra, "DEC": dec, "targetname": ["4 Vesta (A807 FA)"] * len(ra)})
+
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = []
+            for i, time in enumerate(times):
+                header = make_header(ra=20 + 40 * i, dec=0, scale=0.14, size=(30, 20))
+                header["DATE-AVG"] = time
+                path = Path(temporary) / f"{time[:10].replace('-', '')}-2000-light-stack.fit"
+                fits.writeto(path, np.zeros((20, 30), dtype=np.float32), header)
+                paths.append(str(path))
+            output = self.run_main(
+                [*paths, "--query", "vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10",
+                 "--output", str(Path(temporary) / "chart.png")],
+                solve_image={"side_effect": lambda path, *args, **kwargs: path},
+                get_ephemerides={"side_effect": ephemerides},
+                draw_chart={"side_effect": lambda outlines, output, **kwargs: calls.update(kwargs, outlines=outlines)},
+            )
+        return calls, output
+
+    def test_query_keeps_only_images_showing_the_target(self):
+        calls, output = self.chart_target([(20.5, 0.5), (90, 30), (101, -1)])
+        self.assertEqual(len(calls["outlines"]), 2)
+        self.assertEqual(calls["labels"], ["2026-11-06 20:10 CET", "2026-11-11 22:30 CET"])
+        np.testing.assert_array_equal(calls["track"][1], [20.5, 101])
+        self.assertEqual(calls["title"], "4 Vesta (A807 FA)\n2026-11-06 to 2026-11-11")
+        self.assertIn("20261108-2000-light-stack.fit: Skipped: 4 Vesta (A807 FA) is outside the image", output)
+
+    def test_query_outside_every_image_fails(self):
+        with self.assertRaises(SystemExit) as raised:
+            self.chart_target([(90, 30)] * 3)
+        self.assertIn("in none of the images", str(raised.exception))
+
     def test_without_query_title_names_the_constellation(self):
         calls = {}
         with tempfile.TemporaryDirectory() as temporary:
