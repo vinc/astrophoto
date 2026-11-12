@@ -1,6 +1,7 @@
 import contextlib
 from datetime import datetime, timedelta, timezone
 import io
+import os
 import sys
 import unittest
 from unittest.mock import Mock, patch
@@ -116,6 +117,36 @@ class TableTest(unittest.TestCase):
         with patch.object(weather, "sun_altitude", return_value=np.full(weather.MAX_HOURS, -5.0)):
             with self.assertRaisesRegex(SystemExit, "stays above"):
                 run(["--time", "2026-06-21T12:00"])
+
+    def test_ratings(self):
+        values = {name: np.full(7, value) for name, value in [
+            ("cloud_cover", 10.0), ("precipitation", 0.0), ("wind_gusts_10m", 3.0),
+            ("temperature_2m", 5.0), ("dew_point_2m", 0.0),
+        ]}
+        values["cloud_cover"][1:3] = [60, 30]
+        values["precipitation"][3] = 0.1
+        values["wind_gusts_10m"][4] = 5.6
+        values["temperature_2m"][5], values["dew_point_2m"][5] = 4.6, 2.6
+        values["cloud_cover"][6] = np.nan
+        self.assertEqual(weather.ratings(values), ["green", "red", "yellow", "yellow", "yellow", "yellow", None])
+
+    def test_only_the_time_row_is_colored(self):
+        times = [datetime(2026, 12, 21, hour, tzinfo=timezone.utc) for hour in (20, 21)]
+        values = {name: np.array([5.0, 90.0]) if name == "cloud_cover" else np.zeros(2) for name in weather.VARIABLES}
+        values["dew_point_2m"] = np.full(2, -5.0)
+        lines = weather.table(times, values, color=True)
+        self.assertEqual(lines[1], "Time (h)    \033[32m 20\033[0m \033[31m 21\033[0m")
+        self.assertNotIn("\033", "".join(lines[2:]))
+        self.assertNotIn("\033", "".join(weather.table(times, values)))
+
+    def test_no_color_when_piped_or_disabled(self):
+        with patch.dict(os.environ), patch.object(sys.stdout, "isatty", return_value=True):
+            os.environ.pop("NO_COLOR", None)
+            self.assertTrue(weather.use_color())
+            with patch.dict(os.environ, {"NO_COLOR": "1"}):
+                self.assertFalse(weather.use_color())
+        with patch.object(sys.stdout, "isatty", return_value=False):
+            self.assertFalse(weather.use_color())
 
     def test_missing_values_print_as_dashes(self):
         output, _ = run(["--time", "2026-12-21T22:00"], cloud_cover=[None], dew_point_2m=[None])

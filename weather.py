@@ -3,6 +3,8 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 import locale
+import os
+import sys
 
 import numpy as np
 import requests
@@ -20,6 +22,13 @@ VARIABLES = [
 
 LABEL = 12
 CELL = 4  # Three characters and a space
+
+CLOUDY = 50  # Total cloud cover in percent above which gaps are too short for a series
+HAZY = 20
+WINDY = 6  # Gusts in m/s that shake a tripod at long focal lengths
+DEW_SPREAD = 2  # The lens cools below the air on clear nights, so dew forms early
+COLORS = {"red": "\033[31m", "yellow": "\033[33m", "green": "\033[32m"}
+RESET = "\033[0m"
 
 
 def parse_time(text, now=None):
@@ -89,7 +98,30 @@ def date_line(times):
     return "".join(line).rstrip()
 
 
-def table(times, values):
+def ratings(values):
+    """Red, yellow, or green for each hour, or None with missing data"""
+    # Rounded like the table, so that colors agree with the numbers shown
+    cloud, gust = np.round(values["cloud_cover"]), np.round(values["wind_gusts_10m"])
+    spread = np.round(values["temperature_2m"]) - np.round(values["dew_point_2m"])
+    rain = values["precipitation"]
+    result = []
+    for i in range(len(cloud)):
+        if np.isnan(cloud[i]):
+            result.append(None)
+        elif cloud[i] > CLOUDY:
+            result.append("red")
+        elif cloud[i] > HAZY or rain[i] > 0 or gust[i] >= WINDY or spread[i] <= DEW_SPREAD:
+            result.append("yellow")
+        else:
+            result.append("green")
+    return result
+
+
+def use_color():
+    return sys.stdout.isatty() and "NO_COLOR" not in os.environ
+
+
+def table(times, values, color=False):
     rows = [
         ("Time (h)", [str(time.hour) for time in times]),
         ("Cloud (%)", [integer(value) for value in values["cloud_cover"]]),
@@ -102,10 +134,14 @@ def table(times, values):
         ("Temp (°C)", [integer(value) for value in values["temperature_2m"]]),
         ("Dew (°C)", [integer(value) for value in values["dew_point_2m"]]),
     ]
-    return [date_line(times)] + [
-        (f"{label:<{LABEL}}" + "".join(f"{cell:>{CELL - 1}} " for cell in cells)).rstrip()
-        for label, cells in rows
-    ]
+    colors = ratings(values) if color else [None] * len(times)
+    lines = [date_line(times)]
+    for label, cells in rows:
+        cells = [f"{cell:>{CELL - 1}}" for cell in cells]
+        if label == "Time (h)":
+            cells = [f"{COLORS[name]}{cell}{RESET}" if name else cell for cell, name in zip(cells, colors)]
+        lines.append((f"{label:<{LABEL}}" + "".join(cell + " " for cell in cells)).rstrip())
+    return lines
 
 
 def main():
@@ -136,7 +172,7 @@ def main():
         locale.setlocale(locale.LC_TIME, "")
     except locale.Error:
         pass
-    for line in table([time.astimezone() for time in times], values):
+    for line in table([time.astimezone() for time in times], values, use_color()):
         print(line)
     if not times:
         print("  (no forecast for this period)")
