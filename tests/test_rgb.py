@@ -364,12 +364,9 @@ class RGBPreviewTests(unittest.TestCase):
         ring[50, 50] = False
         self.assertLess(float(np.abs(preview - without)[ring].max()), 0.01 * float(preview[50, 50].max()))
 
-    def test_previews_of_stacks_without_stored_noise_estimate_it(self):
+    def test_invalid_sky_noise_is_rejected(self):
         rgb = star_field()
         display = color.rgb_display_header(rgb, {"WBR": 2, "WBG": 1, "WBB": 1.5})
-        stored = color.render_rgb(rgb, display)
-        del display["RGBNOISE"]
-        np.testing.assert_allclose(color.render_rgb(rgb, display), stored, atol=1e-6)
         display["RGBNOISE"] = -1
         with self.assertRaisesRegex(ValueError, "sky noise"):
             color.render_rgb(rgb, display)

@@ -71,27 +71,22 @@ def luminance(rgb):
     # Match the existing average of one red, two green, and one blue sample
     return (rgb[..., 0] + 2 * rgb[..., 1] + rgb[..., 2]) / 4
 
-def background_sample(rgb):
+def rgb_display_header(rgb, metadata):
     valid = np.isfinite(rgb).all(axis=-1)
     if not valid.any():
         raise ValueError("RGB image contains no finite pixels")
     step = max(1, int(np.sqrt(rgb.shape[0] * rgb.shape[1] / 100000)))
     sample = rgb[::step, ::step]
     sample = sample[np.isfinite(sample).all(axis=-1)]
-    return sample if len(sample) else rgb[valid]
-
-def sky_noise(sample, black, gains):
-    return float(sigma_clipped_stats(luminance((sample - black) * gains))[2])
-
-def rgb_display_header(rgb, metadata):
-    sample = background_sample(rgb)
+    if not len(sample):
+        sample = rgb[valid]
     black = np.array([sigma_clipped_stats(sample[:, channel])[1] for channel in range(3)])
     gains = np.array([metadata[key] for key in WHITE_BALANCE_KEYS])
     light = luminance((sample - black) * gains)
-    noise = sky_noise(sample, black, gains)
+    _, _, noise = sigma_clipped_stats(light)
     high = max(float(np.percentile(light, 99.9)), 15 * float(noise), 1e-6)
     header = fits.Header({"COLORSPC": "RGB", "RGBHIGH": high, "RGBSOFT": 3.0})
-    header["RGBNOISE"] = (noise, "Sky luminance noise used only for RGB previews")
+    header["RGBNOISE"] = (float(noise), "Sky luminance noise used only for RGB previews")
     header["RGBKNEE"] = (0.8, "Preview highlight shoulder start")
     header["SATFEATH"] = (1.0, "Highlight feather sigma in binned pixels")
     for index, (key, gain, low) in enumerate(zip(WHITE_BALANCE_KEYS, gains, black), 1):
@@ -123,8 +118,7 @@ def render_rgb(rgb, header, saturation=None):
     gains = np.array([header[key] for key in WHITE_BALANCE_KEYS])
     valid = np.isfinite(rgb).all(axis=-1)
     balanced = (np.where(valid[..., None], rgb, 0) - black) * gains
-    # Stacks made before RGBNOISE existed get the same estimate on the fly
-    noise = float(header["RGBNOISE"]) if "RGBNOISE" in header else sky_noise(background_sample(rgb), black, gains)
+    noise = float(header.get("RGBNOISE", 0))
     if not np.isfinite(noise) or noise < 0:
         raise ValueError("Invalid RGB sky noise")
     light = luminance(balanced)[..., None]
