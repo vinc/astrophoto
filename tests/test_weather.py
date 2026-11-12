@@ -22,7 +22,7 @@ def forecast(times, **overrides):
     hourly = {"time": times}
     defaults = {
         "cloud_cover": 5, "cloud_cover_low": 0, "cloud_cover_mid": 5, "cloud_cover_high": 10,
-        "precipitation": 0.0, "wind_speed_10m": 8, "wind_gusts_10m": 20, "wind_direction_10m": 250,
+        "precipitation": 0.0, "wind_speed_10m": 8, "wind_gusts_10m": 20,
         "temperature_2m": 4.0, "dew_point_2m": -3.0,
     }
     for name in weather.VARIABLES:
@@ -74,7 +74,6 @@ class TableTest(unittest.TestCase):
         self.assertEqual(cells(output, "Time (h)", 4), ["12", "22", "23", "0"])
         self.assertEqual(cells(output, "Clear", 4), ["", "*", "", ""])
         self.assertEqual(cells(output, "Rain (mm)", 4), ["0", "0", "0", "0.4"])
-        self.assertEqual(cells(output, "Wind dir", 4), ["WSW"] * 4)
         self.assertIn("Mon 21", output)
         self.assertIn("Tue 22", output)
 
@@ -89,16 +88,8 @@ class TableTest(unittest.TestCase):
         output, _ = run(["--time", "2026-12-21T22:00", "--hours", "1"],
                         forecast(["2026-12-21T22:00"], cloud_cover=[None], dew_point_2m=[None]))
         self.assertEqual(cells(output, "Cloud (%)", 1), ["-"])
-        self.assertEqual(cells(output, "Dew pt (°C)", 1), ["-"])
+        self.assertEqual(cells(output, "Dew (°C)", 1), ["-"])
         self.assertEqual(cells(output, "Clear", 1), [""])
-
-    def test_dew_and_frost_risk(self):
-        self.assertEqual(weather.dew_risk(6.0, 1.0), "")
-        self.assertEqual(weather.dew_risk(6.0, 2.5), "d?")
-        self.assertEqual(weather.dew_risk(6.0, 4.5), "dew")
-        self.assertEqual(weather.dew_risk(1.0, -0.5), "ice")
-        self.assertEqual(weather.dew_risk(2.0, -1.5), "i?")
-        self.assertEqual(weather.dew_risk(np.nan, 1.0), "")
 
     def test_values_fit_in_a_cell(self):
         self.assertEqual([weather.decimal(value) for value in (0.04, 0.4, 9.94, 12.6, -1.2)], ["0", "0.4", "9.9", "13", "-1"])

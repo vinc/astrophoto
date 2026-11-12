@@ -13,15 +13,8 @@ from astropy.utils import iers
 API = "https://api.open-meteo.com/v1/forecast"
 VARIABLES = [
     "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
-    "precipitation", "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m",
-    "temperature_2m", "dew_point_2m",
+    "precipitation", "wind_speed_10m", "wind_gusts_10m", "temperature_2m", "dew_point_2m",
 ]
-COMPASS = "N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW".split()
-
-# On clear nights the lens radiates heat away and ends up a few degrees below
-# the air, so dew forms well before the air itself reaches its dew point
-DEW_SPREAD = 2
-DEW_RISK_SPREAD = 4
 
 LABEL = 12
 CELL = 4  # Three characters and a space
@@ -79,14 +72,6 @@ def sun_and_moon(times, location):
         )
 
 
-def dew_risk(temperature, dew_point):
-    spread = temperature - dew_point
-    if np.isnan(spread) or spread > DEW_RISK_SPREAD:
-        return ""
-    kind = "ice" if dew_point <= 0 else "dew"
-    return kind if spread <= DEW_SPREAD else kind[0] + "?"
-
-
 def integer(value):
     return "-" if np.isnan(value) else str(int(round(value)))
 
@@ -97,10 +82,6 @@ def decimal(value):
         return "-"
     value = round(value, 1)
     return "0" if value == 0 else f"{value:.1f}" if 0 < value < 10 else str(int(round(value)))
-
-
-def compass(direction):
-    return "-" if np.isnan(direction) else COMPASS[int((direction + 11.25) // 22.5) % 16]
 
 
 def date_line(times):
@@ -114,7 +95,6 @@ def date_line(times):
 
 
 def table(times, values, sun, moon, illumination, max_cloud):
-    temperature, dew_point = values["temperature_2m"], values["dew_point_2m"]
     clear = (sun < -12) & (values["cloud_cover"] <= max_cloud) & ~(values["precipitation"] > 0)
     up = moon > 0
     rows = [
@@ -130,11 +110,8 @@ def table(times, values, sun, moon, illumination, max_cloud):
         ("Rain (mm)", [decimal(value) for value in values["precipitation"]]),
         ("Wind (km/h)", [integer(value) for value in values["wind_speed_10m"]]),
         ("Gust (km/h)", [integer(value) for value in values["wind_gusts_10m"]]),
-        ("Wind dir", [compass(value) for value in values["wind_direction_10m"]]),
-        ("Temp (°C)", [integer(value) for value in temperature]),
-        ("Dew pt (°C)", [integer(value) for value in dew_point]),
-        ("Spread (°C)", [decimal(value) for value in temperature - dew_point]),
-        ("Dew risk", [dew_risk(*pair) for pair in zip(temperature, dew_point)]),
+        ("Temp (°C)", [integer(value) for value in values["temperature_2m"]]),
+        ("Dew (°C)", [integer(value) for value in values["dew_point_2m"]]),
     ]
     lines = []
     for first in range(0, len(times), BLOCK):
