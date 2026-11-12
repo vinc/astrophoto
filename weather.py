@@ -6,11 +6,12 @@ import locale
 
 import numpy as np
 import requests
-from dateparser.date import DateDataParser
 from astropy import units as u
 from astropy.coordinates import AltAz, EarthLocation, get_body
 from astropy.time import Time
 from astropy.utils import iers
+
+from localtime import parse_local_time
 
 API = "https://api.open-meteo.com/v1/forecast"
 VARIABLES = [
@@ -25,20 +26,12 @@ MAX_HOURS = 26  # Enough to reach the next night from any start time
 
 
 def parse_time(text, now=None):
-    """Local ISO time or relative phrase like "tonight" or "saturday", in UTC to the hour"""
+    """Start of the hour in UTC"""
     if text:
-        parser = DateDataParser(settings={
-            "RELATIVE_BASE": now or datetime.now(),
-            "PREFER_DATES_FROM": "future",
-        })
-        time = parser.get_date_data(text).date_obj
-        if time is None:
-            raise SystemExit(f"Could not understand the time: {text}")
+        time = parse_local_time(text, now)
         # A bare date like "saturday" is midnight, inside the previous night
         if (time.hour, time.minute, time.second) == (0, 0, 0):
             time = time.replace(hour=12)
-        if time.tzinfo is None:
-            time = time.astimezone()
     else:
         time = datetime.now(timezone.utc)
     return time.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
