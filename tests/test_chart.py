@@ -20,6 +20,7 @@ from astropy.time import Time
 from astropy.wcs import WCS
 
 from astrophoto import chart
+from astrophoto.lib.catalog import SkyObject
 
 def make_header(ra=56.75, dec=24.1, angle=15, scale=0.00123, size=(3504, 2336)):
     wcs = WCS(naxis=2)
@@ -232,6 +233,7 @@ class DefaultOutputTests(unittest.TestCase):
 
 class ChartCommandTests(unittest.TestCase):
     def run_main(self, argv, **patches):
+        patches.setdefault("resolve", {"return_value": None})
         with patch.object(sys, "argv", ["chart.py", *argv]), \
                 contextlib.redirect_stdout(io.StringIO()) as stdout, \
                 contextlib.ExitStack() as stack:
@@ -242,8 +244,10 @@ class ChartCommandTests(unittest.TestCase):
 
     def test_query_needs_observer(self):
         with patch.object(sys, "argv", ["chart.py", "image.fit", "--query", "vesta"]), \
-                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                patch.object(chart, "resolve", return_value=None), \
+                contextlib.redirect_stderr(io.StringIO()) as stderr, self.assertRaises(SystemExit):
             chart.main()
+        self.assertIn("--query needs --latitude", stderr.getvalue())
 
     def test_images_are_charted_in_time_order_with_target_positions(self):
         times = ["2026-11-12T21:30:00", "2026-11-11T21:30:00"]
@@ -318,6 +322,28 @@ class ChartCommandTests(unittest.TestCase):
         np.testing.assert_array_equal(calls["track"][1], [20.5, 101])
         self.assertEqual(calls["title"], "4 Vesta (A807 FA)\n2026-11-06 to 2026-11-11")
         self.assertIn("20261108-2000-light-stack.fit: Skipped: 4 Vesta (A807 FA) is outside the image", output)
+
+    def test_catalog_objects_are_marked_without_an_observer(self):
+        calls = {}
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = []
+            for i, time in enumerate(["2026-11-06T19:10:00", "2026-11-08T20:00:00"]):
+                header = make_header(ra=10 + 6 * i, dec=41, scale=0.14, size=(30, 20))
+                header["DATE-AVG"] = time
+                path = Path(temporary) / f"{time[:10].replace('-', '')}-2000-light-stack.fit"
+                fits.writeto(path, np.zeros((20, 30), dtype=np.float32), header)
+                paths.append(str(path))
+            output = self.run_main(
+                [*paths, "--query", "m31", "--output", str(Path(temporary) / "chart.png")],
+                resolve={"return_value": SkyObject("M31 (Andromeda Galaxy)", "M31", 10.68, 41.27, 3.17)},
+                solve_image={"side_effect": lambda path, *args, **kwargs: path},
+                get_ephemerides={"side_effect": AssertionError("Horizons queried")},
+                draw_chart={"side_effect": lambda outlines, output, **kwargs: calls.update(kwargs, outlines=outlines)},
+            )
+        name, ra, dec = calls["track"]
+        self.assertEqual(name, "M31 (Andromeda Galaxy)")
+        np.testing.assert_array_equal(ra, [10.68])
+        self.assertIn("20261108-2000-light-stack.fit: Skipped: M31 (Andromeda Galaxy) is outside the image", output)
 
     def test_query_outside_every_image_fails(self):
         with self.assertRaises(SystemExit) as raised:

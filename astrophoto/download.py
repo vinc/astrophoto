@@ -6,10 +6,13 @@ import requests
 from astrophoto.lib.config import data_path
 
 INDEXES = "https://data.astrometry.net/4100"
-# Star and constellation data for chart, from d3-celestial (BSD-3-Clause)
+# Star, deep-sky object and constellation data, from d3-celestial (BSD-3-Clause)
 CELESTIAL = "https://raw.githubusercontent.com/ofrohn/d3-celestial/7e720a3de062059d4c5400a379146a601d9010e0/data"
 URLS = [f"{INDEXES}/index-41{number:02d}.fits" for number in range(7, 20)] + [
-    f"{CELESTIAL}/{name}" for name in ("stars.6.json", "constellations.json", "constellations.lines.json")
+    f"{CELESTIAL}/{name}" for name in (
+        "stars.6.json", "constellations.json", "constellations.lines.json",
+        "starnames.json", "messier.json", "dsos.14.json", "dsonames.json",
+    )
 ]
 
 
@@ -35,7 +38,7 @@ def download(session, url, path, progress):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download plate-solving indexes and star chart data")
+    parser = argparse.ArgumentParser(description="Download plate-solving indexes, star chart and object catalog data")
     parser.parse_args()
     directory = data_path()
     directory.mkdir(parents=True, exist_ok=True)
