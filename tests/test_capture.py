@@ -8,12 +8,13 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class CaptureTests(unittest.TestCase):
-    def run_capture(self, directory, *arguments, fail_stage="", config=None):
+    def run_capture(self, directory, *arguments, fail_stage="", config=None, camera_files=""):
         executable = directory / "bin" / "gphoto2"
         executable.parent.mkdir(exist_ok=True)
         executable.write_text(
             '#!/bin/sh\n'
             'printf "%s\\n" CALL "$@" >> "$CAPTURE_ARGUMENTS"\n'
+            'if [ "$1" = "--list-files" ]; then printf "%b" "$CAMERA_FILES"; fi\n'
             'for argument in "$@"; do\n'
             '  if [ "$argument" = "$FAIL_STAGE" ]; then exit 1; fi\n'
             'done\n'
@@ -27,7 +28,8 @@ class CaptureTests(unittest.TestCase):
         result = subprocess.run(
             [sys.executable, "-m", "astrophoto", "capture", *arguments], cwd=directory,
             env=dict(os.environ, PATH=f"{executable.parent}:{os.environ['PATH']}", PYTHONPATH=str(ROOT),
-                     XDG_CONFIG_HOME=str(settings), CAPTURE_ARGUMENTS=str(log), FAIL_STAGE=fail_stage),
+                     XDG_CONFIG_HOME=str(settings), CAPTURE_ARGUMENTS=str(log), FAIL_STAGE=fail_stage,
+                     CAMERA_FILES=camera_files),
             capture_output=True, text=True,
         )
         arguments = [call.splitlines() for call in log.read_text().split("CALL\n")[1:]] if log.exists() else []
@@ -40,8 +42,9 @@ class CaptureTests(unittest.TestCase):
                 directory = Path(temporary)
                 result, arguments, folders = self.run_capture(directory, *([mode] if mode else []))
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(len(arguments), 3)
-                capture, download, cleanup = arguments
+                self.assertEqual(len(arguments), 4)
+                listing, capture, download, cleanup = arguments
+                self.assertEqual(listing, ["--list-files"])
                 self.assertEqual(len(folders), 1)
                 self.assertRegex(folders[0].name, rf"^\d{{8}}-\d{{4}}{suffix}$")
                 self.assertIn(f"shutterspeed={shutter}", capture)
@@ -60,7 +63,7 @@ class CaptureTests(unittest.TestCase):
                 self.assertEqual(cleanup, ["--folder", "/DCIM/100CANON", "--delete-file", "1..20"])
 
     def test_failed_capture_or_download_never_deletes_files(self):
-        for stage, expected_calls in [("--capture-image", 1), ("--get-all-files", 2)]:
+        for stage, expected_calls in [("--capture-image", 2), ("--get-all-files", 3)]:
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
                 result, commands, folders = self.run_capture(Path(temporary), fail_stage=stage)
                 self.assertNotEqual(result.returncode, 0)
@@ -72,7 +75,7 @@ class CaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             result, commands, _ = self.run_capture(Path(temporary), fail_stage="--delete-file")
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(len(commands), 3)
+            self.assertEqual(len(commands), 4)
 
     def test_invalid_arguments_do_not_capture_or_create_a_session(self):
         for arguments in [("unknown",), ("dark", "extra"), ("--frames", "0")]:
@@ -112,6 +115,27 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertEqual(commands, [["--get-config", "iso"]])
 
+    def test_files_already_on_the_card_stop_before_capturing(self):
+        listing = (
+            "There is no file in folder '/'.\\n"
+            "There are 2 files in folder '/store_00010001/DCIM/100CANON':\\n"
+            "#1     IMG_0001.CR2               rd  8341 KB image/x-canon-cr2 1214381136\\n"
+            "#2     IMG_0002.CR2               rd  8338 KB image/x-canon-cr2 1214381142\\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, folders = self.run_capture(Path(temporary), camera_files=listing)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("already holds 2 files", result.stderr)
+            self.assertEqual(commands, [["--list-files"]])
+            self.assertEqual(folders, [])
+
+    def test_failed_card_listing_stops_before_capturing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, folders = self.run_capture(Path(temporary), fail_stage="--list-files")
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(commands, [["--list-files"]])
+            self.assertEqual(folders, [])
+
     def test_config_and_options_override_the_defaults(self):
         config = (
             "latitude = 51.18\n"
@@ -128,7 +152,7 @@ class CaptureTests(unittest.TestCase):
             with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as temporary:
                 result, commands, _ = self.run_capture(Path(temporary), *arguments, config=config)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                capture, _, cleanup = commands
+                _, capture, _, cleanup = commands
                 for name, value in expected.items():
                     if name == "frames":
                         self.assertEqual(capture[capture.index("--frames") + 1], value)
@@ -140,7 +164,7 @@ class CaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             result, commands, _ = self.run_capture(Path(temporary), "flat", config="[capture]\nshutterspeed = 8\n")
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("shutterspeed=50", commands[0])
+            self.assertIn("shutterspeed=50", commands[1])
 
     def test_invalid_config_stops_before_capturing(self):
         for config, message in [

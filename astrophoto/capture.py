@@ -1,6 +1,7 @@
 import argparse
 from datetime import datetime
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -51,6 +52,13 @@ def capture_settings(parser, kind, options):
     return settings
 
 
+def files_on_card():
+    result = subprocess.run(["gphoto2", "--list-files"], stdout=subprocess.PIPE, text=True)
+    if result.returncode:
+        raise SystemExit(result.returncode)
+    return len(re.findall(r"^#\d+\s", result.stdout, re.M))
+
+
 def run(command):
     result = subprocess.run(command)
     if result.returncode:
@@ -83,6 +91,10 @@ def main():
     settings = capture_settings(parser, args.kind, options)
     if shutil.which("gphoto2") is None:
         raise SystemExit("gphoto2 not found")
+    # The pictures are deleted from the card by number once downloaded
+    count = files_on_card()
+    if count:
+        raise SystemExit(f"The camera card already holds {count} files; download or delete them before capturing")
 
     directory = Path(f"{datetime.now():%Y%m%d-%H%M}-{args.kind}")
     directory.mkdir(parents=True, exist_ok=True)
