@@ -1,6 +1,4 @@
 import importlib
-from pathlib import Path
-import subprocess
 import sys
 
 COMMANDS = {
@@ -16,7 +14,6 @@ COMMANDS = {
     "crop": "Crop a Solar System body from RAW or FITS images",
     "chart": "Draw a star chart locating plate-solved images",
 }
-SCRIPTS = {"download"}
 
 
 def usage():
@@ -39,9 +36,6 @@ def main(argv=None):
     if command not in COMMANDS:
         print(f"astrophoto: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
-    if command in SCRIPTS:
-        script = Path(__file__).with_name(f"{command}.sh")
-        return subprocess.run(["sh", str(script), *arguments]).returncode
     module = importlib.import_module(f"astrophoto.{command}")
     sys.argv = [f"astrophoto {command}", *arguments]
     module.main()
