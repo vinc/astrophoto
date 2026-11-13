@@ -112,14 +112,27 @@ def main():
     ])
 
     print(f"Downloading pictures to {directory} ...", flush=True)
+    before = set(directory.iterdir())
     run([
         "gphoto2", "--folder", "/", "--recurse",
         "--filename", f"{directory}/%Y%m%d-%H%M%S.%C",
         "--get-all-files",
     ])
 
+    # gphoto2 exits successfully even when a picture is missing or overwritten locally
+    frames = settings["frames"]
+    downloaded = [path for path in directory.iterdir() if path not in before and path.is_file()]
+    empty = sum(1 for path in downloaded if path.stat().st_size == 0)
+    on_card = files_on_card()
+    if len(downloaded) != frames or empty or on_card != frames:
+        details = f", {empty} of them empty" if empty else ""
+        raise SystemExit(
+            f"Expected {frames} pictures, found {on_card} on the camera and {len(downloaded)} downloaded{details}; "
+            "left them all on the camera"
+        )
+
     print("Deleting downloaded pictures from the camera ...", flush=True)
-    run(["gphoto2", "--folder", "/DCIM/100CANON", "--delete-file", f"1..{settings['frames']}"])
+    run(["gphoto2", "--folder", "/DCIM/100CANON", "--delete-file", f"1-{frames}"])
 
 
 if __name__ == "__main__":

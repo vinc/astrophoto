@@ -8,16 +8,35 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class CaptureTests(unittest.TestCase):
-    def run_capture(self, directory, *arguments, fail_stage="", config=None, camera_files=""):
+    def run_capture(self, directory, *arguments, fail_stage="", config=None, camera_files="",
+                    captured="", downloaded="", empty=""):
+        # Fake camera: --capture-image stores the frame count, which --list-files and
+        # --get-all-files then report and download, unless CAPTURED or DOWNLOADED override it
         executable = directory / "bin" / "gphoto2"
         executable.parent.mkdir(exist_ok=True)
         executable.write_text(
             '#!/bin/sh\n'
             'printf "%s\\n" CALL "$@" >> "$CAPTURE_ARGUMENTS"\n'
-            'if [ "$1" = "--list-files" ]; then printf "%b" "$CAMERA_FILES"; fi\n'
             'for argument in "$@"; do\n'
             '  if [ "$argument" = "$FAIL_STAGE" ]; then exit 1; fi\n'
+            '  case "$previous" in --frames) frames=$argument ;; --filename) filename=$argument ;; esac\n'
+            '  previous=$argument\n'
             'done\n'
+            'case " $* " in\n'
+            '  *" --list-files "*)\n'
+            '    printf "%b" "$CAMERA_FILES"\n'
+            '    if [ -f "$CAMERA_STATE" ]; then\n'
+            '      i=1; n=$(cat "$CAMERA_STATE")\n'
+            '      while [ $i -le $n ]; do printf "#%d     IMG_%04d.CR2  rd  8341 KB image/x-canon-cr2\\n" $i $i; i=$((i + 1)); done\n'
+            '    fi ;;\n'
+            '  *" --capture-image "*) echo "${CAPTURED:-$frames}" > "$CAMERA_STATE" ;;\n'
+            '  *" --get-all-files "*)\n'
+            '    i=1; n=${DOWNLOADED:-$(cat "$CAMERA_STATE")}\n'
+            '    while [ $i -le $n ]; do\n'
+            '      if [ $i -le "${EMPTY:-0}" ]; then : > "${filename%/*}/frame$i.CR2"; else echo raw > "${filename%/*}/frame$i.CR2"; fi\n'
+            '      i=$((i + 1))\n'
+            '    done ;;\n'
+            'esac\n'
         )
         executable.chmod(0o755)
         settings = directory / "config"
@@ -29,7 +48,8 @@ class CaptureTests(unittest.TestCase):
             [sys.executable, "-m", "astrophoto", "capture", *arguments], cwd=directory,
             env=dict(os.environ, PATH=f"{executable.parent}:{os.environ['PATH']}", PYTHONPATH=str(ROOT),
                      XDG_CONFIG_HOME=str(settings), CAPTURE_ARGUMENTS=str(log), FAIL_STAGE=fail_stage,
-                     CAMERA_FILES=camera_files),
+                     CAMERA_FILES=camera_files, CAMERA_STATE=str(directory / "camera"),
+                     CAPTURED=str(captured), DOWNLOADED=str(downloaded), EMPTY=str(empty)),
             capture_output=True, text=True,
         )
         arguments = [call.splitlines() for call in log.read_text().split("CALL\n")[1:]] if log.exists() else []
@@ -42,9 +62,11 @@ class CaptureTests(unittest.TestCase):
                 directory = Path(temporary)
                 result, arguments, folders = self.run_capture(directory, *([mode] if mode else []))
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(len(arguments), 4)
-                listing, capture, download, cleanup = arguments
+                self.assertEqual(len(arguments), 5)
+                listing, capture, download, check, cleanup = arguments
                 self.assertEqual(listing, ["--list-files"])
+                self.assertEqual(check, ["--list-files"])
+                self.assertEqual(len(list(folders[0].iterdir())), 20)
                 self.assertEqual(len(folders), 1)
                 self.assertRegex(folders[0].name, rf"^\d{{8}}-\d{{4}}{suffix}$")
                 self.assertIn(f"shutterspeed={shutter}", capture)
@@ -60,7 +82,7 @@ class CaptureTests(unittest.TestCase):
                     "--folder", "/", "--recurse", "--filename",
                     f"{folders[0].name}/%Y%m%d-%H%M%S.%C", "--get-all-files",
                 ])
-                self.assertEqual(cleanup, ["--folder", "/DCIM/100CANON", "--delete-file", "1..20"])
+                self.assertEqual(cleanup, ["--folder", "/DCIM/100CANON", "--delete-file", "1-20"])
 
     def test_failed_capture_or_download_never_deletes_files(self):
         for stage, expected_calls in [("--capture-image", 2), ("--get-all-files", 3)]:
@@ -75,7 +97,22 @@ class CaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             result, commands, _ = self.run_capture(Path(temporary), fail_stage="--delete-file")
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(len(commands), 4)
+            self.assertEqual(len(commands), 5)
+
+    def test_incomplete_download_leaves_every_picture_on_the_camera(self):
+        for options, message in [
+            ({"downloaded": 19}, "Expected 20 pictures, found 20 on the camera and 19 downloaded;"),
+            ({"empty": 1}, "found 20 on the camera and 20 downloaded, 1 of them empty;"),
+            ({"captured": 19}, "found 19 on the camera and 19 downloaded;"),
+        ]:
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as temporary:
+                result, commands, folders = self.run_capture(Path(temporary), **options)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+                self.assertIn("left them all on the camera", result.stderr)
+                self.assertEqual(commands[-1], ["--list-files"])
+                self.assertTrue(all("--delete-file" not in command for command in commands))
+                self.assertEqual(len(folders), 1)
 
     def test_invalid_arguments_do_not_capture_or_create_a_session(self):
         for arguments in [("unknown",), ("dark", "extra"), ("--frames", "0")]:
@@ -152,11 +189,11 @@ class CaptureTests(unittest.TestCase):
             with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as temporary:
                 result, commands, _ = self.run_capture(Path(temporary), *arguments, config=config)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                _, capture, _, cleanup = commands
+                _, capture, _, _, cleanup = commands
                 for name, value in expected.items():
                     if name == "frames":
                         self.assertEqual(capture[capture.index("--frames") + 1], value)
-                        self.assertEqual(cleanup[-1], f"1..{value}")
+                        self.assertEqual(cleanup[-1], f"1-{value}")
                     else:
                         self.assertIn(f"{name}{value}", capture)
 
