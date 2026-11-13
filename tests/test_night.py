@@ -6,7 +6,7 @@ import numpy as np
 from astropy import units as u
 from astropy.coordinates import EarthLocation
 
-from lib import night
+from astrophoto.lib import night
 
 STONEHENGE = EarthLocation.from_geodetic(-1.83 * u.deg, 51.18 * u.deg, 0.1 * u.km)
 

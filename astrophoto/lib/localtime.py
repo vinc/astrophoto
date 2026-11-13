@@ -1,6 +1,29 @@
 from datetime import datetime
+import os
+from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateparser.date import DateDataParser
+
+
+def local_timezone():
+    """The system timezone as an IANA zone, so each date gets its own UTC offset"""
+    names = [os.environ.get("TZ", "").removeprefix(":")]
+    try:
+        names.append(str(Path("/etc/localtime").resolve()).partition("/zoneinfo/")[2])
+    except OSError:
+        pass
+    try:
+        names.append(Path("/etc/timezone").read_text().strip())
+    except OSError:
+        pass
+    for name in names:
+        if name:
+            try:
+                return ZoneInfo(name)
+            except (ZoneInfoNotFoundError, ValueError):
+                pass
+    return ZoneInfo("UTC")
 
 
 def parse_local_time(text, now=None):

@@ -10,10 +10,10 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-import weather
+from astrophoto import weather
 from tests.test_localtime import local_time_zone
 
-ARGS = ["weather.py", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10"]
+ARGS = ["weather.py", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "100"]
 
 def response(hourly, status=200):
     mock = Mock(ok=status == 200, status_code=status)
@@ -87,7 +87,7 @@ class RequestTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as cache, patch.object(weather, "CACHE", Path(cache)), \
                 patch.object(weather.requests, "get", return_value=response({}, status=400)):
             with self.assertRaisesRegex(SystemExit, "Bad model"):
-                weather.fetch_forecast(51.18, -1.83, 0.1, datetime(2026, 12, 21, tzinfo=timezone.utc), 2, "nope")
+                weather.fetch_forecast(51.18, -1.83, 100, datetime(2026, 12, 21, tzinfo=timezone.utc), 2, "nope")
 
 class CacheTest(unittest.TestCase):
     def setUp(self):

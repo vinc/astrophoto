@@ -9,8 +9,8 @@ from unittest.mock import patch
 import numpy as np
 from astropy.io import fits
 
-from lib import camera
-import stack
+from astrophoto.lib import camera
+from astrophoto import stack
 
 def response_map():
     y, x = np.mgrid[:16, :20]

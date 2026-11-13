@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -14,8 +12,9 @@ import requests
 from astropy import units as u
 from astropy.coordinates import EarthLocation
 
-from lib.localtime import parse_local_time
-from lib.night import MAX_HOURS, NIGHT, first_night, sun_altitude
+from astrophoto.lib.config import add_observer_arguments
+from astrophoto.lib.localtime import parse_local_time
+from astrophoto.lib.night import MAX_HOURS, NIGHT, first_night, sun_altitude
 
 API = "https://api.open-meteo.com/v1/forecast"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "weather"
@@ -88,7 +87,7 @@ def fetch_forecast(latitude, longitude, elevation, start, hours, model, update=F
     hourly = cached_download({
         "latitude": latitude,
         "longitude": longitude,
-        "elevation": elevation * 1000,
+        "elevation": elevation,
         "hourly": ",".join(VARIABLES),
         "models": model,
         "wind_speed_unit": "ms",
@@ -180,9 +179,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Hourly weather forecast for an imaging session, from Open-Meteo"
     )
-    parser.add_argument("--latitude", type=float, required=True, help="Observer latitude in degrees")
-    parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
-    parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
+    add_observer_arguments(parser)
     parser.add_argument("--time", help='Local time in ISO format or words like "tomorrow night" (default: now)')
     parser.add_argument("--update", action="store_true",
                         help=f"Download a fresh forecast even if one less than {MAX_AGE.total_seconds() / 60:.0f} minutes old is cached")
@@ -192,7 +189,7 @@ def main():
 
     start = parse_time(args.time)
     location = EarthLocation.from_geodetic(
-        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.km,
+        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.m,
     )
     hours = [start + timedelta(hours=hour) for hour in range(MAX_HOURS)]
     night = first_night(sun_altitude(hours, location))

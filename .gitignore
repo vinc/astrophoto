@@ -1,3 +1,2 @@
 __pycache__/
-index/*.fits
-index/*.json
+*.egg-info/

@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import warnings
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import matplotlib
 matplotlib.use("Agg")
@@ -18,7 +19,7 @@ from astropy.table import Table
 from astropy.time import Time
 from astropy.wcs import WCS
 
-import chart
+from astrophoto import chart
 
 def make_header(ra=56.75, dec=24.1, angle=15, scale=0.00123, size=(3504, 2336)):
     wcs = WCS(naxis=2)
@@ -195,10 +196,10 @@ class ChartTests(unittest.TestCase):
         (self.path / "stars.6.json").unlink()
         with self.assertRaises(SystemExit) as raised:
             self.render([chart.footprint(make_header())])
-        self.assertIn("download.sh", str(raised.exception))
+        self.assertIn("astrophoto download", str(raised.exception))
 
 class DescribeTimesTests(unittest.TestCase):
-    paris = chart.ZoneInfo("Europe/Paris")
+    paris = ZoneInfo("Europe/Paris")
 
     def test_times_are_shown_on_the_camera_clock(self):
         self.assertEqual(chart.describe_times([Time("2026-11-06T19:12:00")], self.paris), "2026-11-06 20:12 CET")
@@ -268,7 +269,7 @@ class ChartCommandTests(unittest.TestCase):
             os.chdir(temporary)
             try:
                 self.run_main(
-                    [*paths, "--query", "Vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10"],
+                    [*paths, "--query", "Vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "100"],
                     solve_image={"side_effect": lambda path, *args, **kwargs: path},
                     get_ephemerides={"side_effect": ephemerides},
                     draw_chart={"side_effect": draw},
@@ -302,7 +303,7 @@ class ChartCommandTests(unittest.TestCase):
                 fits.writeto(path, np.zeros((20, 30), dtype=np.float32), header)
                 paths.append(str(path))
             output = self.run_main(
-                [*paths, "--query", "vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10",
+                [*paths, "--query", "vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "100",
                  "--output", str(Path(temporary) / "chart.png")],
                 solve_image={"side_effect": lambda path, *args, **kwargs: path},
                 get_ephemerides={"side_effect": ephemerides},

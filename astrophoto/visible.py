@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 from datetime import datetime, timezone
 import json
@@ -16,8 +14,9 @@ from astropy.coordinates import (
 from astropy.time import Time
 from astropy.utils import iers
 
-from lib.localtime import parse_local_time
-from lib.night import night_start
+from astrophoto.lib.config import add_observer_arguments
+from astrophoto.lib.localtime import parse_local_time
+from astrophoto.lib.night import night_start
 
 SBDB = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "minor-bodies.json"
@@ -255,9 +254,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="List Solar System bodies above the horizon, brightest first"
     )
-    parser.add_argument("--latitude", type=float, required=True, help="Observer latitude in degrees")
-    parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
-    parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
+    add_observer_arguments(parser)
     parser.add_argument("--time", help='Local time in ISO format or words like "tonight" (default: now)')
     parser.add_argument("--limit", type=float, default=10, help="Faintest magnitude to list (default: 10)")
     parser.add_argument("--min-altitude", type=float, default=10, help="Lowest altitude in degrees (default: 10)")
@@ -265,7 +262,7 @@ def main():
     args = parser.parse_args()
 
     location = EarthLocation.from_geodetic(
-        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.km,
+        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.m,
     )
     start = parse_local_time(args.time) if args.time else datetime.now(timezone.utc)
     time = Time(night_start(start.replace(second=0, microsecond=0), location))

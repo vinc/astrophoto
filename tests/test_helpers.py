@@ -19,11 +19,11 @@ from astropy.time import Time
 from astropy.utils import iers
 from astropy.wcs import WCS
 
-from lib import camera
-import center
-import convert as conversion
-import focus
-import locate
+from astrophoto.lib import camera
+from astrophoto import center
+from astrophoto import convert as conversion
+from astrophoto import focus
+from astrophoto import locate
 
 def star_field(sigma):
     rng = np.random.default_rng(42)
@@ -345,7 +345,7 @@ class CenterTests(unittest.TestCase):
         self.assertAlmostEqual(result["x"], 350, places=5)
         self.assertAlmostEqual(result["y"], 110, places=5)
 
-    def test_solver_checks_success_marker_and_uses_repository_directory(self):
+    def test_solver_checks_success_marker_and_points_to_the_data_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             path = directory / "frame.fit"
@@ -355,9 +355,36 @@ class CenterTests(unittest.TestCase):
             with patch.object(locate.subprocess, "run") as run:
                 with self.assertRaisesRegex(RuntimeError, "Plate solving failed"):
                     center.solve_image(path, directory, None, 3, 20)
-            self.assertEqual(run.call_args.kwargs["cwd"], locate.ROOT)
             command = run.call_args.args[0]
-            self.assertEqual(command[command.index("--backend-config") + 1], str(locate.ROOT / "astrometry.cfg"))
+            config = Path(command[command.index("--backend-config") + 1])
+            self.assertEqual(config.parent, directory)
+            self.assertEqual(config.read_text(), f"add_path {locate.DATA}\nautoindex\n")
+
+    def test_missing_tools_stop_with_a_clear_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / "frame.fit"
+            fits.writeto(path, np.zeros((50, 50)), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}))
+            with patch.object(locate.subprocess, "run", side_effect=FileNotFoundError("solve-field")):
+                with self.assertRaisesRegex(SystemExit, "^solve-field not found$"):
+                    center.solve_image(path, directory, None, 3, 20)
+            with patch.object(camera.subprocess, "run", side_effect=FileNotFoundError("gphoto2")):
+                with self.assertRaisesRegex(SystemExit, "^gphoto2 not found$"):
+                    camera.capture(directory)
+
+    def test_failed_solve_without_index_files_points_to_download(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / "frame.fit"
+            fits.writeto(path, np.zeros((50, 50)), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}))
+            data = directory / "data"
+            data.mkdir()
+            with patch.object(locate, "DATA", data), patch.object(locate.subprocess, "run"):
+                with self.assertRaisesRegex(RuntimeError, "no astrometry.net index files .* run 'astrophoto download'"):
+                    center.solve_image(path, directory, None, 3, 20)
+                (data / "index-4107.fits").touch()
+                with self.assertRaisesRegex(RuntimeError, "check focus, exposure, indexes"):
+                    center.solve_image(path, directory, None, 3, 20)
 
     def test_solved_input_does_not_invoke_solver(self):
         with tempfile.TemporaryDirectory() as temporary:

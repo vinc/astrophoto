@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 import hashlib
 import json
@@ -11,7 +9,6 @@ import stat
 import subprocess
 import tempfile
 import warnings
-from zoneinfo import ZoneInfo
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -21,11 +18,12 @@ from astropy.time import Time
 from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
 
-from convert import convert
-from lib.camera import display_limits, stack_display_limits
-from lib.color import read_rgb, read_saturation, render_rgb
+from astrophoto.convert import convert
+from astrophoto.lib.camera import display_limits, stack_display_limits
+from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
+from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
 
-ROOT = Path(__file__).resolve().parent
+DATA = data_path()
 EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "horizons"
 
 class PlateSolveError(RuntimeError):
@@ -97,18 +95,24 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
     output = directory / "solved.new"
     marker = directory / "solved.solved"
     marker.unlink(missing_ok=True)
+    config = directory / "astrometry.cfg"
+    config.write_text(f"add_path {DATA}\nautoindex\n")
     try:
         subprocess.run([
-            "solve-field", "--backend-config", str(ROOT / "astrometry.cfg"),
+            "solve-field", "--backend-config", str(config),
             "--scale-units", "degwidth", "--scale-low", str(scale_low),
             "--scale-high", str(scale_high), "--downsample", "2",
             "--no-plots", "--overwrite", "--cpulimit", str(cpu_limit),
             "--dir", str(directory), "--new-fits", str(output),
             "--solved", str(marker), str(path),
-        ], cwd=ROOT, check=True)
+        ], check=True)
+    except FileNotFoundError:
+        raise SystemExit("solve-field not found")
     except subprocess.CalledProcessError as exc:
         raise PlateSolveError(f"Plate solving failed with exit status {exc.returncode}") from exc
     if not marker.exists() or not output.exists():
+        if not any(DATA.glob("index-*.fits")):
+            raise PlateSolveError(f"Plate solving failed; no astrometry.net index files in {DATA}, run 'astrophoto download'")
         raise PlateSolveError("Plate solving failed; check focus, exposure, indexes, and scale limits")
     if not WCS(fits.getheader(output), fix=False).has_celestial:
         raise PlateSolveError("Plate solving returned an image without celestial coordinates")
@@ -289,23 +293,14 @@ def main():
     parser = argparse.ArgumentParser(description="Mark a Solar System body in full-frame images and save PNGs")
     parser.add_argument("files", nargs="+", type=Path, help="Saved RAW or FITS images, including stacks")
     parser.add_argument("--query", required=True, help="Solar System body name or designation")
-    parser.add_argument("--latitude", type=float, required=True, help="Observer latitude in degrees")
-    parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
-    parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
-    parser.add_argument("--timezone", default="Europe/Paris", help="Camera clock timezone (default: Europe/Paris)")
-    parser.add_argument("--scale-low", type=float, default=3, help="Minimum image width in degrees (default: 3)")
-    parser.add_argument("--scale-high", type=float, default=20, help="Maximum image width in degrees (default: 20)")
-    parser.add_argument("--cpu-limit", type=int, default=60, help="Plate-solving CPU limit in seconds (default: 60)")
+    add_observer_arguments(parser)
     args = parser.parse_args()
     if not (-90 <= args.latitude <= 90 and -180 <= args.longitude <= 180):
         parser.error("Invalid observer latitude or longitude")
-    if not (0 < args.scale_low < args.scale_high):
-        parser.error("Scale limits must satisfy 0 < --scale-low < --scale-high")
-    if args.cpu_limit <= 0:
-        parser.error("--cpu-limit must be positive")
+    scale_low, scale_high = solve_scale(parser)
 
-    timezone = ZoneInfo(args.timezone)
-    observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
+    timezone = camera_timezone(parser)
+    observer = observer_location(args)
     failed = False
     with tempfile.TemporaryDirectory(prefix="astrophoto-locate-") as temporary:
         observations = []
@@ -314,8 +309,8 @@ def main():
                 directory = Path(temporary) / str(index)
                 directory.mkdir()
                 solved = solve_image(
-                    path, directory, timezone, args.scale_low, args.scale_high,
-                    cpu_limit=args.cpu_limit, keep_solution=True,
+                    path, directory, timezone, scale_low, scale_high,
+                    keep_solution=True,
                 )
                 header = fits.getheader(solved)
                 time = Time(header["DATE-AVG"], format="isot", scale="utc")

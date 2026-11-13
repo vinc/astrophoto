@@ -34,7 +34,10 @@ def capture(directory, shutterspeed=None):
         "--capture-image-and-download",
         "--filename", str(directory / "capture.%C"),
     ]
-    subprocess.run(command, check=True)
+    try:
+        subprocess.run(command, check=True)
+    except FileNotFoundError:
+        raise SystemExit("gphoto2 not found")
     files = list(directory.glob("capture.*"))
     if len(files) != 1:
         raise RuntimeError("Expected one downloaded RAW image")

@@ -1,11 +1,8 @@
-#!/usr/bin/env python3
-
 import argparse
 from pathlib import Path
 import subprocess
 import tempfile
 import time
-from zoneinfo import ZoneInfo
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,8 +13,9 @@ from astropy.time import Time
 from astropy.utils import iers
 from astropy.wcs import NoConvergence, WCS
 
-from lib.camera import capture, display_limits, preview_figure, read_image
-from locate import PlateSolveError, get_ephemerides, solve_image
+from astrophoto.lib.camera import capture, display_limits, preview_figure, read_image
+from astrophoto.lib.config import add_observer_arguments, camera_timezone, observer_location, solve_scale
+from astrophoto.locate import PlateSolveError, get_ephemerides, solve_image
 
 def pointing_offset(center, target, time, observer, target_time=None):
     location = EarthLocation.from_geodetic(
@@ -125,13 +123,7 @@ def main():
     target.add_argument("--query", help="Solar System body name or designation")
     target.add_argument("--ra", type=float, help="Fixed ICRS right ascension in degrees; requires --dec")
     parser.add_argument("--dec", type=float, help="Fixed ICRS declination in degrees")
-    parser.add_argument("--latitude", type=float, required=True, help="Observer latitude in degrees")
-    parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
-    parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
-    parser.add_argument("--timezone", default="Europe/Paris", help="Camera clock timezone (default: Europe/Paris)")
-    parser.add_argument("--scale-low", type=float, default=3, help="Minimum image width in degrees (default: 3)")
-    parser.add_argument("--scale-high", type=float, default=20, help="Maximum image width in degrees (default: 20)")
-    parser.add_argument("--cpu-limit", type=int, default=60, help="Plate-solving CPU limit in seconds (default: 60)")
+    add_observer_arguments(parser)
     parser.add_argument("--shutterspeed", help="Optional gphoto2 shutter speed for new captures")
     parser.add_argument("--loop", action="store_true", help="Repeat new captures until Ctrl-C or the window is closed")
     preview = parser.add_mutually_exclusive_group()
@@ -145,15 +137,12 @@ def main():
         parser.error("--ra must be in [0, 360) and --dec in [-90, 90]")
     if not (-90 <= args.latitude <= 90 and -180 <= args.longitude <= 180):
         parser.error("Invalid observer latitude or longitude")
-    if not (0 < args.scale_low < args.scale_high):
-        parser.error("Scale limits must satisfy 0 < --scale-low < --scale-high")
-    if args.cpu_limit <= 0:
-        parser.error("--cpu-limit must be positive")
+    scale_low, scale_high = solve_scale(parser)
     if args.loop and args.file:
         parser.error("--loop requires new captures, so omit the input file")
 
-    timezone = ZoneInfo(args.timezone)
-    observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
+    timezone = camera_timezone(parser)
+    observer = observer_location(args)
     coordinates = None if args.ra is None else (args.ra, args.dec)
     query = args.query or f"RA {args.ra:g}, Dec {args.dec:g}"
     interactive = not args.no_plot and (args.file is None or args.plot)
@@ -168,8 +157,8 @@ def main():
                 try:
                     path = args.file or capture(temporary, args.shutterspeed)
                     solved = solve_image(
-                        path, temporary, timezone, args.scale_low, args.scale_high,
-                        cpu_limit=args.cpu_limit, keep_solution=args.file is not None,
+                        path, temporary, timezone, scale_low, scale_high,
+                        keep_solution=args.file is not None,
                     )
                 except (PlateSolveError, subprocess.CalledProcessError) as exc:
                     if not args.loop:

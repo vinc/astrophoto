@@ -1,11 +1,8 @@
-#!/usr/bin/env python3
-
 import argparse
 import json
 from pathlib import Path
 import re
 import tempfile
-from zoneinfo import ZoneInfo
 
 import matplotlib
 from matplotlib import patheffects
@@ -16,9 +13,10 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
-from locate import ROOT, get_ephemerides, solve_image
+from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
+from astrophoto.locate import get_ephemerides, solve_image
 
-CATALOG = ROOT / "index"
+CATALOG = data_path()
 WIDTH, HEIGHT = 1200, 900
 WIDE = 120
 SPREAD = 150
@@ -132,7 +130,7 @@ def chart_wcs(center, fov):
 def load_features(name):
     path = CATALOG / name
     if not path.exists():
-        raise SystemExit(f"Missing {path}; run 'sh index/download.sh'")
+        raise SystemExit(f"Missing {path}; run 'astrophoto download'")
     with path.open() as file:
         return json.load(file)["features"]
 
@@ -268,13 +266,7 @@ def main():
     parser.add_argument("--magnitude", type=float, default=6.0, help="Faintest star magnitude, up to 6 (default: 6)")
     parser.add_argument("--output", type=Path, help="PNG path (default: next to a single image, or <kind>-chart-NNNN.png in the current directory)")
     parser.add_argument("--query", help="Solar System body to mark at each image time")
-    parser.add_argument("--latitude", type=float, help="Observer latitude in degrees, with --query")
-    parser.add_argument("--longitude", type=float, help="Observer longitude in degrees, with --query")
-    parser.add_argument("--elevation", type=float, help="Observer elevation in km, with --query")
-    parser.add_argument("--timezone", default="Europe/Paris", help="Camera clock timezone (default: Europe/Paris)")
-    parser.add_argument("--scale-low", type=float, default=3, help="Minimum image width in degrees (default: 3)")
-    parser.add_argument("--scale-high", type=float, default=20, help="Maximum image width in degrees (default: 20)")
-    parser.add_argument("--cpu-limit", type=int, default=60, help="Plate-solving CPU limit in seconds (default: 60)")
+    add_observer_arguments(parser, required=False, note=", with --query")
     args = parser.parse_args()
     observer_given = [value is not None for value in (args.latitude, args.longitude, args.elevation)]
     if args.query and not all(observer_given):
@@ -283,12 +275,9 @@ def main():
         parser.error("Invalid observer latitude or longitude")
     if args.fov is not None and not (0 < args.fov <= 360):
         parser.error("--fov must be between 0 and 360 degrees")
-    if not (0 < args.scale_low < args.scale_high):
-        parser.error("Scale limits must satisfy 0 < --scale-low < --scale-high")
-    if args.cpu_limit <= 0:
-        parser.error("--cpu-limit must be positive")
+    scale_low, scale_high = solve_scale(parser)
 
-    timezone = ZoneInfo(args.timezone)
+    timezone = camera_timezone(parser)
     failed = False
     observations = []
     with tempfile.TemporaryDirectory(prefix="astrophoto-chart-") as temporary:
@@ -297,8 +286,8 @@ def main():
                 directory = Path(temporary) / str(index)
                 directory.mkdir()
                 solved = solve_image(
-                    path, directory, timezone, args.scale_low, args.scale_high,
-                    cpu_limit=args.cpu_limit, keep_solution=True,
+                    path, directory, timezone, scale_low, scale_high,
+                    keep_solution=True,
                 )
                 header = fits.getheader(solved)
                 time = Time(header["DATE-AVG"], format="isot", scale="utc")
@@ -314,7 +303,7 @@ def main():
 
     track = None
     if args.query:
-        observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
+        observer = observer_location(args)
         result = get_ephemerides(args.query, observer, [observation[3].jd for observation in observations])
         if len(result) != len(observations):
             raise SystemExit("Horizons returned a different number of epochs than requested")

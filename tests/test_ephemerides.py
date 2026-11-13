@@ -8,7 +8,7 @@ from unittest.mock import patch
 from astropy import units as u
 from astropy.table import Table
 
-import locate
+from astrophoto import locate
 
 class EphemerisCacheTests(unittest.TestCase):
     def setUp(self):
