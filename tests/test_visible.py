@@ -12,6 +12,7 @@ import requests
 from astropy.time import Time
 
 import visible
+from tests.test_localtime import local_time_zone
 
 ARGS = ["visible.py", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10"]
 
@@ -119,6 +120,26 @@ class MainTest(unittest.TestCase):
         self.assertEqual([row.split()[-1] for row in rows], ["Saturn", "Uranus", "Neptune"])
         magnitudes = [float(row.split()[0]) for row in rows]
         self.assertEqual(magnitudes, sorted(magnitudes))
+
+    def test_time_is_local(self):
+        data = cache_data(Time.now().isot)
+        argv = ARGS + ["--time", "2026-11-07T21:11"]
+        with local_time_zone("Europe/Paris"), \
+                patch.object(visible, "load_minor_bodies", return_value=data), \
+                patch.object(sys, "argv", argv), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout:
+            visible.main()
+        self.assertTrue(stdout.getvalue().startswith("2026-11-07 21:11 CET, Sun at"))
+
+    def test_daytime_moves_to_the_start_of_the_night(self):
+        data = cache_data(Time.now().isot)
+        argv = ARGS + ["--time", "2026-12-21T14:00"]
+        with local_time_zone("Europe/Paris"), \
+                patch.object(visible, "load_minor_bodies", return_value=data), \
+                patch.object(sys, "argv", argv), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout:
+            visible.main()
+        self.assertTrue(stdout.getvalue().startswith("2026-12-21 18:25 CET, Sun at -12 degrees"))
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,7 +16,7 @@ from astropy.visualization import ZScaleInterval
 from astropy.wcs import WCS
 
 import locate
-from camera import stack_display_limits
+from lib.camera import stack_display_limits
 
 def make_header(shape, date):
     wcs = WCS(naxis=2)

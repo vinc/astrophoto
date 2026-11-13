@@ -12,7 +12,7 @@ from astropy.nddata import Cutout2D
 from astropy.stats import sigma_clipped_stats
 from scipy.ndimage import label
 
-from camera import capture, display_limits, preview_figure, read_image
+from lib.camera import capture, display_limits, preview_figure, read_image
 
 class FocusRangeError(ValueError):
     pass

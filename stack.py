@@ -15,8 +15,8 @@ from scipy.ndimage import binary_dilation
 from scipy.signal import savgol_filter
 from skimage.transform import warp
 
-from camera import stack_display_limits
-from color import BAYER_PATTERNS, bin_rgb, color_metadata, luminance, rgb_display_header, render_rgb, saturation_flags
+from lib.camera import stack_display_limits
+from lib.color import BAYER_PATTERNS, bin_rgb, color_metadata, luminance, rgb_display_header, render_rgb, saturation_flags
 
 DEBAND_WINDOW = 65
 

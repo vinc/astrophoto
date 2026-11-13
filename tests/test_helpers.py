@@ -19,7 +19,7 @@ from astropy.time import Time
 from astropy.utils import iers
 from astropy.wcs import WCS
 
-import camera
+from lib import camera
 import center
 import convert as conversion
 import focus

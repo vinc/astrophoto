@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,9 @@ from astropy.coordinates import (
 )
 from astropy.time import Time
 from astropy.utils import iers
+
+from lib.localtime import parse_local_time
+from lib.night import night_start
 
 SBDB = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "minor-bodies.json"
@@ -254,16 +258,17 @@ def main():
     parser.add_argument("--latitude", type=float, required=True, help="Observer latitude in degrees")
     parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
     parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
-    parser.add_argument("--time", help="UTC time in ISO format (default: now)")
+    parser.add_argument("--time", help='Local time in ISO format or words like "tonight" (default: now)')
     parser.add_argument("--limit", type=float, default=10, help="Faintest magnitude to list (default: 10)")
     parser.add_argument("--min-altitude", type=float, default=10, help="Lowest altitude in degrees (default: 10)")
     parser.add_argument("--update", action="store_true", help="Download fresh orbital elements from JPL")
     args = parser.parse_args()
 
-    time = Time(args.time, scale="utc") if args.time else Time.now()
     location = EarthLocation.from_geodetic(
         args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.km,
     )
+    start = parse_local_time(args.time) if args.time else datetime.now(timezone.utc)
+    time = Time(night_start(start.replace(second=0, microsecond=0), location))
     data = load_minor_bodies(args.update)
 
     # Bundled Earth rotation data is plenty for this, even when slightly out of date
@@ -284,7 +289,7 @@ def main():
         "astronomical twilight" if sun.alt.deg > -18 else "dark sky"
     )
     age = (Time.now() - Time(data["downloaded"])).jd
-    print(f"{time.utc.iso[:16]} UTC, Sun at {sun.alt.deg:.0f} degrees ({sky})")
+    print(f"{time.to_datetime(timezone.utc).astimezone():%Y-%m-%d %H:%M %Z}, Sun at {sun.alt.deg:.0f} degrees ({sky})")
     days = round(age)
     print(f"Orbital elements downloaded {data['downloaded'][:10]} ({days} day{'' if days == 1 else 's'} ago)")
     if args.limit > ASTEROID_H_LIMIT + 2:
