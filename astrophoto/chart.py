@@ -14,7 +14,7 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
-from astrophoto.lib.config import add_observer_arguments, data_path
+from astrophoto.lib.config import add_observer_arguments, data_path, observer_location
 from astrophoto.locate import get_ephemerides, solve_image
 
 CATALOG = data_path()
@@ -311,7 +311,7 @@ def main():
 
     track = None
     if args.query:
-        observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
+        observer = observer_location(args)
         result = get_ephemerides(args.query, observer, [observation[3].jd for observation in observations])
         if len(result) != len(observations):
             raise SystemExit("Horizons returned a different number of epochs than requested")

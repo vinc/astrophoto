@@ -14,7 +14,7 @@ from astropy.time import Time
 from astrophoto import visible
 from tests.test_localtime import local_time_zone
 
-ARGS = ["visible.py", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10"]
+ARGS = ["visible.py", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "100"]
 
 def cache_data(downloaded):
     return {"downloaded": downloaded, "asteroids": [], "comets": []}

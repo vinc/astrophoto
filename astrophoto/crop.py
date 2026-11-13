@@ -8,7 +8,7 @@ import matplotlib
 from astropy.io import fits
 from astropy.time import Time
 
-from astrophoto.lib.config import add_observer_arguments
+from astrophoto.lib.config import add_observer_arguments, observer_location
 from astrophoto.locate import get_ephemerides, save_image, solve_image
 
 def crop_image(path, radius, ra, dec, time, query, target_name=None, source_path=None):
@@ -75,11 +75,7 @@ def main():
     if not observations:
         raise SystemExit("No valid observations")
 
-    observer = {
-        "lon": args.longitude,
-        "lat": args.latitude,
-        "elevation": args.elevation,
-    }
+    observer = observer_location(args)
 
     # Horizons returns discrete epochs in chronological order
     observations.sort(key=lambda observation: observation[2].jd)

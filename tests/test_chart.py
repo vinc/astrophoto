@@ -268,7 +268,7 @@ class ChartCommandTests(unittest.TestCase):
             os.chdir(temporary)
             try:
                 self.run_main(
-                    [*paths, "--query", "Vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10"],
+                    [*paths, "--query", "Vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "100"],
                     solve_image={"side_effect": lambda path, *args, **kwargs: path},
                     get_ephemerides={"side_effect": ephemerides},
                     draw_chart={"side_effect": draw},
@@ -302,7 +302,7 @@ class ChartCommandTests(unittest.TestCase):
                 fits.writeto(path, np.zeros((20, 30), dtype=np.float32), header)
                 paths.append(str(path))
             output = self.run_main(
-                [*paths, "--query", "vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10",
+                [*paths, "--query", "vesta", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "100",
                  "--output", str(Path(temporary) / "chart.png")],
                 solve_image={"side_effect": lambda path, *args, **kwargs: path},
                 get_ephemerides={"side_effect": ephemerides},

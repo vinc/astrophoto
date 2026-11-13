@@ -15,7 +15,7 @@ from astropy.utils import iers
 from astropy.wcs import NoConvergence, WCS
 
 from astrophoto.lib.camera import capture, display_limits, preview_figure, read_image
-from astrophoto.lib.config import add_observer_arguments
+from astrophoto.lib.config import add_observer_arguments, observer_location
 from astrophoto.locate import PlateSolveError, get_ephemerides, solve_image
 
 def pointing_offset(center, target, time, observer, target_time=None):
@@ -150,7 +150,7 @@ def main():
         parser.error("--loop requires new captures, so omit the input file")
 
     timezone = ZoneInfo(args.timezone)
-    observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
+    observer = observer_location(args)
     coordinates = None if args.ra is None else (args.ra, args.dec)
     query = args.query or f"RA {args.ra:g}, Dec {args.dec:g}"
     interactive = not args.no_plot and (args.file is None or args.plot)

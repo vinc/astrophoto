@@ -22,7 +22,7 @@ from astroquery.jplhorizons import Horizons
 from astrophoto.convert import convert
 from astrophoto.lib.camera import display_limits, stack_display_limits
 from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
-from astrophoto.lib.config import add_observer_arguments, data_path
+from astrophoto.lib.config import add_observer_arguments, data_path, observer_location
 
 DATA = data_path()
 EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "horizons"
@@ -306,7 +306,7 @@ def main():
         parser.error("--cpu-limit must be positive")
 
     timezone = ZoneInfo(args.timezone)
-    observer = {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation}
+    observer = observer_location(args)
     failed = False
     with tempfile.TemporaryDirectory(prefix="astrophoto-locate-") as temporary:
         observations = []

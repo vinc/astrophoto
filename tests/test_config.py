@@ -66,7 +66,11 @@ class ConfigTests(unittest.TestCase):
         self.write("latitude = 51.18\nlongitude = -1.83\n")
         with self.assertRaisesRegex(AssertionError, "required: --elevation$"):
             self.parse()
-        self.assertEqual(self.parse("--elevation", "0.1").elevation, 0.1)
+        self.assertEqual(self.parse("--elevation", "100").elevation, 100.0)
+
+    def test_horizons_location_takes_the_elevation_in_km(self):
+        args = argparse.Namespace(latitude=51.18, longitude=-1.83, elevation=100.0)
+        self.assertEqual(config.observer_location(args), {"lon": -1.83, "lat": 51.18, "elevation": 0.1})
 
     def test_invalid_config_fails_clearly(self):
         for text, message in [
@@ -80,7 +84,7 @@ class ConfigTests(unittest.TestCase):
                     self.parse()
 
     def test_commands_take_the_observer_from_the_config(self):
-        self.write("latitude = 51.18\nlongitude = -1.83\nelevation = 0.1\n")
+        self.write("latitude = 51.18\nlongitude = -1.83\nelevation = 100\n")
         for name in COMMANDS:
             with self.subTest(command=name):
                 module = importlib.import_module(f"astrophoto.{name}")

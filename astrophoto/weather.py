@@ -87,7 +87,7 @@ def fetch_forecast(latitude, longitude, elevation, start, hours, model, update=F
     hourly = cached_download({
         "latitude": latitude,
         "longitude": longitude,
-        "elevation": elevation * 1000,
+        "elevation": elevation,
         "hourly": ",".join(VARIABLES),
         "models": model,
         "wind_speed_unit": "ms",
@@ -189,7 +189,7 @@ def main():
 
     start = parse_time(args.time)
     location = EarthLocation.from_geodetic(
-        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.km,
+        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.m,
     )
     hours = [start + timedelta(hours=hour) for hour in range(MAX_HOURS)]
     night = first_night(sun_altitude(hours, location))

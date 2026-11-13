@@ -262,7 +262,7 @@ def main():
     args = parser.parse_args()
 
     location = EarthLocation.from_geodetic(
-        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.km,
+        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.m,
     )
     start = parse_local_time(args.time) if args.time else datetime.now(timezone.utc)
     time = Time(night_start(start.replace(second=0, microsecond=0), location))

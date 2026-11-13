@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import tomllib
 
-OBSERVER = {"latitude": "degrees", "longitude": "degrees", "elevation": "km"}
+OBSERVER = {"latitude": "degrees", "longitude": "degrees", "elevation": "meters"}
 
 
 def config_path():
@@ -20,6 +20,11 @@ def load_config(path=None):
             return tomllib.load(file)
     except FileNotFoundError:
         return {}
+
+
+def observer_location(args):
+    # JPL Horizons takes the elevation in km
+    return {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation / 1000}
 
 
 def add_observer_arguments(parser, required=True, note=""):
