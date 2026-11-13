@@ -5,7 +5,7 @@ A personal collection of mostly vibe coded astrophotography scripts.
 ## Setup
 
 ```sh
-pip install -e .
+pip install -r requirements.txt
 sh index/download.sh
 ```
 
@@ -16,7 +16,7 @@ sh index/download.sh
 Prepare a session by checking the weather forecast for the night:
 
 ```
-$ astrophoto weather --latitude 51.18 --longitude -1.83 --elevation 0.10
+$ python weather.py --latitude 51.18 --longitude -1.83 --elevation 0.10
 Date         Thu 12  Fri 13
 Time (h)     22  23   0   1   2   3   4   5   6   7
 ---------------------------------------------------
@@ -37,7 +37,7 @@ Rain (mm)     0   0   0   0   0   0   0   0   0   0
 Check what is currently visible:
 
 ```
-$ astrophoto visible --latitude 51.18 --longitude -1.83 --elevation 0.10
+$ python visible.py --latitude 51.18 --longitude -1.83 --elevation 0.10
 2026-11-12 22:53 CET, Sun at -49 degrees (dark sky)
 Orbital elements downloaded 2026-11-12 (0 days ago)
 Bodies above 10 degrees and brighter than magnitude 10:
@@ -60,16 +60,16 @@ Focus and center the camera, capture a sequence of raw pictures (light, dark,
 and flat frames), and convert the CR2 files into FITS files:
 
 ```sh
-astrophoto focus
-astrophoto center \
+python focus.py
+python center.py \
     --latitude 51.18 \
     --longitude -1.83 \
     --elevation 0.10 \
     --query vesta
-astrophoto capture light
-astrophoto capture dark
-astrophoto capture flat
-astrophoto convert 2026*/*.CR2
+sh capture.sh light
+sh capture.sh dark
+sh capture.sh flat
+python convert.py 2026*/*.CR2
 ```
 
 ### After a session
@@ -77,7 +77,7 @@ astrophoto convert 2026*/*.CR2
 Stack the FITS files in a directory with optional dark and flat frames:
 
 ```sh
-astrophoto stack 20261221-2149-light \
+python stack.py 20261221-2149-light \
     --dark 20261221-*-dark/*.fit \
     --flat 20261221-*-flat/*.fit
 ```
@@ -88,7 +88,7 @@ and `--rgb` to render an RGB image.
 Mark an object in the full image:
 
 ```sh
-astrophoto locate 2026*/*-stack.fit \
+python locate.py 2026*/*-stack.fit \
     --latitude 51.18 \
     --longitude -1.83 \
     --elevation 0.10 \
@@ -98,7 +98,7 @@ astrophoto locate 2026*/*-stack.fit \
 Crop a major or minor body from one or more images:
 
 ```sh
-astrophoto crop 2026*/*.fit \
+python crop.py 2026*/*.fit \
     --latitude 51.18 \
     --longitude -1.83 \
     --elevation 0.10 \
@@ -108,7 +108,7 @@ astrophoto crop 2026*/*.fit \
 Draw a star chart around one or more images with an optional filter query:
 
 ```sh
-astrophoto chart 2026*/*-stack.fit \
+python chart.py 2026*/*-stack.fit \
     --latitude 51.18 \
     --longitude -1.83 \
     --elevation 0.10 \
