@@ -9,9 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class CaptureTests(unittest.TestCase):
     def run_capture(self, directory, *arguments, fail_stage="", config=None, camera_files="",
-                    captured="", downloaded="", empty=""):
+                    captured="", downloaded="", empty="", first_folder=""):
         # Fake camera: --capture-image stores the frame count, which --list-files and
-        # --get-all-files then report and download, unless CAPTURED or DOWNLOADED override it
+        # --get-all-files then report and download, unless CAPTURED or DOWNLOADED override it;
+        # past FIRST_FOLDER frames, the rest are listed in the next folder
         executable = directory / "bin" / "gphoto2"
         executable.parent.mkdir(exist_ok=True)
         executable.write_text(
@@ -26,8 +27,13 @@ class CaptureTests(unittest.TestCase):
             '  *" --list-files "*)\n'
             '    printf "%b" "$CAMERA_FILES"\n'
             '    if [ -f "$CAMERA_STATE" ]; then\n'
-            '      i=1; n=$(cat "$CAMERA_STATE")\n'
-            '      while [ $i -le $n ]; do printf "#%d     IMG_%04d.CR2  rd  8341 KB image/x-canon-cr2\\n" $i $i; i=$((i + 1)); done\n'
+            '      n=$(cat "$CAMERA_STATE"); first=${FIRST_FOLDER:-$n}\n'
+            '      for folder in 100CANON 101CANON; do\n'
+            '        if [ $folder = 100CANON ]; then count=$first; else count=$((n - first)); fi\n'
+            '        [ $count -gt 0 ] || continue\n'
+            '        printf "There are %d files in folder \'/DCIM/%s\':\\n" $count $folder\n'
+            '        i=1; while [ $i -le $count ]; do printf "#%d     IMG_%04d.CR2  rd  8341 KB image/x-canon-cr2\\n" $i $i; i=$((i + 1)); done\n'
+            '      done\n'
             '    fi ;;\n'
             '  *" --capture-image "*) echo "${CAPTURED:-$frames}" > "$CAMERA_STATE" ;;\n'
             '  *" --get-all-files "*)\n'
@@ -49,7 +55,8 @@ class CaptureTests(unittest.TestCase):
             env=dict(os.environ, PATH=f"{executable.parent}:{os.environ['PATH']}", PYTHONPATH=str(ROOT),
                      XDG_CONFIG_HOME=str(settings), CAPTURE_ARGUMENTS=str(log), FAIL_STAGE=fail_stage,
                      CAMERA_FILES=camera_files, CAMERA_STATE=str(directory / "camera"),
-                     CAPTURED=str(captured), DOWNLOADED=str(downloaded), EMPTY=str(empty)),
+                     CAPTURED=str(captured), DOWNLOADED=str(downloaded), EMPTY=str(empty),
+                     FIRST_FOLDER=str(first_folder)),
             capture_output=True, text=True,
         )
         arguments = [call.splitlines() for call in log.read_text().split("CALL\n")[1:]] if log.exists() else []
@@ -83,6 +90,22 @@ class CaptureTests(unittest.TestCase):
                     f"{folders[0].name}/%Y%m%d-%H%M%S.%C", "--get-all-files",
                 ])
                 self.assertEqual(cleanup, ["--folder", "/DCIM/100CANON", "--delete-file", "1-20"])
+
+    def test_a_series_split_across_folders_is_deleted_from_both(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, folders = self.run_capture(Path(temporary), first_folder=12)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(list(folders[0].iterdir())), 20)
+            self.assertEqual(commands[-2:], [
+                ["--folder", "/DCIM/100CANON", "--delete-file", "1-12"],
+                ["--folder", "/DCIM/101CANON", "--delete-file", "1-8"],
+            ])
+
+    def test_a_series_in_the_next_folder_is_deleted_from_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, _ = self.run_capture(Path(temporary), first_folder=0)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(commands[-1], ["--folder", "/DCIM/101CANON", "--delete-file", "1-20"])
 
     def test_failed_capture_or_download_never_deletes_files(self):
         for stage, expected_calls in [("--capture-image", 2), ("--get-all-files", 3)]:

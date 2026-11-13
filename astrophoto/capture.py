@@ -53,10 +53,20 @@ def capture_settings(parser, kind, options):
 
 
 def files_on_card():
+    """Return the number of files in each camera folder that holds any."""
     result = subprocess.run(["gphoto2", "--list-files"], stdout=subprocess.PIPE, text=True)
     if result.returncode:
         raise SystemExit(result.returncode)
-    return len(re.findall(r"^#\d+\s", result.stdout, re.M))
+    folders, folder = {}, None
+    for line in result.stdout.splitlines():
+        header = re.match(r"There (?:is|are) .* in folder '(.*)'", line)
+        if header:
+            folder = header[1]
+        elif re.match(r"#\d+\s", line):
+            if folder is None:
+                raise SystemExit(f"Unexpected gphoto2 file listing: {line}")
+            folders[folder] = folders.get(folder, 0) + 1
+    return folders
 
 
 def run(command):
@@ -92,7 +102,7 @@ def main():
     if shutil.which("gphoto2") is None:
         raise SystemExit("gphoto2 not found")
     # The pictures are deleted from the card by number once downloaded
-    count = files_on_card()
+    count = sum(files_on_card().values())
     if count:
         raise SystemExit(f"The camera card already holds {count} files; download or delete them before capturing")
 
@@ -123,7 +133,8 @@ def main():
     frames = settings["frames"]
     downloaded = [path for path in directory.iterdir() if path not in before and path.is_file()]
     empty = sum(1 for path in downloaded if path.stat().st_size == 0)
-    on_card = files_on_card()
+    folders = files_on_card()
+    on_card = sum(folders.values())
     if len(downloaded) != frames or empty or on_card != frames:
         details = f", {empty} of them empty" if empty else ""
         raise SystemExit(
@@ -132,7 +143,9 @@ def main():
         )
 
     print("Deleting downloaded pictures from the camera ...", flush=True)
-    run(["gphoto2", "--folder", "/DCIM/100CANON", "--delete-file", f"1-{frames}"])
+    # The camera moves on to a new folder, such as 101CANON, when one fills up mid-series
+    for folder, count in folders.items():
+        run(["gphoto2", "--folder", folder, "--delete-file", f"1-{count}"])
 
 
 if __name__ == "__main__":
