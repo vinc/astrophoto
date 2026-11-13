@@ -21,13 +21,12 @@ def download(session, url, path, progress):
         with session.get(url, stream=True, timeout=60) as response:
             response.raise_for_status()
             total = int(response.headers.get("Content-Length") or 0)
-            done = 0
             with partial.open("wb") as file:
                 for chunk in response.iter_content(1 << 20):
                     file.write(chunk)
-                    done += len(chunk)
                     if progress and total:
-                        print(f"\r{path.name} {100 * done // total}%", end="", flush=True)
+                        # Content-Length counts compressed bytes, as received, not the decoded chunks
+                        print(f"\r{path.name} {100 * response.raw.tell() // total}%", end="", flush=True)
         partial.replace(path)
     finally:
         partial.unlink(missing_ok=True)

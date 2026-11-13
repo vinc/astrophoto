@@ -15,7 +15,10 @@ from astrophoto import download
 class FakeResponse:
     def __init__(self, url, fail):
         self.url, self.fail = url, fail
-        self.headers = {"Content-Length": "6"}
+        # Compressed on the wire: 4 bytes received decode to 6
+        self.headers = {"Content-Length": "4", "Content-Encoding": "gzip"}
+        self.raw = MagicMock()
+        self.raw.tell.side_effect = [2, 4]
 
     def __enter__(self):
         return self
@@ -64,6 +67,16 @@ class DownloadTests(unittest.TestCase):
         self.assertIn("constellations.lines.json", files)
         self.assertEqual((data / "stars.6.json").read_bytes(), b"abcdef")
         self.assertIn(f"Downloading data to {data}", out)
+
+    def test_progress_follows_the_bytes_received(self):
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        session = MagicMock()
+        session.get.return_value = FakeResponse(f"{download.CELESTIAL}/stars.6.json", "")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            download.download(session, "url", directory / "stars.6.json", progress=True)
+        self.assertEqual(out.getvalue(), "\rstars.6.json 50%\rstars.6.json 100%\n")
+        self.assertEqual((directory / "stars.6.json").read_bytes(), b"abcdef")
 
     def test_existing_files_are_kept_and_skipped(self):
         data, urls, _, error = self.run_download(existing=["index-4107.fits", "stars.6.json"])
