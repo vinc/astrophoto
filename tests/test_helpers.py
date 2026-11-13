@@ -360,6 +360,18 @@ class CenterTests(unittest.TestCase):
             self.assertEqual(config.parent, directory)
             self.assertEqual(config.read_text(), f"add_path {locate.DATA}\nautoindex\n")
 
+    def test_missing_tools_stop_with_a_clear_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / "frame.fit"
+            fits.writeto(path, np.zeros((50, 50)), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}))
+            with patch.object(locate.subprocess, "run", side_effect=FileNotFoundError("solve-field")):
+                with self.assertRaisesRegex(SystemExit, "^solve-field not found$"):
+                    center.solve_image(path, directory, None, 3, 20)
+            with patch.object(camera.subprocess, "run", side_effect=FileNotFoundError("gphoto2")):
+                with self.assertRaisesRegex(SystemExit, "^gphoto2 not found$"):
+                    camera.capture(directory)
+
     def test_failed_solve_without_index_files_points_to_download(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

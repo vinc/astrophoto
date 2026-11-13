@@ -106,6 +106,8 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
             "--dir", str(directory), "--new-fits", str(output),
             "--solved", str(marker), str(path),
         ], check=True)
+    except FileNotFoundError:
+        raise SystemExit("solve-field not found")
     except subprocess.CalledProcessError as exc:
         raise PlateSolveError(f"Plate solving failed with exit status {exc.returncode}") from exc
     if not marker.exists() or not output.exists():
