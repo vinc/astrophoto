@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from astrophoto.lib import config
 
@@ -71,6 +72,40 @@ class ConfigTests(unittest.TestCase):
     def test_horizons_location_takes_the_elevation_in_km(self):
         args = argparse.Namespace(latitude=51.18, longitude=-1.83, elevation=100.0)
         self.assertEqual(config.observer_location(args), {"lon": -1.83, "lat": 51.18, "elevation": 0.1})
+
+    def run_helper(self, helper):
+        parser = argparse.ArgumentParser()
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            try:
+                return helper(parser)
+            except SystemExit:
+                raise AssertionError(err.getvalue())
+
+    def test_camera_timezone_defaults_to_the_system_timezone(self):
+        with patch.object(config, "local_timezone", return_value=ZoneInfo("Pacific/Auckland")):
+            self.assertEqual(self.run_helper(config.camera_timezone), ZoneInfo("Pacific/Auckland"))
+            self.write('timezone = "Europe/Paris"\n')
+            self.assertEqual(self.run_helper(config.camera_timezone), ZoneInfo("Europe/Paris"))
+        for text, message in [('timezone = "Mars/Olympus"', "Unknown timezone Mars/Olympus"), ("timezone = 1", "must be a string")]:
+            with self.subTest(text=text):
+                self.write(text)
+                with self.assertRaisesRegex(AssertionError, message):
+                    self.run_helper(config.camera_timezone)
+
+    def test_solve_scale_defaults_and_config(self):
+        self.assertEqual(self.run_helper(config.solve_scale), (3.0, 20.0))
+        self.write("[solve]\nscale_low = 16\n")
+        self.assertEqual(self.run_helper(config.solve_scale), (16.0, 20.0))
+        for text, message in [
+            ("solve = 3", r"\[solve\] in .* must be a table"),
+            ("[solve]\nscale_min = 3", r"Unknown setting scale_min in \[solve\]"),
+            ('[solve]\nscale_low = "3"', r"scale_low in \[solve\] of .* must be a number"),
+            ("[solve]\nscale_low = 20\nscale_high = 16", "0 < scale_low < scale_high"),
+        ]:
+            with self.subTest(text=text):
+                self.write(text)
+                with self.assertRaisesRegex(AssertionError, message):
+                    self.run_helper(config.solve_scale)
 
     def test_invalid_config_fails_clearly(self):
         for text, message in [

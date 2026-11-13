@@ -2,13 +2,13 @@ import argparse
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import exifread
 import rawpy
 from astropy.io import fits
 
 from astrophoto.lib.color import raw_color_metadata
+from astrophoto.lib.config import camera_timezone
 
 def exif_value(tags, key):
     tag = tags.get(key)
@@ -106,13 +106,9 @@ def main():
         "files", nargs="+", type=Path,
         help="CR2 files to convert",
     )
-    parser.add_argument(
-        "--timezone", default="Europe/Paris",
-        help="Camera clock timezone (default: Europe/Paris)",
-    )
     args = parser.parse_args()
 
-    tz = ZoneInfo(args.timezone)
+    tz = camera_timezone(parser)
 
     failed = 0
 

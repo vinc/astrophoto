@@ -9,7 +9,6 @@ import stat
 import subprocess
 import tempfile
 import warnings
-from zoneinfo import ZoneInfo
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -22,7 +21,7 @@ from astroquery.jplhorizons import Horizons
 from astrophoto.convert import convert
 from astrophoto.lib.camera import display_limits, stack_display_limits
 from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
-from astrophoto.lib.config import add_observer_arguments, data_path, observer_location
+from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
 
 DATA = data_path()
 EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "horizons"
@@ -293,19 +292,12 @@ def main():
     parser.add_argument("files", nargs="+", type=Path, help="Saved RAW or FITS images, including stacks")
     parser.add_argument("--query", required=True, help="Solar System body name or designation")
     add_observer_arguments(parser)
-    parser.add_argument("--timezone", default="Europe/Paris", help="Camera clock timezone (default: Europe/Paris)")
-    parser.add_argument("--scale-low", type=float, default=3, help="Minimum image width in degrees (default: 3)")
-    parser.add_argument("--scale-high", type=float, default=20, help="Maximum image width in degrees (default: 20)")
-    parser.add_argument("--cpu-limit", type=int, default=60, help="Plate-solving CPU limit in seconds (default: 60)")
     args = parser.parse_args()
     if not (-90 <= args.latitude <= 90 and -180 <= args.longitude <= 180):
         parser.error("Invalid observer latitude or longitude")
-    if not (0 < args.scale_low < args.scale_high):
-        parser.error("Scale limits must satisfy 0 < --scale-low < --scale-high")
-    if args.cpu_limit <= 0:
-        parser.error("--cpu-limit must be positive")
+    scale_low, scale_high = solve_scale(parser)
 
-    timezone = ZoneInfo(args.timezone)
+    timezone = camera_timezone(parser)
     observer = observer_location(args)
     failed = False
     with tempfile.TemporaryDirectory(prefix="astrophoto-locate-") as temporary:
@@ -315,8 +307,8 @@ def main():
                 directory = Path(temporary) / str(index)
                 directory.mkdir()
                 solved = solve_image(
-                    path, directory, timezone, args.scale_low, args.scale_high,
-                    cpu_limit=args.cpu_limit, keep_solution=True,
+                    path, directory, timezone, scale_low, scale_high,
+                    keep_solution=True,
                 )
                 header = fits.getheader(solved)
                 time = Time(header["DATE-AVG"], format="isot", scale="utc")

@@ -49,13 +49,15 @@ class SolverTests(unittest.TestCase):
             path = directory / "frame.fit"
             fits.writeto(path, np.arange(15000).reshape(100, 150), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}))
             original = path.read_bytes()
+            settings = Path(self.enterContext(tempfile.TemporaryDirectory()))
+            (settings / "astrophoto").mkdir(parents=True)
+            (settings / "astrophoto" / "config.toml").write_text("[solve]\nscale_low = 16\nscale_high = 18\n")
             for module, query in [(crop, "vesta"), (crop, "pallas"), (locate, "vesta")]:
                 argv = [
                     module.__name__ + ".py", str(path), "--query", query,
                     "--latitude", "0", "--longitude", "0", "--elevation", "0",
-                    "--scale-low", "16", "--scale-high", "18", "--cpu-limit", "180",
                 ]
-                with patch.object(sys, "argv", argv), \
+                with patch.object(sys, "argv", argv), patch.dict(os.environ, {"XDG_CONFIG_HOME": str(settings)}), \
                         patch.object(locate.subprocess, "run", side_effect=solve) as solver, \
                         patch.object(module, "get_ephemerides", return_value=result), \
                         contextlib.redirect_stdout(io.StringIO()):
@@ -63,7 +65,7 @@ class SolverTests(unittest.TestCase):
                 if query == "vesta" and module is crop:
                     solver.assert_called_once()
                     command = solver.call_args.args[0]
-                    for option, expected in [("--scale-low", "16.0"), ("--scale-high", "18.0"), ("--cpulimit", "180")]:
+                    for option, expected in [("--scale-low", "16.0"), ("--scale-high", "18.0"), ("--cpulimit", "60")]:
                         self.assertEqual(command[command.index(option) + 1], expected)
                     self.assertFalse(Path(command[command.index("--dir") + 1]).exists())
                 else:

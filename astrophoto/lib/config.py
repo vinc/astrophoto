@@ -1,8 +1,12 @@
 import os
 from pathlib import Path
 import tomllib
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from astrophoto.lib.localtime import local_timezone
 
 OBSERVER = {"latitude": "degrees", "longitude": "degrees", "elevation": "meters"}
+SOLVE = {"scale_low": 3.0, "scale_high": 20.0}
 
 
 def config_path():
@@ -47,3 +51,34 @@ def add_observer_arguments(parser, required=True, note=""):
         if default is not None:
             help += f" (default: {default:g} from config)"
         parser.add_argument(f"--{name}", type=float, default=default, required=required and default is None, help=help)
+
+
+def camera_timezone(parser):
+    # The camera clock is synced from this computer at capture time
+    config, path = read_config(parser)
+    name = config.get("timezone")
+    if name is None:
+        return local_timezone()
+    if not isinstance(name, str):
+        parser.error(f"timezone in {path} must be a string")
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        parser.error(f"Unknown timezone {name} in {path}")
+
+
+def solve_scale(parser):
+    config, path = read_config(parser)
+    table = config.get("solve", {})
+    if not isinstance(table, dict):
+        parser.error(f"[solve] in {path} must be a table")
+    scale = dict(SOLVE)
+    for key, value in table.items():
+        if key not in SOLVE:
+            parser.error(f"Unknown setting {key} in [solve] of {path}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            parser.error(f"{key} in [solve] of {path} must be a number")
+        scale[key] = float(value)
+    if not 0 < scale["scale_low"] < scale["scale_high"]:
+        parser.error(f"[solve] in {path} must satisfy 0 < scale_low < scale_high")
+    return scale["scale_low"], scale["scale_high"]

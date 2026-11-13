@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import warnings
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import matplotlib
 matplotlib.use("Agg")
@@ -198,7 +199,7 @@ class ChartTests(unittest.TestCase):
         self.assertIn("astrophoto download", str(raised.exception))
 
 class DescribeTimesTests(unittest.TestCase):
-    paris = chart.ZoneInfo("Europe/Paris")
+    paris = ZoneInfo("Europe/Paris")
 
     def test_times_are_shown_on_the_camera_clock(self):
         self.assertEqual(chart.describe_times([Time("2026-11-06T19:12:00")], self.paris), "2026-11-06 20:12 CET")

@@ -3,8 +3,11 @@ from datetime import datetime, timezone
 import os
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
+from astrophoto.lib import localtime
 from astrophoto.lib.localtime import parse_local_time
 
 @contextlib.contextmanager
@@ -60,6 +63,19 @@ class ParseLocalTimeTest(unittest.TestCase):
     def test_unknown_time_is_reported(self):
         with self.assertRaisesRegex(SystemExit, "Could not understand the time: soonish"):
             parse_local_time("soonish")
+
+class LocalTimezoneTest(unittest.TestCase):
+    def test_tz_variable_comes_first(self):
+        with patch.dict(os.environ, {"TZ": ":Pacific/Auckland"}):
+            self.assertEqual(localtime.local_timezone(), ZoneInfo("Pacific/Auckland"))
+
+    def test_falls_back_to_the_localtime_link_then_utc(self):
+        resolved = Path("/usr/share/zoneinfo/Europe/Paris")
+        with patch.dict(os.environ, {"TZ": ""}), patch.object(Path, "resolve", return_value=resolved):
+            self.assertEqual(localtime.local_timezone(), ZoneInfo("Europe/Paris"))
+        with patch.dict(os.environ, {"TZ": "Not/AZone"}), patch.object(Path, "resolve", return_value=Path("/etc/localtime")), \
+                patch.object(Path, "read_text", side_effect=OSError):
+            self.assertEqual(localtime.local_timezone(), ZoneInfo("UTC"))
 
 if __name__ == "__main__":
     unittest.main()
