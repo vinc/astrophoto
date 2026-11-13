@@ -109,7 +109,7 @@ class LocateTests(unittest.TestCase):
     def test_importing_shared_locating_code_preserves_the_selected_backend(self):
         result = subprocess.run(
             [sys.executable, "-c", "import matplotlib; import astrophoto.center; import astrophoto.crop; print(matplotlib.get_backend())"],
-            cwd=locate.ROOT,
+            cwd=Path(__file__).resolve().parents[1],
             env=dict(os.environ, MPLBACKEND="svg"),
             capture_output=True, text=True, check=True,
         )

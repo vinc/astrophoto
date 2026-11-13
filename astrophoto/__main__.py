@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 COMMANDS = {
+    "download": "Download plate-solving indexes and star chart data",
     "weather": "Hourly weather forecast for an imaging session",
     "visible": "List Solar System bodies above the horizon",
     "focus": "Measure manual focus from stars",
@@ -15,6 +16,7 @@ COMMANDS = {
     "crop": "Crop a Solar System body from RAW or FITS images",
     "chart": "Draw a star chart locating plate-solved images",
 }
+SCRIPTS = {"capture", "download"}
 
 
 def usage():
@@ -37,8 +39,8 @@ def main(argv=None):
     if command not in COMMANDS:
         print(f"astrophoto: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
-    if command == "capture":
-        script = Path(__file__).with_name("capture.sh")
+    if command in SCRIPTS:
+        script = Path(__file__).with_name(f"{command}.sh")
         return subprocess.run(["sh", str(script), *arguments]).returncode
     module = importlib.import_module(f"astrophoto.{command}")
     sys.argv = [f"astrophoto {command}", *arguments]

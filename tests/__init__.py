@@ -1,5 +1,6 @@
 import os
 import tempfile
 
-# Tests must not pick up the observer from the user's ~/.config/astrophoto/config.toml
-os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp(prefix="astrophoto-tests-")
+# Tests must not depend on the user's config.toml or downloaded data
+for variable in ("XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+    os.environ[variable] = tempfile.mkdtemp(prefix="astrophoto-tests-")

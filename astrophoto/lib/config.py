@@ -9,6 +9,10 @@ def config_path():
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "astrophoto" / "config.toml"
 
 
+def data_path():
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "astrophoto"
+
+
 def load_config(path=None):
     path = config_path() if path is None else path
     try:

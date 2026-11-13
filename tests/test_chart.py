@@ -195,7 +195,7 @@ class ChartTests(unittest.TestCase):
         (self.path / "stars.6.json").unlink()
         with self.assertRaises(SystemExit) as raised:
             self.render([chart.footprint(make_header())])
-        self.assertIn("download.sh", str(raised.exception))
+        self.assertIn("astrophoto download", str(raised.exception))
 
 class DescribeTimesTests(unittest.TestCase):
     paris = chart.ZoneInfo("Europe/Paris")

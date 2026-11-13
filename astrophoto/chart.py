@@ -14,10 +14,10 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
-from astrophoto.lib.config import add_observer_arguments
-from astrophoto.locate import ROOT, get_ephemerides, solve_image
+from astrophoto.lib.config import add_observer_arguments, data_path
+from astrophoto.locate import get_ephemerides, solve_image
 
-CATALOG = ROOT / "index"
+CATALOG = data_path()
 WIDTH, HEIGHT = 1200, 900
 WIDE = 120
 SPREAD = 150
@@ -131,7 +131,7 @@ def chart_wcs(center, fov):
 def load_features(name):
     path = CATALOG / name
     if not path.exists():
-        raise SystemExit(f"Missing {path}; run 'sh index/download.sh'")
+        raise SystemExit(f"Missing {path}; run 'astrophoto download'")
     with path.open() as file:
         return json.load(file)["features"]
 

@@ -41,6 +41,12 @@ class ConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": ""}):
             self.assertEqual(config.config_path(), Path.home() / ".config" / "astrophoto" / "config.toml")
 
+    def test_data_path_follows_xdg_data_home(self):
+        with patch.dict(os.environ, {"XDG_DATA_HOME": "/srv/data"}):
+            self.assertEqual(config.data_path(), Path("/srv/data/astrophoto"))
+        with patch.dict(os.environ, {"XDG_DATA_HOME": ""}):
+            self.assertEqual(config.data_path(), Path.home() / ".local" / "share" / "astrophoto")
+
     def test_missing_file_keeps_observer_required(self):
         self.assertEqual(config.load_config(), {})
         with self.assertRaisesRegex(AssertionError, "required: --latitude, --longitude, --elevation"):

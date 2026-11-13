@@ -22,9 +22,9 @@ from astroquery.jplhorizons import Horizons
 from astrophoto.convert import convert
 from astrophoto.lib.camera import display_limits, stack_display_limits
 from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
-from astrophoto.lib.config import add_observer_arguments
+from astrophoto.lib.config import add_observer_arguments, data_path
 
-ROOT = Path(__file__).resolve().parents[1]
+DATA = data_path()
 EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "horizons"
 
 class PlateSolveError(RuntimeError):
@@ -96,18 +96,22 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
     output = directory / "solved.new"
     marker = directory / "solved.solved"
     marker.unlink(missing_ok=True)
+    config = directory / "astrometry.cfg"
+    config.write_text(f"add_path {DATA}\nautoindex\n")
     try:
         subprocess.run([
-            "solve-field", "--backend-config", str(ROOT / "astrometry.cfg"),
+            "solve-field", "--backend-config", str(config),
             "--scale-units", "degwidth", "--scale-low", str(scale_low),
             "--scale-high", str(scale_high), "--downsample", "2",
             "--no-plots", "--overwrite", "--cpulimit", str(cpu_limit),
             "--dir", str(directory), "--new-fits", str(output),
             "--solved", str(marker), str(path),
-        ], cwd=ROOT, check=True)
+        ], check=True)
     except subprocess.CalledProcessError as exc:
         raise PlateSolveError(f"Plate solving failed with exit status {exc.returncode}") from exc
     if not marker.exists() or not output.exists():
+        if not any(DATA.glob("index-*.fits")):
+            raise PlateSolveError(f"Plate solving failed; no astrometry.net index files in {DATA}, run 'astrophoto download'")
         raise PlateSolveError("Plate solving failed; check focus, exposure, indexes, and scale limits")
     if not WCS(fits.getheader(output), fix=False).has_celestial:
         raise PlateSolveError("Plate solving returned an image without celestial coordinates")

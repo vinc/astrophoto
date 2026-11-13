@@ -41,17 +41,18 @@ class CommandLineTests(unittest.TestCase):
 
     def test_every_python_command_has_a_main(self):
         for name in cli.COMMANDS:
-            if name != "capture":
+            if name not in cli.SCRIPTS:
                 self.assertTrue(callable(importlib.import_module(f"astrophoto.{name}").main), name)
 
-    def test_capture_runs_the_shell_script_and_returns_its_status(self):
-        with patch.object(cli.subprocess, "run") as run:
-            run.return_value.returncode = 1
-            status, _, _ = self.run_cli("capture", "dark")
-        self.assertEqual(status, 1)
-        script = Path(cli.__file__).with_name("capture.sh")
-        self.assertTrue(script.exists())
-        run.assert_called_once_with(["sh", str(script), "dark"])
+    def test_shell_commands_run_their_script_and_return_its_status(self):
+        for name in cli.SCRIPTS:
+            with self.subTest(command=name), patch.object(cli.subprocess, "run") as run:
+                run.return_value.returncode = 1
+                status, _, _ = self.run_cli(name, "dark")
+                self.assertEqual(status, 1)
+                script = Path(cli.__file__).with_name(f"{name}.sh")
+                self.assertTrue(script.exists())
+                run.assert_called_once_with(["sh", str(script), "dark"])
 
 
 if __name__ == "__main__":
