@@ -14,6 +14,7 @@ from astropy.coordinates import (
 from astropy.time import Time
 from astropy.utils import iers
 
+from astrophoto.lib.config import add_observer_arguments
 from astrophoto.lib.localtime import parse_local_time
 from astrophoto.lib.night import night_start
 
@@ -253,9 +254,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="List Solar System bodies above the horizon, brightest first"
     )
-    parser.add_argument("--latitude", type=float, required=True, help="Observer latitude in degrees")
-    parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
-    parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
+    add_observer_arguments(parser)
     parser.add_argument("--time", help='Local time in ISO format or words like "tonight" (default: now)')
     parser.add_argument("--limit", type=float, default=10, help="Faintest magnitude to list (default: 10)")
     parser.add_argument("--min-altitude", type=float, default=10, help="Lowest altitude in degrees (default: 10)")

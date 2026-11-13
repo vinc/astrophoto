@@ -8,6 +8,7 @@ import matplotlib
 from astropy.io import fits
 from astropy.time import Time
 
+from astrophoto.lib.config import add_observer_arguments
 from astrophoto.locate import get_ephemerides, save_image, solve_image
 
 def crop_image(path, radius, ra, dec, time, query, target_name=None, source_path=None):
@@ -32,24 +33,7 @@ def main():
         required=True,
         help="Solar System body name or designation",
     )
-    parser.add_argument(
-        "--latitude",
-        type=float,
-        required=True,
-        help="Observer latitude in degrees",
-    )
-    parser.add_argument(
-        "--longitude",
-        type=float,
-        required=True,
-        help="Observer longitude in degrees",
-    )
-    parser.add_argument(
-        "--elevation",
-        type=float,
-        required=True,
-        help="Observer elevation in km",
-    )
+    add_observer_arguments(parser)
     parser.add_argument(
         "--radius",
         type=int,

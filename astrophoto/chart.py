@@ -14,6 +14,7 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
+from astrophoto.lib.config import add_observer_arguments
 from astrophoto.locate import ROOT, get_ephemerides, solve_image
 
 CATALOG = ROOT / "index"
@@ -266,9 +267,7 @@ def main():
     parser.add_argument("--magnitude", type=float, default=6.0, help="Faintest star magnitude, up to 6 (default: 6)")
     parser.add_argument("--output", type=Path, help="PNG path (default: next to a single image, or <kind>-chart-NNNN.png in the current directory)")
     parser.add_argument("--query", help="Solar System body to mark at each image time")
-    parser.add_argument("--latitude", type=float, help="Observer latitude in degrees, with --query")
-    parser.add_argument("--longitude", type=float, help="Observer longitude in degrees, with --query")
-    parser.add_argument("--elevation", type=float, help="Observer elevation in km, with --query")
+    add_observer_arguments(parser, required=False, note=", with --query")
     parser.add_argument("--timezone", default="Europe/Paris", help="Camera clock timezone (default: Europe/Paris)")
     parser.add_argument("--scale-low", type=float, default=3, help="Minimum image width in degrees (default: 3)")
     parser.add_argument("--scale-high", type=float, default=20, help="Maximum image width in degrees (default: 20)")

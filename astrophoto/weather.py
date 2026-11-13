@@ -12,6 +12,7 @@ import requests
 from astropy import units as u
 from astropy.coordinates import EarthLocation
 
+from astrophoto.lib.config import add_observer_arguments
 from astrophoto.lib.localtime import parse_local_time
 from astrophoto.lib.night import MAX_HOURS, NIGHT, first_night, sun_altitude
 
@@ -178,9 +179,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Hourly weather forecast for an imaging session, from Open-Meteo"
     )
-    parser.add_argument("--latitude", type=float, required=True, help="Observer latitude in degrees")
-    parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
-    parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
+    add_observer_arguments(parser)
     parser.add_argument("--time", help='Local time in ISO format or words like "tomorrow night" (default: now)')
     parser.add_argument("--update", action="store_true",
                         help=f"Download a fresh forecast even if one less than {MAX_AGE.total_seconds() / 60:.0f} minutes old is cached")

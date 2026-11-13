@@ -15,6 +15,7 @@ from astropy.utils import iers
 from astropy.wcs import NoConvergence, WCS
 
 from astrophoto.lib.camera import capture, display_limits, preview_figure, read_image
+from astrophoto.lib.config import add_observer_arguments
 from astrophoto.locate import PlateSolveError, get_ephemerides, solve_image
 
 def pointing_offset(center, target, time, observer, target_time=None):
@@ -123,9 +124,7 @@ def main():
     target.add_argument("--query", help="Solar System body name or designation")
     target.add_argument("--ra", type=float, help="Fixed ICRS right ascension in degrees; requires --dec")
     parser.add_argument("--dec", type=float, help="Fixed ICRS declination in degrees")
-    parser.add_argument("--latitude", type=float, required=True, help="Observer latitude in degrees")
-    parser.add_argument("--longitude", type=float, required=True, help="Observer longitude in degrees")
-    parser.add_argument("--elevation", type=float, required=True, help="Observer elevation in km")
+    add_observer_arguments(parser)
     parser.add_argument("--timezone", default="Europe/Paris", help="Camera clock timezone (default: Europe/Paris)")
     parser.add_argument("--scale-low", type=float, default=3, help="Minimum image width in degrees (default: 3)")
     parser.add_argument("--scale-high", type=float, default=20, help="Maximum image width in degrees (default: 20)")
