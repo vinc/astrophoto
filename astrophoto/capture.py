@@ -8,6 +8,7 @@ from astrophoto.lib.config import read_config
 
 KINDS = ("light", "dark", "flat")
 DEFAULTS = {"frames": 20, "iso": "800", "aperture": "4.0", "shutterspeed": "5"}
+CAMERA_SETTINGS = ("iso", "aperture", "shutterspeed")
 # Flats are shot on a lightbox, far brighter than the sky
 KIND_DEFAULTS = {"flat": {"shutterspeed": "50"}}
 
@@ -64,10 +65,20 @@ def main():
     )
     parser.add_argument("kind", nargs="?", default="light", choices=KINDS, help="Kind of frames (default: light)")
     parser.add_argument("--frames", type=positive_integer, help="Number of frames (default: 20)")
-    parser.add_argument("--iso", help="ISO setting passed to gphoto2 (default: 800)")
-    parser.add_argument("--aperture", help="Aperture setting passed to gphoto2 (default: 4.0)")
-    parser.add_argument("--shutterspeed", help="Shutter speed setting passed to gphoto2 (default: 5, or 50 for flat frames)")
+    parser.add_argument("--iso", help="ISO setting passed to gphoto2, or 'help' to list the camera's choices (default: 800)")
+    parser.add_argument("--aperture", help="Aperture setting passed to gphoto2, or 'help' to list the camera's choices (default: 4.0)")
+    parser.add_argument(
+        "--shutterspeed",
+        help="Shutter speed setting passed to gphoto2, or 'help' to list the camera's choices (default: 5, or 50 for flat frames)",
+    )
     args = parser.parse_args()
+    queries = [name for name in CAMERA_SETTINGS if getattr(args, name) == "help"]
+    if queries:
+        if shutil.which("gphoto2") is None:
+            raise SystemExit("gphoto2 not found")
+        for name in queries:
+            run(["gphoto2", "--get-config", name])
+        return
     options = {key: getattr(args, key) for key in DEFAULTS if getattr(args, key) is not None}
     settings = capture_settings(parser, args.kind, options)
     if shutil.which("gphoto2") is None:

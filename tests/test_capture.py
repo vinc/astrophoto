@@ -95,6 +95,23 @@ class CaptureTests(unittest.TestCase):
             self.assertIn("gphoto2 not found", result.stderr)
             self.assertEqual(list(directory.iterdir()), [])
 
+    def test_help_values_list_the_camera_choices_without_capturing(self):
+        for arguments, queried in [
+            (("--shutterspeed", "help"), ["shutterspeed"]),
+            (("flat", "--aperture", "help", "--iso", "help", "--shutterspeed", "1/4000"), ["iso", "aperture"]),
+        ]:
+            with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as temporary:
+                result, commands, folders = self.run_capture(Path(temporary), *arguments, config="[capture]\nshutter = 8\n")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(commands, [["--get-config", name] for name in queried])
+                self.assertEqual(folders, [])
+
+    def test_failed_choice_listing_reports_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, _ = self.run_capture(Path(temporary), "--iso", "help", fail_stage="--get-config")
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(commands, [["--get-config", "iso"]])
+
     def test_config_and_options_override_the_defaults(self):
         config = (
             "latitude = 51.18\n"
