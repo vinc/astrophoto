@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astrophoto"
+version = "0.1.0"
+description = "Astrophotography scripts: forecast, capture, convert, stack, plate-solve, crop, and chart"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "astroalign",
+    "astropy>=7.0,<9",
+    "astroquery>=0.4.10,<1",
+    "dateparser>=1.2,<2",
+    "exifread",
+    "matplotlib>=3.8,<4",
+    "numpy>=1.24",
+    "rawpy",
+    "requests",
+    "scipy>=1.10",
+]
+
+[project.scripts]
+astrophoto = "astrophoto.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["astrophoto*"]
+
+[tool.setuptools.package-data]
+astrophoto = ["capture.sh"]

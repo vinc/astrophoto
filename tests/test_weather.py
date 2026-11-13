@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-import weather
+from astrophoto import weather
 from tests.test_localtime import local_time_zone
 
 ARGS = ["weather.py", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "0.10"]

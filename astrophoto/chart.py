@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 import json
 from pathlib import Path
@@ -16,7 +14,7 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
-from locate import ROOT, get_ephemerides, solve_image
+from astrophoto.locate import ROOT, get_ephemerides, solve_image
 
 CATALOG = ROOT / "index"
 WIDTH, HEIGHT = 1200, 900

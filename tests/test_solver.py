@@ -14,8 +14,8 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 
-import crop
-import locate
+from astrophoto import crop
+from astrophoto import locate
 
 def solve(command, **kwargs):
     path = Path(command[-1])

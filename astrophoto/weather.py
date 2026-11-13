@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -14,8 +12,8 @@ import requests
 from astropy import units as u
 from astropy.coordinates import EarthLocation
 
-from lib.localtime import parse_local_time
-from lib.night import MAX_HOURS, NIGHT, first_night, sun_altitude
+from astrophoto.lib.localtime import parse_local_time
+from astrophoto.lib.night import MAX_HOURS, NIGHT, first_night, sun_altitude
 
 API = "https://api.open-meteo.com/v1/forecast"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "weather"

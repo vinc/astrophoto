@@ -18,7 +18,7 @@ from astropy.table import Table
 from astropy.time import Time
 from astropy.wcs import WCS
 
-import chart
+from astrophoto import chart
 
 def make_header(ra=56.75, dec=24.1, angle=15, scale=0.00123, size=(3504, 2336)):
     wcs = WCS(naxis=2)

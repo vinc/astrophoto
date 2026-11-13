@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 import hashlib
 import json
@@ -21,11 +19,11 @@ from astropy.time import Time
 from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
 
-from convert import convert
-from lib.camera import display_limits, stack_display_limits
-from lib.color import read_rgb, read_saturation, render_rgb
+from astrophoto.convert import convert
+from astrophoto.lib.camera import display_limits, stack_display_limits
+from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "horizons"
 
 class PlateSolveError(RuntimeError):

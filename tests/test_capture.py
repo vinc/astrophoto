@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "capture.sh"
+SCRIPT = Path(__file__).resolve().parents[1] / "astrophoto" / "capture.sh"
 
 class CaptureScriptTests(unittest.TestCase):
     def run_capture(self, directory, *arguments, fail_stage=""):

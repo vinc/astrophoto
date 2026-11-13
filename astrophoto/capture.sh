@@ -5,7 +5,7 @@ shutterspeed=5
 frames=20
 
 if [ "$#" -gt 1 ]; then
-  echo "Usage: $0 [light|dark|flat]" >&2
+  echo "Usage: astrophoto capture [light|dark|flat]" >&2
   exit 1
 fi
 
@@ -17,7 +17,7 @@ case "${1-}" in
     shutterspeed=50
     ;;
   *)
-    echo "Usage: $0 [light|dark|flat]" >&2
+    echo "Usage: astrophoto capture [light|dark|flat]" >&2
     exit 1
     ;;
 esac

@@ -14,8 +14,8 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.time import Time
 
-import crop
-import stack
+from astrophoto import crop
+from astrophoto import stack
 
 class WorkflowTests(unittest.TestCase):
     def test_stacking_twice_preserves_pixels_and_dimensions(self):
@@ -197,7 +197,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertAlmostEqual(np.nanstd(background), 0.0)
 
     def test_convert_continues_after_unreadable_file(self):
-        import convert
+        from astrophoto import convert
 
         with tempfile.TemporaryDirectory() as temporary:
             bad = Path(temporary) / "broken.CR2"

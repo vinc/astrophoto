@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
@@ -10,7 +8,7 @@ import exifread
 import rawpy
 from astropy.io import fits
 
-from lib.color import raw_color_metadata
+from astrophoto.lib.color import raw_color_metadata
 
 def exif_value(tags, key):
     tag = tags.get(key)

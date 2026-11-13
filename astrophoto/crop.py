@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 from pathlib import Path
 import tempfile
@@ -10,7 +8,7 @@ import matplotlib
 from astropy.io import fits
 from astropy.time import Time
 
-from locate import get_ephemerides, save_image, solve_image
+from astrophoto.locate import get_ephemerides, save_image, solve_image
 
 def crop_image(path, radius, ra, dec, time, query, target_name=None, source_path=None):
     return save_image(

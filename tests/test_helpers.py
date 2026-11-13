@@ -19,11 +19,11 @@ from astropy.time import Time
 from astropy.utils import iers
 from astropy.wcs import WCS
 
-from lib import camera
-import center
-import convert as conversion
-import focus
-import locate
+from astrophoto.lib import camera
+from astrophoto import center
+from astrophoto import convert as conversion
+from astrophoto import focus
+from astrophoto import locate
 
 def star_field(sigma):
     rng = np.random.default_rng(42)

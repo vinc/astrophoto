@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 from datetime import datetime, timezone
 import json
@@ -16,8 +14,8 @@ from astropy.coordinates import (
 from astropy.time import Time
 from astropy.utils import iers
 
-from lib.localtime import parse_local_time
-from lib.night import night_start
+from astrophoto.lib.localtime import parse_local_time
+from astrophoto.lib.night import night_start
 
 SBDB = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "minor-bodies.json"

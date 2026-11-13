@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 from pathlib import Path
 import subprocess
@@ -12,7 +10,7 @@ from astropy.nddata import Cutout2D
 from astropy.stats import sigma_clipped_stats
 from scipy.ndimage import label
 
-from lib.camera import capture, display_limits, preview_figure, read_image
+from astrophoto.lib.camera import capture, display_limits, preview_figure, read_image
 
 class FocusRangeError(ValueError):
     pass
