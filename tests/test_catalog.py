@@ -22,6 +22,9 @@ DSOS = {"features": [
     {"id": "NGC 224", "properties": {"desig": "M 31", "dim": "189.1x61.7"}, "geometry": point(10.6847, 41.26875)},
     {"id": "NGC 7000", "properties": {"desig": "NGC 7000", "dim": "120"}, "geometry": point(-45.3, 44.33)},
     {"id": "IC 1396", "properties": {"desig": "IC 1396", "dim": ""}, "geometry": point(-35.3, 57.5)},
+    {"id": "SNR G 024.7+00.6", "properties": {"desig": "SNR G 024.7+00.6", "dim": "30x15"}, "geometry": point(-81.308, -7.097)},
+    {"id": "SNR G 024.7-00.6", "properties": {"desig": "SNR G 024.7-00.6", "dim": "15"}, "geometry": point(-80.321, -7.533)},
+    {"id": "Sh2 275", "properties": {"desig": "Sh2 275", "dim": "80"}, "geometry": point(97.917, 4.963)},
 ]}
 DSONAMES = {
     "NGC 224": {"name": "Andromeda Galaxy"},
@@ -64,6 +67,16 @@ class ResolveTests(unittest.TestCase):
         obj = catalog.resolve("ic1396", index())
         self.assertEqual(obj.label, "IC 1396")
         self.assertIsNone(obj.size)
+
+    def test_signed_coordinates_in_designations_are_kept_apart(self):
+        objects = index()
+        self.assertAlmostEqual(catalog.resolve("SNR G 024.7+00.6", objects).ra, 278.692)
+        self.assertAlmostEqual(catalog.resolve("snr g 024.7-00.6", objects).ra, 279.679)
+        with self.assertRaisesRegex(catalog.AmbiguousObject, r"SNR G 024.7\+00.6, SNR G 024.7-00.6"):
+            catalog.resolve("SNR G 024.7 00.6", objects)
+
+    def test_hyphens_between_catalog_and_number_are_dropped(self):
+        self.assertEqual(catalog.resolve("sh2-275", index()).designation, "Sh2 275")
 
     def test_stars_by_name_and_catalog_number(self):
         for query in ["vega", "HIP 91262", "hd172167", "HD 172167"]:

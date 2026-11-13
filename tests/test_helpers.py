@@ -439,19 +439,24 @@ class CenterTests(unittest.TestCase):
             center.main()
         capture.assert_not_called()
 
-    def test_objects_larger_than_the_frame_are_reported(self):
+    def test_objects_that_may_not_fit_the_frame_are_reported(self):
         header = solved_header()
         target = WCS(header).pixel_to_world(150, 100)
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "frame.new"
             fits.writeto(path, np.zeros((200, 300)), header)
-            for size, warned in [(3.5, False), (4.5, True)]:
+            for size, warning in [(3.5, None), (4.5, "may be cropped in the 6.00 x 4.00 degree frame"),
+                                  (7.5, "larger than the 6.00 x 4.00 degree frame")]:
                 with self.subTest(size=size), \
                         patch.object(center, "pointing_offset", return_value=(0, 0)), \
                         contextlib.redirect_stdout(io.StringIO()) as output:
                     center.inspect_image(path, "M31", {"lat": 0, "lon": 0, "elevation": 0},
                                          (target.ra.deg, target.dec.deg), size=size)
-                self.assertEqual("larger than the 6.00 x 4.00 degree frame" in output.getvalue(), warned)
+                if warning is None:
+                    self.assertNotIn("degree frame", output.getvalue())
+                else:
+                    self.assertIn(f"M31 is {size:.2f} degrees across", output.getvalue())
+                    self.assertIn(warning, output.getvalue())
 
 class CaptureTests(unittest.TestCase):
     def test_capture_configures_raw_and_returns_downloaded_file(self):

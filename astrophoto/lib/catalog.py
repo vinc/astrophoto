@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import json
 import re
 
@@ -19,12 +19,17 @@ class SkyObject:
     dec: float
     # Major axis in degrees, when the catalog gives one
     size: float = None
-    keys: set = field(default_factory=set, repr=False)
 
 
 def normalize(text):
-    # "M 31", "m-31" and "M31" are one key, as are "NGC 224" and "ngc-224"
-    return re.sub(r"[\W_]+", "", str(text).casefold())
+    # "M 31", "m-31" and "M31" are one key, but a sign between digits is part of
+    # a coordinate: SNR G 024.7+00.6 and SNR G 024.7-00.6 are different objects
+    text = re.sub(r"[^\w+-]|_", "", str(text).casefold())
+    return re.sub(r"(?<!\d)[+-]|[+-](?!\d)", "", text)
+
+
+def loosen(key):
+    return re.sub(r"[+-]", "", key)
 
 
 def parse_size(dim):
@@ -43,15 +48,14 @@ def load_json(name):
 
 
 def build_index(messier, dsos, dsonames, starnames, stars):
-    by_key = {}
+    by_key, by_loose_key = {}, {}
 
     def add(obj, names):
         keys = {normalize(name) for name in names if name and normalize(name)}
-        for key in keys:
-            by_key.setdefault(key, [])
-            if obj not in by_key[key]:
-                by_key[key].append(obj)
-        obj.keys |= keys
+        for index, key in [(by_key, key) for key in keys] + [(by_loose_key, loosen(key)) for key in keys]:
+            index.setdefault(key, [])
+            if obj not in index[key]:
+                index[key].append(obj)
 
     for feature in messier["features"]:
         properties = feature["properties"]
@@ -85,7 +89,7 @@ def build_index(messier, dsos, dsonames, starnames, stars):
         obj = SkyObject(label, f"HIP {hip}", ra % 360, dec)
         add(obj, [f"HIP {hip}", names.get("name"), names.get("hd")])
 
-    return by_key
+    return by_key, by_loose_key
 
 
 _index = None
@@ -100,8 +104,10 @@ def load_index():
 
 def resolve(query, index=None):
     """Return the star or deep-sky object named by query, or None to fall back to Horizons."""
-    index = load_index() if index is None else index
-    matches = index.get(normalize(query), [])
+    by_key, by_loose_key = load_index() if index is None else index
+    key = normalize(query)
+    # Without its sign, "Sh2-275" still finds "Sh2 275", but signed coordinates may collide
+    matches = by_key.get(key) or by_loose_key.get(loosen(key), [])
     if len(matches) > 1:
         names = ", ".join(sorted(
             obj.label if obj.designation in obj.label else f"{obj.label} ({obj.designation})" for obj in matches

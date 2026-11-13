@@ -76,9 +76,12 @@ def inspect_image(path, query, observer, coordinates=None, correction_time=None,
     if size is not None:
         scales = wcs.proj_plane_pixel_scales()
         frame_width, frame_height = (scale.to_value(u.deg) * side for scale, side in zip(scales, (width, height)))
-        if size > min(frame_width, frame_height):
-            print(f"  {target_name} is {angle_text(size)} across, larger than the "
-                  f"{frame_width:.2f} x {frame_height:.2f} degree frame")
+        frame = f"{frame_width:.2f} x {frame_height:.2f} degree frame"
+        # Only the major axis is known, so a long object may still fit diagonally or rotated
+        if size > np.hypot(frame_width, frame_height):
+            print(f"  {target_name} is {angle_text(size)} across, larger than the {frame}")
+        elif size > min(frame_width, frame_height):
+            print(f"  {target_name} is {angle_text(size)} across and may be cropped in the {frame}")
     return {
         "x": x, "y": y, "inside": inside, "pan": pan, "tilt": tilt,
         "title": directions, "target_name": target_name,
