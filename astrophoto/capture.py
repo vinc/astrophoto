@@ -1,7 +1,6 @@
 import argparse
 from datetime import datetime
 from pathlib import Path
-import re
 import shutil
 import subprocess
 
@@ -54,18 +53,16 @@ def capture_settings(parser, kind, options):
 
 def files_on_card():
     """Return the number of files in each camera folder that holds any."""
-    result = subprocess.run(["gphoto2", "--list-files"], stdout=subprocess.PIPE, text=True)
+    # Quiet mode lists one path per file, without the translated folder headers
+    result = subprocess.run(["gphoto2", "--quiet", "--list-files"], stdout=subprocess.PIPE, text=True)
     if result.returncode:
         raise SystemExit(result.returncode)
-    folders, folder = {}, None
-    for line in result.stdout.splitlines():
-        header = re.match(r"There (?:is|are) .* in folder '(.*)'", line)
-        if header:
-            folder = header[1]
-        elif re.match(r"#\d+\s", line):
-            if folder is None:
-                raise SystemExit(f"Unexpected gphoto2 file listing: {line}")
-            folders[folder] = folders.get(folder, 0) + 1
+    folders = {}
+    for line in filter(None, result.stdout.splitlines()):
+        if not line.startswith("/"):
+            raise SystemExit(f"Unexpected gphoto2 file listing: {line}")
+        folder = line.rsplit("/", 1)[0] or "/"
+        folders[folder] = folders.get(folder, 0) + 1
     return folders
 
 
