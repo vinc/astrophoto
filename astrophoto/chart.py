@@ -13,6 +13,7 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
+from astrophoto.lib.catalog import AmbiguousObject, resolve
 from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
 from astrophoto.locate import get_ephemerides, solve_image
 
@@ -265,13 +266,20 @@ def main():
     parser.add_argument("--fov", type=float, help="Chart width in degrees at its centre (default: fit the images, at least 30)")
     parser.add_argument("--magnitude", type=float, default=6.0, help="Faintest star magnitude, up to 6 (default: 6)")
     parser.add_argument("--output", type=Path, help="PNG path (default: next to a single image, or <kind>-chart-NNNN.png in the current directory)")
-    parser.add_argument("--query", help="Solar System body to mark at each image time")
-    add_observer_arguments(parser, required=False, note=", with --query")
+    parser.add_argument("--query", help="Star, deep-sky object, or Solar System body to mark at each image time")
+    add_observer_arguments(parser, required=False, note=", with a Solar System --query")
     args = parser.parse_args()
+    fixed = None
+    if args.query:
+        try:
+            fixed = resolve(args.query)
+        except AmbiguousObject as exc:
+            parser.error(str(exc))
+    moving = args.query and fixed is None
     observer_given = [value is not None for value in (args.latitude, args.longitude, args.elevation)]
-    if args.query and not all(observer_given):
-        parser.error("--query needs --latitude, --longitude and --elevation")
-    if args.query and not (-90 <= args.latitude <= 90 and -180 <= args.longitude <= 180):
+    if moving and not all(observer_given):
+        parser.error("--query needs --latitude, --longitude and --elevation for Solar System bodies")
+    if moving and not (-90 <= args.latitude <= 90 and -180 <= args.longitude <= 180):
         parser.error("Invalid observer latitude or longitude")
     if args.fov is not None and not (0 < args.fov <= 360):
         parser.error("--fov must be between 0 and 360 degrees")
@@ -303,12 +311,16 @@ def main():
 
     track = None
     if args.query:
-        observer = observer_location(args)
-        result = get_ephemerides(args.query, observer, [observation[3].jd for observation in observations])
-        if len(result) != len(observations):
-            raise SystemExit("Horizons returned a different number of epochs than requested")
-        name = str(result["targetname"][0])
-        positions = zip(np.asarray(result["RA"], dtype=float), np.asarray(result["DEC"], dtype=float))
+        if fixed is not None:
+            name = fixed.label
+            positions = [(fixed.ra, fixed.dec)] * len(observations)
+        else:
+            observer = observer_location(args)
+            result = get_ephemerides(args.query, observer, [observation[3].jd for observation in observations])
+            if len(result) != len(observations):
+                raise SystemExit("Horizons returned a different number of epochs than requested")
+            name = str(result["targetname"][0])
+            positions = zip(np.asarray(result["RA"], dtype=float), np.asarray(result["DEC"], dtype=float))
         visible = []
         for observation, (ra, dec) in zip(observations, positions):
             if contains(observation[1], observation[2], ra, dec):

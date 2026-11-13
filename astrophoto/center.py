@@ -14,6 +14,7 @@ from astropy.utils import iers
 from astropy.wcs import NoConvergence, WCS
 
 from astrophoto.lib.camera import capture, display_limits, preview_figure, read_image
+from astrophoto.lib.catalog import AmbiguousObject, resolve
 from astrophoto.lib.config import add_observer_arguments, camera_timezone, observer_location, solve_scale
 from astrophoto.locate import PlateSolveError, get_ephemerides, solve_image
 
@@ -37,7 +38,7 @@ def angle_text(degrees):
         return f"{abs(degrees):.2f} degrees"
     return f"{abs(degrees) * 60:.1f} arcmin"
 
-def inspect_image(path, query, observer, coordinates=None, correction_time=None):
+def inspect_image(path, query, observer, coordinates=None, correction_time=None, size=None):
     data, header = fits.getdata(path, header=True)
     if data.ndim != 2:
         raise ValueError("Expected a 2D plate-solved FITS image")
@@ -72,6 +73,12 @@ def inspect_image(path, query, observer, coordinates=None, correction_time=None)
     print(f"  Separation from centre: {angle_text(center.separation(target).deg)}")
     print(f"  {directions}")
     print(f"  Target is {'inside' if inside else 'outside'} the frame")
+    if size is not None:
+        scales = wcs.proj_plane_pixel_scales()
+        frame_width, frame_height = (scale.to_value(u.deg) * side for scale, side in zip(scales, (width, height)))
+        if size > min(frame_width, frame_height):
+            print(f"  {target_name} is {angle_text(size)} across, larger than the "
+                  f"{frame_width:.2f} x {frame_height:.2f} degree frame")
     return {
         "x": x, "y": y, "inside": inside, "pan": pan, "tilt": tilt,
         "title": directions, "target_name": target_name,
@@ -120,7 +127,7 @@ def main():
     parser = argparse.ArgumentParser(description="Guide manual camera pointing using a plate-solved exposure")
     parser.add_argument("file", nargs="?", type=Path, help="Saved RAW or FITS image; omit to capture a new image")
     target = parser.add_mutually_exclusive_group(required=True)
-    target.add_argument("--query", help="Solar System body name or designation")
+    target.add_argument("--query", help="Star, deep-sky object, or Solar System body name or designation")
     target.add_argument("--ra", type=float, help="Fixed ICRS right ascension in degrees; requires --dec")
     parser.add_argument("--dec", type=float, help="Fixed ICRS declination in degrees")
     add_observer_arguments(parser)
@@ -145,6 +152,14 @@ def main():
     observer = observer_location(args)
     coordinates = None if args.ra is None else (args.ra, args.dec)
     query = args.query or f"RA {args.ra:g}, Dec {args.dec:g}"
+    size = None
+    if args.query:
+        try:
+            fixed = resolve(args.query)
+        except AmbiguousObject as exc:
+            raise SystemExit(str(exc)) from exc
+        if fixed is not None:
+            coordinates, query, size = (fixed.ra, fixed.dec), fixed.label, fixed.size
     interactive = not args.no_plot and (args.file is None or args.plot)
     figure = preview_figure(figsize=(10, 7)) if interactive else None
     if figure is None and args.save_preview:
@@ -169,7 +184,7 @@ def main():
                         figure.canvas.draw_idle()
                 else:
                     correction_time = Time.now() if args.file is None else None
-                    result = inspect_image(solved, query, observer, coordinates, correction_time=correction_time)
+                    result = inspect_image(solved, query, observer, coordinates, correction_time=correction_time, size=size)
                     if figure is not None:
                         show_pointing(figure, solved, query, result, interactive=interactive)
                         if args.save_preview:

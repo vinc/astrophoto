@@ -20,6 +20,7 @@ from astropy.utils import iers
 from astropy.wcs import WCS
 
 from astrophoto.lib import camera
+from astrophoto.lib.catalog import AmbiguousObject, SkyObject
 from astrophoto import center
 from astrophoto import convert as conversion
 from astrophoto import focus
@@ -60,6 +61,7 @@ class PreviewTests(unittest.TestCase):
         for module, argv in commands:
             with self.subTest(module=module.__name__), \
                     patch.object(sys, "argv", argv), patch.object(module, "capture") as capture, \
+                    patch.object(center, "resolve", return_value=None), \
                     self.assertRaisesRegex(SystemExit, "cannot open a preview window"):
                 module.main()
             capture.assert_not_called()
@@ -251,6 +253,9 @@ class FocusTests(unittest.TestCase):
             self.assertEqual(image[0, 0], 0)
 
 class CenterTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(center, "resolve", return_value=None))
+
     def test_live_correction_keeps_camera_fixed_and_advances_target_time(self):
         exposure = Time("2025-01-01T00:00:00")
         current = Time("2025-01-01T00:10:00")
@@ -412,6 +417,41 @@ class CenterTests(unittest.TestCase):
         self.assertEqual(solve.call_count, 3)
         inspect.assert_called_once()
         self.assertIn("retrying with the next capture", output.getvalue())
+
+    def test_catalog_objects_are_centred_at_fixed_coordinates(self):
+        m31 = SkyObject("M31 (Andromeda Galaxy)", "M31", 10.68, 41.27, 3.17)
+        argv = ["center.py", "saved.fit", "--query", "m-31", "--latitude", "0", "--longitude", "0", "--elevation", "0"]
+        with patch.object(sys, "argv", argv), \
+                patch.object(center, "resolve", return_value=m31) as resolve, \
+                patch.object(center, "solve_image", return_value=Path("saved.new")), \
+                patch.object(center, "inspect_image") as inspect:
+            center.main()
+        resolve.assert_called_once_with("m-31")
+        self.assertEqual(inspect.call_args.args[1:4], ("M31 (Andromeda Galaxy)", {"lon": 0, "lat": 0, "elevation": 0}, (10.68, 41.27)))
+        self.assertEqual(inspect.call_args.kwargs["size"], 3.17)
+
+    def test_ambiguous_names_stop_before_capturing(self):
+        argv = ["center.py", "--query", "terebellum", "--latitude", "0", "--longitude", "0", "--elevation", "0", "--no-plot"]
+        with patch.object(sys, "argv", argv), \
+                patch.object(center, "resolve", side_effect=AmbiguousObject("terebellum matches several objects")), \
+                patch.object(center, "capture") as capture, \
+                self.assertRaisesRegex(SystemExit, "several objects"):
+            center.main()
+        capture.assert_not_called()
+
+    def test_objects_larger_than_the_frame_are_reported(self):
+        header = solved_header()
+        target = WCS(header).pixel_to_world(150, 100)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "frame.new"
+            fits.writeto(path, np.zeros((200, 300)), header)
+            for size, warned in [(3.5, False), (4.5, True)]:
+                with self.subTest(size=size), \
+                        patch.object(center, "pointing_offset", return_value=(0, 0)), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    center.inspect_image(path, "M31", {"lat": 0, "lon": 0, "elevation": 0},
+                                         (target.ra.deg, target.dec.deg), size=size)
+                self.assertEqual("larger than the 6.00 x 4.00 degree frame" in output.getvalue(), warned)
 
 class CaptureTests(unittest.TestCase):
     def test_capture_configures_raw_and_returns_downloaded_file(self):
