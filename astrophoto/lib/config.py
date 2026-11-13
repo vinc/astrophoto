@@ -27,12 +27,16 @@ def observer_location(args):
     return {"lon": args.longitude, "lat": args.latitude, "elevation": args.elevation / 1000}
 
 
-def add_observer_arguments(parser, required=True, note=""):
+def read_config(parser):
     path = config_path()
     try:
-        config = load_config(path)
+        return load_config(path), path
     except (OSError, tomllib.TOMLDecodeError) as error:
         parser.error(f"Could not read {path}: {error}")
+
+
+def add_observer_arguments(parser, required=True, note=""):
+    config, path = read_config(parser)
     for name, unit in OBSERVER.items():
         value = config.get(name)
         # bool is a subclass of int, so `latitude = true` would otherwise pass as 1

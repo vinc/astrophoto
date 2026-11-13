@@ -16,7 +16,7 @@ COMMANDS = {
     "crop": "Crop a Solar System body from RAW or FITS images",
     "chart": "Draw a star chart locating plate-solved images",
 }
-SCRIPTS = {"capture", "download"}
+SCRIPTS = {"download"}
 
 
 def usage():

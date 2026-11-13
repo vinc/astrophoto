@@ -28,4 +28,4 @@ astrophoto = "astrophoto.__main__:main"
 include = ["astrophoto*"]
 
 [tool.setuptools.package-data]
-astrophoto = ["capture.sh", "download.sh"]
+astrophoto = ["download.sh"]

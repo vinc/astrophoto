@@ -1,13 +1,14 @@
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "astrophoto" / "capture.sh"
+ROOT = Path(__file__).resolve().parents[1]
 
-class CaptureScriptTests(unittest.TestCase):
-    def run_capture(self, directory, *arguments, fail_stage=""):
+class CaptureTests(unittest.TestCase):
+    def run_capture(self, directory, *arguments, fail_stage="", config=None):
         executable = directory / "bin" / "gphoto2"
         executable.parent.mkdir(exist_ok=True)
         executable.write_text(
@@ -18,15 +19,19 @@ class CaptureScriptTests(unittest.TestCase):
             'done\n'
         )
         executable.chmod(0o755)
+        settings = directory / "config"
+        if config is not None:
+            (settings / "astrophoto").mkdir(parents=True)
+            (settings / "astrophoto" / "config.toml").write_text(config)
         log = directory / "arguments.txt"
         result = subprocess.run(
-            ["sh", str(SCRIPT), *arguments], cwd=directory,
-            env=dict(os.environ, PATH=f"{executable.parent}:{os.environ['PATH']}",
-                     CAPTURE_ARGUMENTS=str(log), FAIL_STAGE=fail_stage),
+            [sys.executable, "-m", "astrophoto", "capture", *arguments], cwd=directory,
+            env=dict(os.environ, PATH=f"{executable.parent}:{os.environ['PATH']}", PYTHONPATH=str(ROOT),
+                     XDG_CONFIG_HOME=str(settings), CAPTURE_ARGUMENTS=str(log), FAIL_STAGE=fail_stage),
             capture_output=True, text=True,
         )
         arguments = [call.splitlines() for call in log.read_text().split("CALL\n")[1:]] if log.exists() else []
-        folders = [path for path in directory.iterdir() if path.is_dir() and path.name != "bin"]
+        folders = [path for path in directory.iterdir() if path.is_dir() and path.name not in ("bin", "config")]
         return result, arguments, folders
 
     def test_default_light_dark_and_flat_modes(self):
@@ -70,11 +75,68 @@ class CaptureScriptTests(unittest.TestCase):
             self.assertEqual(len(commands), 3)
 
     def test_invalid_arguments_do_not_capture_or_create_a_session(self):
-        for arguments in [("unknown",), ("dark", "extra")]:
+        for arguments in [("unknown",), ("dark", "extra"), ("--frames", "0")]:
             with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as temporary:
                 result, commands, folders = self.run_capture(Path(temporary), *arguments)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("Usage:", result.stderr)
+                self.assertIn("usage: astrophoto capture", result.stderr)
+                self.assertEqual(commands, [])
+                self.assertEqual(folders, [])
+
+    def test_missing_gphoto2_stops_before_creating_a_session(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            result = subprocess.run(
+                [sys.executable, "-m", "astrophoto", "capture"], cwd=directory,
+                env=dict(os.environ, PATH=str(directory), PYTHONPATH=str(ROOT), XDG_CONFIG_HOME=str(directory)),
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("gphoto2 not found", result.stderr)
+            self.assertEqual(list(directory.iterdir()), [])
+
+    def test_config_and_options_override_the_defaults(self):
+        config = (
+            "latitude = 51.18\n"
+            "[capture]\nframes = 30\niso = 400\nshutterspeed = 8\n"
+            "[capture.flat]\nshutterspeed = \"1/2500\"\n"
+        )
+        for arguments, expected in [
+            ((), {"frames": "30", "iso=": "400", "aperture=": "4.0", "shutterspeed=": "8"}),
+            (("dark",), {"frames": "30", "iso=": "400", "shutterspeed=": "8"}),
+            (("flat",), {"frames": "30", "iso=": "400", "shutterspeed=": "1/2500"}),
+            (("flat", "--shutterspeed", "1/4000", "--frames", "5", "--aperture", "5.6"),
+             {"frames": "5", "aperture=": "5.6", "shutterspeed=": "1/4000"}),
+        ]:
+            with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as temporary:
+                result, commands, _ = self.run_capture(Path(temporary), *arguments, config=config)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                capture, _, cleanup = commands
+                for name, value in expected.items():
+                    if name == "frames":
+                        self.assertEqual(capture[capture.index("--frames") + 1], value)
+                        self.assertEqual(cleanup[-1], f"1..{value}")
+                    else:
+                        self.assertIn(f"{name}{value}", capture)
+
+    def test_flat_defaults_survive_a_capture_shutterspeed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, _ = self.run_capture(Path(temporary), "flat", config="[capture]\nshutterspeed = 8\n")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("shutterspeed=50", commands[0])
+
+    def test_invalid_config_stops_before_capturing(self):
+        for config, message in [
+            ("capture = 3\n", "[capture] in .* must be a table"),
+            ("[capture]\nshutter = 8\n", "Unknown setting shutter in [capture]"),
+            ("[capture]\nframes = 2.5\n", "frames in [capture] of .* must be an integer"),
+            ("[capture.flat]\niso = true\n", "iso in [capture.flat] of .* must be a number or a string"),
+        ]:
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as temporary:
+                arguments = ("flat",) if "flat" in config else ()
+                result, commands, folders = self.run_capture(Path(temporary), *arguments, config=config)
+                self.assertEqual(result.returncode, 2)
+                self.assertRegex(result.stderr, message.replace("[", r"\[").replace("]", r"\]"))
                 self.assertEqual(commands, [])
                 self.assertEqual(folders, [])
 
