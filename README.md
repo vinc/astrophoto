@@ -4,7 +4,7 @@ A personal collection of mostly vibe coded astrophotography scripts.
 
 ## Setup
 
-Install the tool:
+Install the tool (along with `gphoto2` and `solve-field`):
 
 ```sh
 git clone https://github.com/vinc/astrophoto
@@ -13,7 +13,7 @@ pip install -e .
 astrophoto download
 ```
 
-Create a config file in `~/.config/astrophoto/config.toml`
+Create a config file in `~/.config/astrophoto/config.toml`:
 ```toml
 latitude = 51.18
 longitude = -1.83
