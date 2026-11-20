@@ -2,6 +2,7 @@ import importlib
 import sys
 
 COMMANDS = {
+    "config": "Create or update the config file",
     "download": "Download plate-solving indexes and star chart data",
     "weather": "Hourly weather forecast for an imaging session",
     "visible": "List Solar System bodies above the horizon",
