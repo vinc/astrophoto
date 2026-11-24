@@ -129,7 +129,7 @@ class MainTest(unittest.TestCase):
                 patch.object(sys, "argv", argv), \
                 contextlib.redirect_stdout(io.StringIO()) as stdout:
             visible.main()
-        self.assertTrue(stdout.getvalue().startswith("2026-11-07 21:11 CET, Sun at"))
+        self.assertTrue(stdout.getvalue().startswith("2026-11-07 21:11 CET\nSun at"))
 
     def test_daytime_moves_to_the_start_of_the_night(self):
         data = cache_data(Time.now().isot)
@@ -139,7 +139,30 @@ class MainTest(unittest.TestCase):
                 patch.object(sys, "argv", argv), \
                 contextlib.redirect_stdout(io.StringIO()) as stdout:
             visible.main()
-        self.assertTrue(stdout.getvalue().startswith("2026-12-21 18:25 CET, Sun at -12 degrees"))
+        self.assertTrue(stdout.getvalue().startswith("2026-12-21 18:25 CET\nSun at -12 degrees"))
+    def test_moon_phase_has_its_own_line(self):
+        data = cache_data(Time.now().isot)
+        argv = ARGS + ["--time", "2026-11-24T18:42"]
+        with local_time_zone("Europe/Paris"), \
+                patch.object(visible, "load_minor_bodies", return_value=data), \
+                patch.object(sys, "argv", argv), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout:
+            visible.main()
+        moon = stdout.getvalue().splitlines()[2]
+        self.assertRegex(moon, r"^Moon at -?\d+ degrees \(full moon, 100% illuminated\)$")
+
+
+class MoonPhaseTest(unittest.TestCase):
+    def test_quarters(self):
+        for date, name in [
+            ("2026-12-01T21:00", "last quarter"),
+            ("2026-12-09T05:00", "new moon"),
+            ("2026-12-17T18:00", "first quarter"),
+        ]:
+            time = Time(date)
+            phase, _ = visible.moon_phase(visible.get_body("sun", time), visible.get_body("moon", time))
+            self.assertEqual(phase, name, date)
+
 
 if __name__ == "__main__":
     unittest.main()

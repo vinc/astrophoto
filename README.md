@@ -63,7 +63,9 @@ Check what is visible in the sky at a given time:
 
 ```
 $ astrophoto visible --time 22:30
-2026-11-12 22:30 CET, Sun at -49 degrees (dark sky)
+2026-11-12 22:30 CET
+Sun at -49 degrees (dark sky)
+Moon at -32 degrees (waxing crescent, 12% illuminated)
 Orbital elements downloaded 2026-11-12 (0 days ago)
 Bodies above 10 degrees and brighter than magnitude 10:
 

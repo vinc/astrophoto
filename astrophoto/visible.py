@@ -9,7 +9,7 @@ import numpy as np
 import requests
 from astropy import units as u
 from astropy.coordinates import (
-    AltAz, EarthLocation, SkyCoord, get_body, get_body_barycentric,
+    AltAz, EarthLocation, GeocentricTrueEcliptic, SkyCoord, get_body, get_body_barycentric,
 )
 from astropy.time import Time
 from astropy.utils import iers
@@ -36,6 +36,11 @@ URANUS_FLATTENING = 0.02293
 K = 0.01720209895  # Gaussian gravitational constant (rad/day)
 C = 173.1446326846693  # Speed of light (au/day)
 OBLIQUITY = np.radians(84381.448 / 3600)  # J2000 ecliptic to equator
+
+MOON_PHASES = [
+    "new moon", "waxing crescent", "first quarter", "waxing gibbous",
+    "full moon", "waning gibbous", "last quarter", "waning crescent",
+]
 
 COMPASS = "N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW".split()
 
@@ -250,6 +255,14 @@ def major_bodies(time, location, frame):
     return bodies
 
 
+def moon_phase(sun, moon):
+    """Phase name and illuminated fraction from the geocentric Sun and Moon"""
+    ecliptic = GeocentricTrueEcliptic(equinox=sun.obstime)
+    angle = (moon.transform_to(ecliptic).lon - sun.transform_to(ecliptic).lon).wrap_at(360 * u.deg).deg
+    fraction = (1 - np.cos(sun.separation(moon).rad)) / 2
+    return MOON_PHASES[round(angle / 45) % 8], fraction
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="List Solar System bodies above the horizon, brightest first"
@@ -273,7 +286,9 @@ def main():
             iers.conf.set_temp("auto_max_age", None), \
             iers.conf.set_temp("iers_degraded_accuracy", "warn"):
         frame = AltAz(obstime=time, location=location)
-        sun = get_body("sun", time, location).transform_to(frame)
+        sun_sky, moon_sky = get_body("sun", time, location), get_body("moon", time, location)
+        sun, moon = sun_sky.transform_to(frame), moon_sky.transform_to(frame)
+        phase, illuminated = moon_phase(sun_sky, moon_sky)
         bodies = [
             body for body in major_bodies(time, location, frame) + minor_bodies(data, time, frame)
             if body["mag"] <= args.limit and body["alt"] >= args.min_altitude
@@ -286,7 +301,9 @@ def main():
         "astronomical twilight" if sun.alt.deg > -18 else "dark sky"
     )
     age = (Time.now() - Time(data["downloaded"])).jd
-    print(f"{time.to_datetime(timezone.utc).astimezone():%Y-%m-%d %H:%M %Z}, Sun at {sun.alt.deg:.0f} degrees ({sky})")
+    print(f"{time.to_datetime(timezone.utc).astimezone():%Y-%m-%d %H:%M %Z}")
+    print(f"Sun at {sun.alt.deg:.0f} degrees ({sky})")
+    print(f"Moon at {moon.alt.deg:.0f} degrees ({phase}, {illuminated:.0%} illuminated)")
     days = round(age)
     print(f"Orbital elements downloaded {data['downloaded'][:10]} ({days} day{'' if days == 1 else 's'} ago)")
     if args.limit > ASTEROID_H_LIMIT + 2:
