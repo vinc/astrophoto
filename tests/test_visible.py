@@ -155,13 +155,27 @@ class MainTest(unittest.TestCase):
 class MoonPhaseTest(unittest.TestCase):
     def test_quarters(self):
         for date, name in [
-            ("2026-12-01T21:00", "last quarter"),
-            ("2026-12-09T05:00", "new moon"),
-            ("2026-12-17T18:00", "first quarter"),
+            ("2026-12-01T06:00", "last quarter"),
+            ("2026-12-02T06:00", "waning crescent"),
+            ("2026-12-09T01:00", "new moon"),
+            ("2026-12-17T06:00", "first quarter"),
+            ("2026-12-18T06:00", "waxing gibbous"),
         ]:
             time = Time(date)
             phase, _ = visible.moon_phase(visible.get_body("sun", time), visible.get_body("moon", time))
             self.assertEqual(phase, name, date)
+
+    def test_principal_phases_have_narrow_windows(self):
+        for angle, name in [
+            (0, "new moon"), (7.5, "new moon"), (352.5, "new moon"), (359.9, "new moon"),
+            (8, "waxing crescent"), (82, "waxing crescent"),
+            (85, "first quarter"), (95, "first quarter"),
+            (98, "waxing gibbous"), (110, "waxing gibbous"), (172, "waxing gibbous"),
+            (180, "full moon"),
+            (188, "waning gibbous"), (265, "last quarter"), (278, "waning crescent"),
+            (352, "waning crescent"),
+        ]:
+            self.assertEqual(visible.phase_name(angle), name, angle)
 
 
 if __name__ == "__main__":

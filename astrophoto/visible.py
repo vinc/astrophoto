@@ -37,10 +37,9 @@ K = 0.01720209895  # Gaussian gravitational constant (rad/day)
 C = 173.1446326846693  # Speed of light (au/day)
 OBLIQUITY = np.radians(84381.448 / 3600)  # J2000 ecliptic to equator
 
-MOON_PHASES = [
-    "new moon", "waxing crescent", "first quarter", "waxing gibbous",
-    "full moon", "waning gibbous", "last quarter", "waning crescent",
-]
+PRINCIPAL_PHASES = ["new moon", "first quarter", "full moon", "last quarter"]
+INTERMEDIATE_PHASES = ["waxing crescent", "waxing gibbous", "waning gibbous", "waning crescent"]
+PRINCIPAL_PHASE_WINDOW = 7.5  # Degrees either side of a principal phase, about 15 hours of Moon motion
 
 COMPASS = "N NNE NE ENE E ESE SE SSE S SSW SW WSW W WNW NW NNW".split()
 
@@ -255,12 +254,21 @@ def major_bodies(time, location, frame):
     return bodies
 
 
+def phase_name(angle):
+    """Moon phase name from the Moon-Sun difference in ecliptic longitude (degrees)"""
+    angle %= 360
+    nearest = round(angle / 90)
+    if abs(angle - nearest * 90) <= PRINCIPAL_PHASE_WINDOW:
+        return PRINCIPAL_PHASES[nearest % 4]
+    return INTERMEDIATE_PHASES[int(angle // 90)]
+
+
 def moon_phase(sun, moon):
     """Phase name and illuminated fraction from the geocentric Sun and Moon"""
     ecliptic = GeocentricTrueEcliptic(equinox=sun.obstime)
     angle = (moon.transform_to(ecliptic).lon - sun.transform_to(ecliptic).lon).wrap_at(360 * u.deg).deg
     fraction = (1 - np.cos(sun.separation(moon).rad)) / 2
-    return MOON_PHASES[round(angle / 45) % 8], fraction
+    return phase_name(angle), fraction
 
 
 def main():
