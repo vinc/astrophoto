@@ -3,6 +3,7 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,8 +12,8 @@ from unittest.mock import patch
 import numpy as np
 from astropy.io import fits
 
-from astrophoto import center, focus, locate
-from astrophoto.lib import camera, config
+from astrophoto import capture as capture_command, center, focus, locate
+from astrophoto.lib import camera, config, gphoto
 
 OBSERVER = ["--latitude", "0", "--longitude", "0", "--elevation", "0"]
 
@@ -167,6 +168,127 @@ class CaptureTests(unittest.TestCase):
             with patch.object(camera.subprocess, "run", side_effect=download) as run:
                 camera.capture(directory)
             self.assertFalse(any(arg.startswith("iso=") for arg in run.call_args.args[0]))
+
+
+class FakeCamera:
+    """Stand in for gphoto2: track the lens position and save live-view frames blurred by defocus."""
+
+    def __init__(self, best=3, backlash=0):
+        self.position, self.best, self.backlash = 0, best, backlash
+        self.direction = 0
+        self.commands = []
+        rng = np.random.default_rng(1)
+        self.stars = rng.uniform(40, 360, size=(25, 2))
+
+    def frame(self):
+        sigma = 1.2 + 0.8 * abs(self.position - self.best)
+        yy, xx = np.indices((400, 600), dtype=float)
+        image = np.full(xx.shape, 20.0)
+        for x, y in self.stars:
+            x += 100
+            image += 200 * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma**2)) * (1.2 / sigma) ** 2
+        image += np.random.default_rng(len(self.commands)).normal(0, 1, image.shape)
+        return np.clip(image, 0, 255).astype(np.uint8)
+
+    def __call__(self, command, cwd=None, **kwargs):
+        self.commands.append(command)
+        for option in command:
+            if option.startswith("manualfocusdrive="):
+                direction, size = option.split("=")[1].split()
+                sign = 1 if direction == "Far" else -1
+                # A reversal first takes up the slack in the focus mechanism without moving the focus
+                if sign != self.direction and self.direction:
+                    slack = min(self.backlash, int(size))
+                    self.position += sign * (int(size) - slack)
+                else:
+                    self.position += sign * int(size)
+                self.direction = sign
+        if "--capture-preview" in command:
+            name = command[command.index("--filename") + 1]
+            import matplotlib.image
+            matplotlib.image.imsave(Path(cwd) / f"thumb_{name}", self.frame(), cmap="gray", vmin=0, vmax=255)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+
+class AutofocusTests(ConfiguredTests):
+    def test_v_curve_is_fitted_from_the_near_side_and_the_lens_left_at_its_minimum(self):
+        for best, step in [(3, 1), (-2, 2), (0, 1)]:
+            with self.subTest(best=best, step=step):
+                fake = FakeCamera(best=best * step)
+                argv = ["focus.py", "--auto", "--no-plot", "--step", str(step), "--span", "6"]
+                with patch.object(sys, "argv", argv), patch.object(gphoto.subprocess, "run", side_effect=fake), \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    focus.main()
+                self.assertEqual(fake.position, best * step)
+                self.assertIn(f"Focused at step {best:+d}", output.getvalue())
+                # The lens arrives at the minimum moving towards infinity, as it did for every measurement
+                self.assertEqual(fake.direction, 1)
+                drives = {option for command in fake.commands for option in command if option.startswith("manualfocusdrive=")}
+                self.assertEqual(drives, {f"manualfocusdrive=Near {step}", f"manualfocusdrive=Far {step}"})
+
+    def test_backlash_is_taken_up_before_measuring(self):
+        fake = FakeCamera(best=2, backlash=1)
+        argv = ["focus.py", "--auto", "--no-plot", "--step", "1", "--span", "6"]
+        with patch.object(sys, "argv", argv), patch.object(gphoto.subprocess, "run", side_effect=fake), \
+                contextlib.redirect_stdout(io.StringIO()):
+            focus.main()
+        self.assertEqual(fake.position, 2)
+
+    def test_a_minimum_outside_the_scan_returns_the_lens_and_stops(self):
+        fake = FakeCamera(best=20)
+        argv = ["focus.py", "--auto", "--no-plot", "--step", "1", "--span", "4"]
+        with patch.object(sys, "argv", argv), patch.object(gphoto.subprocess, "run", side_effect=fake), \
+                contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(SystemExit, "No focus minimum"):
+            focus.main()
+        self.assertEqual(fake.position, 0)
+
+    def test_fit_finds_a_minimum_between_steps_and_rejects_edges(self):
+        positions = list(range(-4, 5))
+        hfrs = [abs(p - 0.4) + 1 for p in positions]
+        self.assertAlmostEqual(focus.fit_minimum(positions, hfrs), 0.4, delta=0.5)
+        self.assertIsNone(focus.fit_minimum(positions, [5 - p for p in positions]))
+        self.assertIsNone(focus.fit_minimum([0, 1], [2, 1]))
+        # Frames without stars are skipped rather than ending the curve
+        self.assertAlmostEqual(focus.fit_minimum([0, 1, 2, 3, 4], [3, None, 1, None, 3]), 2, delta=0.1)
+
+    def test_live_mode_measures_zoomed_previews(self):
+        fake = FakeCamera(best=0)
+        argv = ["focus.py", "--live", "--no-plot", "--frames", "2", "--interval", "0"]
+        with patch.object(sys, "argv", argv), patch.object(gphoto.subprocess, "run", side_effect=fake), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            focus.main()
+        self.assertEqual(len(fake.commands), 2)
+        self.assertIn("eoszoom=5", fake.commands[0])
+        self.assertNotIn("manualfocusdrive", " ".join(fake.commands[0]))
+        readings = [line for line in output.getvalue().splitlines() if line.startswith("thumb_preview.jpg:")]
+        self.assertEqual(len(readings), 2)
+        self.assertRegex(readings[0], r"HFR \d+\.\d+ px \| \d+ stars")
+        self.assertNotIn('"', readings[0])
+
+    def test_live_and_auto_reject_saved_files(self):
+        for option in ["--live", "--auto"]:
+            with self.subTest(option=option), patch.object(sys, "argv", ["focus.py", option, "saved.fit"]), \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                focus.main()
+            self.assertEqual(raised.exception.code, 2)
+
+
+class NoFocusTests(unittest.TestCase):
+    def test_failed_autofocus_explains_the_fix(self):
+        error = subprocess.CalledProcessError(1, "gphoto2", stderr="Canon EOS Capture failed to release: Perhaps no focus?\n")
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(gphoto.subprocess, "run", side_effect=error), \
+                contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(subprocess.CalledProcessError):
+            camera.capture(temporary)
+        self.assertIn("Perhaps no focus?", err.getvalue())
+        self.assertIn("C.Fn IV-1", err.getvalue())
+
+    def test_capture_command_explains_the_fix_too(self):
+        result = subprocess.CompletedProcess([], 1, None, "Perhaps no focus?\n")
+        with patch.object(capture_command.subprocess, "run", return_value=result), \
+                contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            capture_command.run(["gphoto2", "--capture-image"])
+        self.assertIn("C.Fn IV-1", err.getvalue())
 
 
 if __name__ == "__main__":

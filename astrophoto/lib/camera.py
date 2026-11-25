@@ -4,11 +4,14 @@ from pathlib import Path
 import subprocess
 
 import exifread
+import matplotlib.image
 import matplotlib.pyplot as plt
 import numpy as np
 import rawpy
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
+
+from astrophoto.lib.gphoto import drive_options, run_gphoto2
 
 @dataclass(frozen=True)
 class Camera:
@@ -56,6 +59,29 @@ def preview_figure(**kwargs):
         raise SystemExit(f"Matplotlib backend '{plt.get_backend()}' cannot open a preview window\n{help_text}")
     return figure
 
+def live_preview(directory, zoom=None, drive=0, step=2, iso=None):
+    """Grab one live-view frame, optionally zoomed and after moving the focus, and return its path."""
+    directory = Path(directory).resolve()
+    command = ["gphoto2", "--set-config", "viewfinder=1"]
+    # With exposure simulation, the ISO sets how bright the live view looks
+    if iso is not None:
+        command += ["--set-config", f"iso={iso}"]
+    if zoom is not None:
+        command += ["--set-config", f"eoszoom={zoom}"]
+    command += drive_options(drive, step)
+    command += ["--capture-preview", "--force-overwrite", "--filename", "preview.jpg"]
+    # gphoto2 prefixes preview names with thumb_, so run it where that name stays inside the directory
+    run_gphoto2(command, cwd=directory)
+    files = list(directory.glob("*preview.jpg"))
+    if len(files) != 1:
+        raise RuntimeError("Expected one downloaded live-view frame")
+    return files[0]
+
+def move_focus(steps, step=2):
+    """Move the focus by a signed number of steps without taking a picture."""
+    if steps:
+        run_gphoto2(["gphoto2", "--set-config", "viewfinder=1", *drive_options(steps, step)])
+
 def capture(directory, shutterspeed=None, iso=None):
     directory = Path(directory).resolve()
     command = [
@@ -70,10 +96,7 @@ def capture(directory, shutterspeed=None, iso=None):
         "--capture-image-and-download",
         "--filename", str(directory / "capture.%C"),
     ]
-    try:
-        subprocess.run(command, check=True)
-    except FileNotFoundError:
-        raise SystemExit("gphoto2 not found")
+    run_gphoto2(command)
     files = list(directory.glob("capture.*"))
     if len(files) != 1:
         raise RuntimeError("Expected one downloaded RAW image")
@@ -81,6 +104,12 @@ def capture(directory, shutterspeed=None, iso=None):
 
 def read_image(path, bin_raw=True):
     path = Path(path)
+    if path.suffix.lower() in {".jpg", ".jpeg"}:
+        # Live-view frames are already demosaiced 8-bit images, so there is no Bayer mosaic to bin
+        rgb = matplotlib.image.imread(path)
+        data = rgb.astype(np.float32) if rgb.ndim == 2 else rgb[..., :3].astype(np.float32).mean(axis=2)
+        saturated = (rgb >= 250) if rgb.ndim == 2 else (rgb[..., :3] >= 250).any(axis=2)
+        return data, saturated, 1
     if path.suffix.lower() in {".fit", ".fits", ".new"}:
         data, header = fits.getdata(path, header=True)
         is_raw = "RAWFILE" in header

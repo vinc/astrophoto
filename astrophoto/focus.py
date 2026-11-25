@@ -10,7 +10,10 @@ from astropy.nddata import Cutout2D
 from astropy.stats import sigma_clipped_stats
 from scipy.ndimage import label
 
-from astrophoto.lib.camera import CAMERAS, capture, display_limits, image_optics, pixel_scale, preview_figure, read_image
+from astrophoto.lib.camera import (
+    CAMERAS, capture, display_limits, image_optics, live_preview, move_focus, pixel_scale, preview_figure, read_image,
+)
+from astrophoto.lib.gphoto import FOCUS_STEPS
 from astrophoto.lib.config import camera_profile, command_settings
 
 class FocusRangeError(ValueError):
@@ -20,12 +23,18 @@ DEFAULTS = {"shutterspeed": "1/4", "iso": None}
 # The aperture radius was tuned on the 6.4 micrometre pixels of the EOS 20D
 RADIUS, RADIUS_PIXEL_SIZE = 12, 6.4
 
+# Steps driven past a position and back, so the lens always arrives moving towards infinity
+BACKLASH = 3
+
 def default_radius(camera):
     return RADIUS if camera is None else max(3, round(RADIUS * RADIUS_PIXEL_SIZE / camera.pixel_size))
 
 def hfr_text(hfr, path, camera):
     """Format an HFR in sensor pixels, adding arcseconds when the optics are known."""
     text = f"HFR {hfr:.2f} px"
+    # Live-view pixels are not sensor pixels, so their scale is unknown
+    if Path(path).suffix.lower() in {".jpg", ".jpeg"}:
+        return text
     try:
         model, focal = image_optics(path)
     except (OSError, ValueError, KeyError):
@@ -37,6 +46,8 @@ def hfr_text(hfr, path, camera):
 
 def measure_stars(data, saturated=None, radius=12, max_stars=20):
     background, _, noise = sigma_clipped_stats(data)
+    # A dark 8-bit live-view frame can have no measurable noise at all
+    noise = max(float(noise), 0.5)
     inner = data[1:-1, 1:-1]
     peaks = np.isfinite(inner) & (inner > background + 8 * noise)
     for dy in range(3):
@@ -113,9 +124,42 @@ def measure_stars(data, saturated=None, radius=12, max_stars=20):
         raise FocusRangeError("HFR out of range: improve rough focus or increase --radius")
     return stars
 
-def show_focus(figure, data, stars, title, interactive=True):
+def frame_hfr(data, saturated, scale, radius):
+    """Return the stars and median HFR of a frame, with a title describing the measurement."""
+    try:
+        stars = measure_stars(data, saturated, radius=radius)
+    except FocusRangeError as exc:
+        return [], None, str(exc)
+    if not stars:
+        return [], None, "No usable stars: check rough focus, exposure, or saturation"
+    return stars, float(np.median([star[2] for star in stars])) * scale, None
+
+def fit_minimum(positions, hfrs):
+    """Return the focus position at the bottom of the V-curve, or None when the scan did not pass through it."""
+    pairs = [(position, hfr) for position, hfr in zip(positions, hfrs) if hfr is not None]
+    if len(pairs) < 3:
+        return None
+    positions, hfrs = (np.array(values, dtype=float) for values in zip(*pairs))
+    best = int(np.argmin(hfrs))
+    if best in (0, len(hfrs) - 1):
+        return None
+    low, high = max(0, best - 3), min(len(hfrs), best + 4)
+    curve, slope, _ = np.polyfit(positions[low:high], hfrs[low:high], 2)
+    if curve <= 0:
+        return float(positions[best])
+    return float(np.clip(-slope / (2 * curve), positions[low], positions[high - 1]))
+
+def show_focus(figure, data, stars, title, interactive=True, history=None, xlabel="Frame"):
     figure.clear()
-    field, detail = figure.subplots(1, 2)
+    if history:
+        field, detail, trend = figure.subplots(1, 3, gridspec_kw={"width_ratios": [2, 1, 1]})
+        xs, ys = zip(*history)
+        trend.plot(xs, [np.nan if y is None else y for y in ys], "o-", color="tab:red")
+        trend.set_xlabel(xlabel)
+        trend.set_ylabel("HFR (px)")
+        trend.set_title("Lower is better")
+    else:
+        field, detail = figure.subplots(1, 2)
     low, high = display_limits(data)
     field.imshow(data, cmap="gray", origin="lower", vmin=low, vmax=high)
     if stars:
@@ -145,14 +189,63 @@ def show_focus(figure, data, stars, title, interactive=True):
     if interactive:
         plt.pause(0.1)
 
+def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False):
+    """Scan the focus through a V-curve in live view and leave the lens at its minimum HFR."""
+    # Every measured position is reached moving towards infinity, so the lens backlash is always taken up
+    move_focus(-(span + BACKLASH), step)
+    move_focus(BACKLASH, step)
+    positions, hfrs = [], []
+
+    def measure(position, drive):
+        with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
+            path = live_preview(temporary, zoom, drive=drive, step=step, iso=iso)
+            data, saturated, scale = read_image(path)
+        stars, hfr, problem = frame_hfr(data, saturated, scale, radius)
+        title = problem or f"HFR {hfr:.2f} px | {len(stars)} stars"
+        print(f"Step {position:+d}: {title}", flush=True)
+        return data, stars, hfr, title
+
+    for position in range(-span, span + 1):
+        data, stars, hfr, title = measure(position, 0 if position == -span else 1)
+        positions.append(position)
+        hfrs.append(hfr)
+        if figure is not None:
+            show_focus(figure, data, stars, f"Scanning step {position:+d} | {title}", interactive,
+                       history=list(zip(positions, hfrs)), xlabel="Focus step")
+    target = fit_minimum(positions, hfrs)
+    if target is None:
+        # Leave the lens where it started rather than at the end of a failed scan
+        move_focus(-(span + BACKLASH), step)
+        move_focus(BACKLASH, step)
+        raise SystemExit(
+            f"No focus minimum within {span} steps of the start: improve rough focus, "
+            "aim at a brighter star, or increase --span"
+        )
+    target = int(round(target))
+    move_focus(-(span - target + BACKLASH), step)
+    move_focus(BACKLASH, step)
+    data, stars, hfr, title = measure(target, 0)
+    print(f"Focused at step {target:+d} of the scan", flush=True)
+    if figure is not None:
+        history = list(zip(positions, hfrs))
+        show_focus(figure, data, stars, f"Focused at step {target:+d} | {title}", interactive,
+                   history=history, xlabel="Focus step")
+    return target, hfr
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Measure manual focus from stars in RAW or FITS images",
-        epilog="Capture settings can also be set in the [focus] table of config.toml.",
+        description="Measure focus from stars in RAW, FITS, or live-view images",
+        epilog="Capture settings can also be set in the [focus] table of config.toml. "
+               "--live and --auto need a Canon EOS camera with live view; --auto also needs the lens switch on AF.",
     )
     parser.add_argument("files", nargs="*", type=Path, help="Saved images; omit to capture repeatedly")
     parser.add_argument("--shutterspeed", help="gphoto2 shutter speed for new captures (default: 1/4)")
     parser.add_argument("--iso", help="Optional gphoto2 ISO for new captures")
+    parser.add_argument("--live", action="store_true", help="Measure zoomed live-view frames instead of RAW captures")
+    parser.add_argument("--auto", action="store_true", help="Drive the lens through a V-curve in live view and stop at best focus")
+    parser.add_argument("--zoom", type=int, choices=(1, 5, 10), default=5, help="Live-view zoom (default: 5)")
+    parser.add_argument("--step", type=int, choices=FOCUS_STEPS, default=2, help="Lens drive step size for --auto (default: 2)")
+    parser.add_argument("--span", type=int, default=8, help="Steps scanned on each side of the start for --auto (default: 8)")
     parser.add_argument("--interval", type=float, default=1, help="Pause between captures in seconds (default: 1)")
     parser.add_argument("--frames", type=int, default=0, help="Number of new captures; 0 repeats until stopped")
     parser.add_argument(
@@ -175,13 +268,34 @@ def main():
         parser.error("--radius must be at least 3")
     if args.save_preview and len(args.files) > 1:
         parser.error("--save-preview accepts one saved image at a time")
+    if (args.live or args.auto) and args.files:
+        parser.error("--live and --auto capture new frames, so omit the input files")
+    if args.span < 2:
+        parser.error("--span must be at least 2")
 
     interactive = not args.no_plot and (not args.files or args.plot)
-    figure = preview_figure(figsize=(11, 5)) if interactive else None
+    figure = preview_figure(figsize=(14, 5)) if interactive else None
     if figure is None and args.save_preview:
-        figure = plt.figure(figsize=(11, 5))
+        figure = plt.figure(figsize=(14, 5))
     best = np.inf
     count = 0
+    history = []
+    if args.auto:
+        try:
+            autofocus(args.span, args.step, args.zoom, args.radius, settings["iso"], figure, interactive)
+            if args.save_preview:
+                figure.savefig(args.save_preview, dpi=150)
+                print(f"  Saved {args.save_preview}")
+            if interactive:
+                plt.show()
+        except KeyboardInterrupt:
+            pass
+        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+            raise SystemExit(str(exc)) from exc
+        finally:
+            if figure is not None:
+                plt.close(figure)
+        return
     if not args.files:
         print("Adjust focus between captures; lower HFR is better. Ctrl-C or close the window to stop")
     try:
@@ -190,7 +304,12 @@ def main():
                 break
             with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
                 try:
-                    path = args.files[count] if args.files else capture(temporary, settings["shutterspeed"], settings["iso"])
+                    if args.files:
+                        path = args.files[count]
+                    elif args.live:
+                        path = live_preview(temporary, args.zoom, iso=settings["iso"])
+                    else:
+                        path = capture(temporary, settings["shutterspeed"], settings["iso"])
                 except subprocess.CalledProcessError as exc:
                     print(f"{exc}; retrying with the next capture", flush=True)
                     if figure is not None:
@@ -202,22 +321,17 @@ def main():
                         time.sleep(max(args.interval, 0.1))
                     continue
                 data, saturated, scale = read_image(path)
-                try:
-                    stars = measure_stars(data, saturated, radius=args.radius)
-                except FocusRangeError as exc:
-                    stars = []
-                    title = str(exc)
-                else:
-                    title = "No usable stars: check rough focus, exposure, or saturation"
+                stars, hfr, title = frame_hfr(data, saturated, scale, args.radius)
                 if stars:
-                    hfr = float(np.median([star[2] for star in stars])) * scale
                     best = min(best, hfr)
                     title = f"{hfr_text(hfr, path, camera)} | {len(stars)} stars"
                     if not args.files:
                         title += f" | best {best:.2f}"
+                if not args.files:
+                    history = (history + [(count + 1, hfr)])[-50:]
                 print(f"{path.name}: {title}", flush=True)
                 if figure is not None:
-                    show_focus(figure, data, stars, title, interactive=interactive)
+                    show_focus(figure, data, stars, title, interactive=interactive, history=history)
                     if args.save_preview:
                         figure.savefig(args.save_preview, dpi=150)
                         print(f"  Saved {args.save_preview}")
