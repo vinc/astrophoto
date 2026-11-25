@@ -10,10 +10,30 @@ from astropy.nddata import Cutout2D
 from astropy.stats import sigma_clipped_stats
 from scipy.ndimage import label
 
-from astrophoto.lib.camera import capture, display_limits, preview_figure, read_image
+from astrophoto.lib.camera import CAMERAS, capture, display_limits, image_optics, pixel_scale, preview_figure, read_image
+from astrophoto.lib.config import camera_profile, command_settings
 
 class FocusRangeError(ValueError):
     pass
+
+DEFAULTS = {"shutterspeed": "1/4", "iso": None}
+# The aperture radius was tuned on the 6.4 micrometre pixels of the EOS 20D
+RADIUS, RADIUS_PIXEL_SIZE = 12, 6.4
+
+def default_radius(camera):
+    return RADIUS if camera is None else max(3, round(RADIUS * RADIUS_PIXEL_SIZE / camera.pixel_size))
+
+def hfr_text(hfr, path, camera):
+    """Format an HFR in sensor pixels, adding arcseconds when the optics are known."""
+    text = f"HFR {hfr:.2f} px"
+    try:
+        model, focal = image_optics(path)
+    except (OSError, ValueError, KeyError):
+        return text
+    camera = CAMERAS.get(model, camera)
+    if camera is not None and focal is not None:
+        text += f' ({hfr * pixel_scale(camera, focal):.1f}")'
+    return text
 
 def measure_stars(data, saturated=None, radius=12, max_stars=20):
     background, _, noise = sigma_clipped_stats(data)
@@ -126,17 +146,29 @@ def show_focus(figure, data, stars, title, interactive=True):
         plt.pause(0.1)
 
 def main():
-    parser = argparse.ArgumentParser(description="Measure manual focus from stars in RAW or FITS images")
+    parser = argparse.ArgumentParser(
+        description="Measure manual focus from stars in RAW or FITS images",
+        epilog="Capture settings can also be set in the [focus] table of config.toml.",
+    )
     parser.add_argument("files", nargs="*", type=Path, help="Saved images; omit to capture repeatedly")
-    parser.add_argument("--shutterspeed", default="1/4", help="gphoto2 shutter speed for new captures (default: 1/4)")
+    parser.add_argument("--shutterspeed", help="gphoto2 shutter speed for new captures (default: 1/4)")
+    parser.add_argument("--iso", help="Optional gphoto2 ISO for new captures")
     parser.add_argument("--interval", type=float, default=1, help="Pause between captures in seconds (default: 1)")
     parser.add_argument("--frames", type=int, default=0, help="Number of new captures; 0 repeats until stopped")
-    parser.add_argument("--radius", type=int, default=12, help="Aperture radius in binned image pixels (default: 12)")
+    parser.add_argument(
+        "--radius", type=int,
+        help="Aperture radius in binned image pixels (default: 12, scaled to the configured camera's pixel size)",
+    )
     preview = parser.add_mutually_exclusive_group()
     preview.add_argument("--plot", action="store_true", help="Open a preview window for saved images")
     preview.add_argument("--no-plot", action="store_true", help="Print measurements without a preview window")
     parser.add_argument("--save-preview", type=Path, help="Save an annotated PNG without requiring a GUI")
     args = parser.parse_args()
+    settings = command_settings(parser, "focus", DEFAULTS)
+    settings.update({key: getattr(args, key) for key in DEFAULTS if getattr(args, key) is not None})
+    camera = camera_profile(parser)
+    if args.radius is None:
+        args.radius = default_radius(camera)
     if args.interval < 0 or args.frames < 0:
         parser.error("--interval and --frames must not be negative")
     if args.radius < 3:
@@ -158,7 +190,7 @@ def main():
                 break
             with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
                 try:
-                    path = args.files[count] if args.files else capture(temporary, args.shutterspeed)
+                    path = args.files[count] if args.files else capture(temporary, settings["shutterspeed"], settings["iso"])
                 except subprocess.CalledProcessError as exc:
                     print(f"{exc}; retrying with the next capture", flush=True)
                     if figure is not None:
@@ -180,7 +212,7 @@ def main():
                 if stars:
                     hfr = float(np.median([star[2] for star in stars])) * scale
                     best = min(best, hfr)
-                    title = f"HFR {hfr:.2f} px | {len(stars)} stars"
+                    title = f"{hfr_text(hfr, path, camera)} | {len(stars)} stars"
                     if not args.files:
                         title += f" | best {best:.2f}"
                 print(f"{path.name}: {title}", flush=True)

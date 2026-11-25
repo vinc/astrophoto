@@ -19,7 +19,7 @@ from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
 
 from astrophoto.convert import convert
-from astrophoto.lib.camera import display_limits, stack_display_limits
+from astrophoto.lib.camera import CAMERAS, display_limits, pixel_scale, stack_display_limits
 from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
 from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
 
@@ -48,7 +48,18 @@ def _save_solution(output, cached, source, source_info, timezone, raw):
         finally:
             temporary.unlink(missing_ok=True)
 
-def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, keep_solution=False):
+def scale_options(header, scale_low, scale_high, camera=None):
+    """Return solve-field options for the image scale, as tight as the metadata allows."""
+    camera = CAMERAS.get(header.get("INSTRUME"), camera)
+    focal = header.get("FOCALLEN")
+    # Stacks are binned and drop RAWFILE, so only single RAW frames match the sensor pixels
+    if camera is not None and "RAWFILE" in header and isinstance(focal, (int, float)) and focal > 0:
+        scale = pixel_scale(camera, focal)
+        # EXIF focal lengths of zoom lenses are rounded, so allow some slack
+        return ["--scale-units", "arcsecperpix", "--scale-low", f"{0.85 * scale:.3f}", "--scale-high", f"{1.15 * scale:.3f}"]
+    return ["--scale-units", "degwidth", "--scale-low", str(scale_low), "--scale-high", str(scale_high)]
+
+def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, keep_solution=False, camera=None, near=None):
     path = path.resolve()
     source = path
     source_info = source.stat()
@@ -100,8 +111,9 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
     try:
         subprocess.run([
             "solve-field", "--backend-config", str(config),
-            "--scale-units", "degwidth", "--scale-low", str(scale_low),
-            "--scale-high", str(scale_high), "--downsample", "2",
+            *scale_options(header, scale_low, scale_high, camera),
+            *([] if near is None else ["--ra", str(near[0]), "--dec", str(near[1]), "--radius", str(near[2])]),
+            "--downsample", "2",
             "--no-plots", "--overwrite", "--cpulimit", str(cpu_limit),
             "--dir", str(directory), "--new-fits", str(output),
             "--solved", str(marker), str(path),

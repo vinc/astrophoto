@@ -82,3 +82,35 @@ def solve_scale(parser):
     if not 0 < scale["scale_low"] < scale["scale_high"]:
         parser.error(f"[solve] in {path} must satisfy 0 < scale_low < scale_high")
     return scale["scale_low"], scale["scale_high"]
+
+
+def camera_profile(parser):
+    """Return the camera named by the top-level `camera` key, or None when unset."""
+    from astrophoto.lib.camera import CAMERAS
+
+    config, path = read_config(parser)
+    name = config.get("camera")
+    if name is None:
+        return None
+    if not isinstance(name, str):
+        parser.error(f"camera in {path} must be a string")
+    if name not in CAMERAS:
+        parser.error(f"Unknown camera {name} in {path}; choose one of: {', '.join(CAMERAS)}")
+    return CAMERAS[name]
+
+
+def command_settings(parser, command, defaults):
+    """Return a command's settings from its config table layered over the defaults."""
+    config, path = read_config(parser)
+    table = config.get(command, {})
+    if not isinstance(table, dict):
+        parser.error(f"[{command}] in {path} must be a table")
+    settings = dict(defaults)
+    for key, value in table.items():
+        if key not in defaults:
+            parser.error(f"Unknown setting {key} in [{command}] of {path}")
+        # gphoto2 takes every setting as text, such as "1/4" or "3200"
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            parser.error(f"{key} in [{command}] of {path} must be a number or a string")
+        settings[key] = str(value)
+    return settings

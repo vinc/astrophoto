@@ -1,11 +1,45 @@
+from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 import subprocess
 
+import exifread
 import matplotlib.pyplot as plt
 import numpy as np
 import rawpy
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
+
+@dataclass(frozen=True)
+class Camera:
+    name: str
+    pixel_size: float  # micrometres
+    live_view: bool
+
+# Names match the EXIF model that the camera writes into its RAW files
+CAMERAS = {camera.name: camera for camera in [
+    Camera("Canon EOS 20D", pixel_size=6.4, live_view=False),
+    Camera("Canon EOS 600D", pixel_size=4.3, live_view=True),
+]}
+
+def pixel_scale(camera, focal_length, binning=1):
+    """Return the image scale in arcseconds per pixel."""
+    return 206.265 * camera.pixel_size * binning / focal_length
+
+def image_optics(path):
+    """Return the camera model and focal length in mm recorded in a RAW or FITS image."""
+    path = Path(path)
+    if path.suffix.lower() in {".fit", ".fits", ".new"}:
+        header = fits.getheader(path)
+        model, focal = header.get("INSTRUME"), header.get("FOCALLEN")
+    else:
+        with path.open("rb") as file:
+            tags = exifread.process_file(file, details=False)
+        model, focal = tags.get("Image Model"), tags.get("EXIF FocalLength")
+        model = None if model is None else str(model).strip()
+        focal = None if focal is None else float(Fraction(str(focal)))
+    focal = float(focal) if isinstance(focal, (int, float)) and focal > 0 else None
+    return model, focal
 
 def preview_figure(**kwargs):
     help_text = (
@@ -22,7 +56,7 @@ def preview_figure(**kwargs):
         raise SystemExit(f"Matplotlib backend '{plt.get_backend()}' cannot open a preview window\n{help_text}")
     return figure
 
-def capture(directory, shutterspeed=None):
+def capture(directory, shutterspeed=None, iso=None):
     directory = Path(directory).resolve()
     command = [
         "gphoto2", "--set-config", "syncdatetime=1",
@@ -30,6 +64,8 @@ def capture(directory, shutterspeed=None):
     ]
     if shutterspeed is not None:
         command += ["--set-config", f"shutterspeed={shutterspeed}"]
+    if iso is not None:
+        command += ["--set-config", f"iso={iso}"]
     command += [
         "--capture-image-and-download",
         "--filename", str(directory / "capture.%C"),

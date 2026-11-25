@@ -19,6 +19,7 @@ latitude = 51.18
 longitude = -1.83
 elevation = 100
 timezone = "Europe/Paris"
+camera = "Canon EOS 600D" # or "Canon EOS 20D"
 
 [capture]
 frames = 24
@@ -29,10 +30,22 @@ shutterspeed = 5
 [capture.flat]
 shutterspeed = 50
 
+[focus]
+shutterspeed = "1/4"
+iso = 3200
+
+[center]
+shutterspeed = 2
+iso = 3200
+
 [solve]
 scale_low = 3
 scale_high = 20
 ```
+
+With a known `camera`, `focus` reports star sizes in arcseconds and scales its
+aperture to the pixel size, and `center` gives the plate solver the image scale
+from the lens focal length (falling back to `[solve]` otherwise).
 
 ## Usage
 

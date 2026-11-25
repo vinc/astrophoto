@@ -15,8 +15,14 @@ from astropy.wcs import NoConvergence, WCS
 
 from astrophoto.lib.camera import capture, display_limits, preview_figure, read_image
 from astrophoto.lib.catalog import AmbiguousObject, resolve
-from astrophoto.lib.config import add_observer_arguments, camera_timezone, observer_location, solve_scale
+from astrophoto.lib.config import (
+    add_observer_arguments, camera_profile, camera_timezone, command_settings, observer_location, solve_scale,
+)
 from astrophoto.locate import PlateSolveError, get_ephemerides, solve_image
+
+DEFAULTS = {"shutterspeed": None, "iso": None}
+# Search radius in degrees around the previous solution while the camera is moved by hand
+NEAR_RADIUS = 10
 
 def pointing_offset(center, target, time, observer, target_time=None):
     location = EarthLocation.from_geodetic(
@@ -84,7 +90,7 @@ def inspect_image(path, query, observer, coordinates=None, correction_time=None,
             print(f"  {target_name} is {angle_text(size)} across and may be cropped in the {frame}")
     return {
         "x": x, "y": y, "inside": inside, "pan": pan, "tilt": tilt,
-        "title": directions, "target_name": target_name,
+        "title": directions, "target_name": target_name, "center": (float(center.ra.deg), float(center.dec.deg)),
     }
 
 def show_pointing(figure, path, query, result, interactive=True):
@@ -127,7 +133,10 @@ def show_pointing(figure, path, query, result, interactive=True):
         plt.pause(0.1)
 
 def main():
-    parser = argparse.ArgumentParser(description="Guide manual camera pointing using a plate-solved exposure")
+    parser = argparse.ArgumentParser(
+        description="Guide manual camera pointing using a plate-solved exposure",
+        epilog="Capture settings can also be set in the [center] table of config.toml.",
+    )
     parser.add_argument("file", nargs="?", type=Path, help="Saved RAW or FITS image; omit to capture a new image")
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--query", help="Star, deep-sky object, or Solar System body name or designation")
@@ -135,6 +144,7 @@ def main():
     parser.add_argument("--dec", type=float, help="Fixed ICRS declination in degrees")
     add_observer_arguments(parser)
     parser.add_argument("--shutterspeed", help="Optional gphoto2 shutter speed for new captures")
+    parser.add_argument("--iso", help="Optional gphoto2 ISO for new captures")
     parser.add_argument("--loop", action="store_true", help="Repeat new captures until Ctrl-C or the window is closed")
     preview = parser.add_mutually_exclusive_group()
     preview.add_argument("--plot", action="store_true", help="Open a preview window for a saved image")
@@ -151,6 +161,10 @@ def main():
     if args.loop and args.file:
         parser.error("--loop requires new captures, so omit the input file")
 
+    settings = command_settings(parser, "center", DEFAULTS)
+    settings.update({key: getattr(args, key) for key in DEFAULTS if getattr(args, key) is not None})
+    camera = camera_profile(parser)
+    near = None
     timezone = camera_timezone(parser)
     observer = observer_location(args)
     coordinates = None if args.ra is None else (args.ra, args.dec)
@@ -173,14 +187,16 @@ def main():
                 break
             with tempfile.TemporaryDirectory(prefix="astrophoto-center-") as temporary:
                 try:
-                    path = args.file or capture(temporary, args.shutterspeed)
+                    path = args.file or capture(temporary, settings["shutterspeed"], settings["iso"])
                     solved = solve_image(
                         path, temporary, timezone, scale_low, scale_high,
-                        keep_solution=args.file is not None,
+                        keep_solution=args.file is not None, camera=camera, near=near,
                     )
                 except (PlateSolveError, subprocess.CalledProcessError) as exc:
                     if not args.loop:
                         raise
+                    # The camera may have moved further than the hinted search area
+                    near = None
                     print(f"{exc}; retrying with the next capture", flush=True)
                     if figure is not None:
                         figure.suptitle("Capture or plate solving failed; retrying")
@@ -188,6 +204,7 @@ def main():
                 else:
                     correction_time = Time.now() if args.file is None else None
                     result = inspect_image(solved, query, observer, coordinates, correction_time=correction_time, size=size)
+                    near = (*result["center"], NEAR_RADIUS)
                     if figure is not None:
                         show_pointing(figure, solved, query, result, interactive=interactive)
                         if args.save_preview:
