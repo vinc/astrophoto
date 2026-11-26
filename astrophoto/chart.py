@@ -205,6 +205,14 @@ def project_images(images, wcs):
         px, py = image_wcs.all_world2pix(ra[near], dec[near], 0, quiet=True)
         ix[near], iy[near] = np.round(px).astype(int), np.round(py).astype(int)
         inside_image = near & (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height)
+        # Distortion polynomials diverge outside the image and can fold distant sky back into it,
+        # so keep only pixels that map back to where they came from
+        rows, columns = np.nonzero(inside_image)
+        back_ra, back_dec = image_wcs.all_pix2world(ix[rows, columns], iy[rows, columns], 0)
+        pixel = float(np.sqrt(np.abs(np.linalg.det(image_wcs.pixel_scale_matrix))))
+        cosine = np.sum(unit_vectors(back_ra, back_dec) * unit_vectors(ra[rows, columns], dec[rows, columns]), axis=-1)
+        folded = ~(np.degrees(np.arccos(np.clip(cosine, -1, 1))) <= 3 * pixel)
+        inside_image[rows[folded], columns[folded]] = False
         sample = pixels[iy[inside_image], ix[inside_image]]
         painted = sample[:, 3] > 0
         rows, columns = np.nonzero(inside_image)

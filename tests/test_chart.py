@@ -381,6 +381,28 @@ class OverlayTests(unittest.TestCase):
         self.assertTrue(covered[chart.HEIGHT // 2, chart.WIDTH // 2])
         self.assertFalse(covered[0, 0])
 
+    def test_sky_folded_back_by_a_diverging_solution_is_not_painted(self):
+        header = make_header(ra=56.75, dec=24.1, angle=0, scale=0.01, size=(300, 200))
+        real = WCS(header).celestial
+
+        class Diverging:
+            """A solution whose inverse fails far from the image, landing every point on its centre pixel."""
+            pixel_scale_matrix = real.pixel_scale_matrix
+
+            def pixel_to_world_values(self, x, y):
+                return real.pixel_to_world_values(x, y)
+
+            def all_pix2world(self, x, y, origin):
+                return real.all_pix2world(x, y, origin)
+
+            def all_world2pix(self, ra, dec, origin, quiet=False):
+                return np.full(np.shape(ra), 149.5), np.full(np.shape(ra), 99.5)
+
+        pixels = np.ones((200, 300, 4), dtype=np.float32)
+        canvas = chart.project_images([(pixels, Diverging())], chart.chart_wcs([56.75, 24.1], 10))
+        # Only the chart pixels within three image pixels of the centre are really there, not the whole chart
+        self.assertLess((canvas[..., 3] > 0).sum(), 100)
+
     def test_the_horizon_and_moon_are_placed_in_the_sky(self):
         time = Time("2026-11-26T18:50:00")
         (ra, dec), moon = chart.horizon_and_moon({"lon": 2.3, "lat": 48.8, "elevation": 0.1}, time)
