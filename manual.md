@@ -303,7 +303,7 @@ Configuration: `[solve]`, `timezone`.
 ## chart
 
 ```
-astrophoto chart [--query NAME] [--fov DEG] [--magnitude MAG] [--output FILE] FILE ...
+astrophoto chart [--query NAME] [--overlay] [--fov DEG] [--magnitude MAG] [--output FILE] FILE ...
 ```
 
 Draws a star chart with the outline of each plate-solved image, optionally
@@ -318,6 +318,11 @@ marking a target at each image time.
 
 `--magnitude MAG`
 : Faintest stars to draw, up to 6 (default: 6).
+
+`--overlay`
+: Draw the images themselves on the chart, and the horizon and the Moon at the
+  middle of the session when the observer position is known. Use a wide
+  `--fov` to see where light in the images comes from.
 
 `--output FILE`
 : PNG path (default: next to a single image, or

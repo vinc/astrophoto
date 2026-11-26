@@ -8,12 +8,16 @@ import matplotlib
 from matplotlib import patheffects
 import matplotlib.pyplot as plt
 import numpy as np
-from astropy.coordinates import SkyCoord, get_constellation
+from astropy import units as u
+from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_body, get_constellation
 from astropy.io import fits
 from astropy.time import Time
+from astropy.utils import iers
 from astropy.wcs import WCS
 
+from astrophoto.lib.camera import display_limits, stack_display_limits
 from astrophoto.lib.catalog import AmbiguousObject, resolve
+from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
 from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
 from astrophoto.locate import get_ephemerides, solve_image
 
@@ -169,7 +173,56 @@ def star_sizes(mag, magnitude):
 def inside(x, y, margin=0):
     return (-0.5 + margin <= x) & (x <= WIDTH - 0.5 - margin) & (-0.5 + margin <= y) & (y <= HEIGHT - 0.5 - margin)
 
-def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=None, title=None):
+def render_image(path, solved):
+    """Return an image as RGBA pixels, coloured when it has RGB data, with its celestial WCS."""
+    data, header = fits.getdata(solved, header=True)
+    rgb = None
+    for source in (Path(path), Path(solved)):
+        if source.suffix.lower() in {".fit", ".fits", ".new"}:
+            rgb, colour = read_rgb(source)
+            if rgb is not None and rgb.shape[:2] == data.shape:
+                return render_rgb(rgb, colour, read_saturation(source)), WCS(header).celestial
+    source = Path(path) if Path(path).suffix.lower() in {".fit", ".fits", ".new"} else Path(solved)
+    display = fits.getheader(source)
+    if "NCOMBINE" in display or "STACKMTH" in display:
+        low, high = stack_display_limits(data, display)
+    else:
+        low, high = display_limits(data)
+    grey = np.clip((data - low) / (high - low), 0, 1)
+    return np.dstack((grey, grey, grey, np.isfinite(data))).astype(np.float32), WCS(header).celestial
+
+def project_images(images, wcs):
+    """Paint images onto the chart grid, later images over earlier ones, as an RGBA array."""
+    canvas = np.zeros((HEIGHT, WIDTH, 4), dtype=np.float32)
+    xs, ys = np.meshgrid(np.arange(WIDTH), np.arange(HEIGHT))
+    ra, dec = wcs.pixel_to_world_values(xs, ys)
+    for pixels, image_wcs in images:
+        height, width = pixels.shape[:2]
+        center = image_wcs.pixel_to_world_values((width - 1) / 2, (height - 1) / 2)
+        # The image projection folds back on itself far from its centre, so stay well within a hemisphere
+        near = np.isfinite(ra) & (separation(ra, dec, center) < 80)
+        ix, iy = np.full(ra.shape, -1), np.full(ra.shape, -1)
+        px, py = image_wcs.all_world2pix(ra[near], dec[near], 0, quiet=True)
+        ix[near], iy[near] = np.round(px).astype(int), np.round(py).astype(int)
+        inside_image = near & (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height)
+        sample = pixels[iy[inside_image], ix[inside_image]]
+        painted = sample[:, 3] > 0
+        rows, columns = np.nonzero(inside_image)
+        canvas[rows[painted], columns[painted]] = sample[painted]
+    return canvas
+
+def horizon_and_moon(observer, time):
+    """Return the horizon as RA and Dec arrays, and the Moon position, for the observer at a time."""
+    location = EarthLocation.from_geodetic(observer["lon"] * u.deg, observer["lat"] * u.deg, observer["elevation"] * u.km)
+    frame = AltAz(obstime=time, location=location)
+    # Bundled Earth rotation data is accurate enough for a chart
+    with iers.conf.set_temp("auto_download", False), iers.conf.set_temp("auto_max_age", None):
+        horizon = SkyCoord(az=np.linspace(0, 360, 361) * u.deg, alt=np.zeros(361) * u.deg, frame=frame).icrs
+        moon = get_body("moon", time, location).icrs
+    return (horizon.ra.deg, horizon.dec.deg), (float(moon.ra.deg), float(moon.dec.deg))
+
+def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=None, title=None, images=None,
+               horizon=None, moon=None):
     center = chart_center(outlines)
     if fov is None:
         fov = default_fov(outlines, center)
@@ -194,9 +247,27 @@ def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=Non
         axis.set_ticks(color=GRID)
         axis.grid(color=GRID, linewidth=0.6)
 
+    if images:
+        ax.imshow(project_images(images, wcs), origin="lower", extent=(-0.5, WIDTH - 0.5, -0.5, HEIGHT - 0.5),
+                  interpolation="nearest", zorder=0.5)
+
     for ra, dec in figure_lines(center, reach):
         x, y = wcs.world_to_pixel_values(ra, dec)
         ax.plot(x, y, color=FIGURES, linewidth=0.8, zorder=1)
+
+    if horizon is not None:
+        ra, dec = horizon
+        near = separation(ra, dec, center) <= reach
+        x, y = wcs.world_to_pixel_values(np.where(near, ra, np.nan), np.where(near, dec, np.nan))
+        if not inside(x, y).any():
+            horizon = None
+        else:
+            ax.plot(x, y, color=SERIES[1], linewidth=1.5, linestyle="--", label="Horizon", zorder=4)
+    if moon is not None and separation(np.array([moon[0]]), np.array([moon[1]]), center)[0] <= reach:
+        x, y = wcs.world_to_pixel_values(*moon)
+        ax.scatter([x], [y], s=200, color=TEXT, edgecolors=SURFACE, zorder=4)
+        ax.annotate("Moon", (x, y), xytext=(12, 12), textcoords="offset points", color=TEXT, fontsize=10, zorder=4,
+                    path_effects=[patheffects.withStroke(linewidth=3, foreground=SURFACE)])
 
     if fov <= WIDE:
         for ra, dec, name in figure_names(center, reach):
@@ -228,7 +299,7 @@ def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=Non
                     color=TEXT, fontsize=10, zorder=4,
                     path_effects=[patheffects.withStroke(linewidth=3, foreground=SURFACE)])
 
-    if legend:
+    if legend or horizon is not None:
         box = ax.legend(loc="lower left", facecolor=SURFACE, edgecolor=GRID, labelcolor=TEXT, fontsize=9)
         box.set_zorder(5)
 
@@ -267,7 +338,9 @@ def main():
     parser.add_argument("--magnitude", type=float, default=6.0, help="Faintest star magnitude, up to 6 (default: 6)")
     parser.add_argument("--output", type=Path, help="PNG path (default: next to a single image, or <kind>-chart-NNNN.png in the current directory)")
     parser.add_argument("--query", help="Star, deep-sky object, or Solar System body to mark at each image time")
-    add_observer_arguments(parser, required=False, note=", with a Solar System --query")
+    parser.add_argument("--overlay", action="store_true",
+                        help="Draw the images themselves, with the horizon and the Moon when the observer is known")
+    add_observer_arguments(parser, required=False, note=", with a Solar System --query or --overlay")
     args = parser.parse_args()
     fixed = None
     if args.query:
@@ -299,7 +372,8 @@ def main():
                 )
                 header = fits.getheader(solved)
                 time = Time(header["DATE-AVG"], format="isot", scale="utc")
-                observations.append((path, header, footprint(header), time))
+                image = render_image(path, solved) if args.overlay else None
+                observations.append((path, header, footprint(header), time, image))
             except Exception as exc:
                 print(f"{path}: ERROR: {exc}")
                 failed = True
@@ -332,7 +406,12 @@ def main():
         observations, ra, dec = map(list, zip(*visible))
         track = (name, np.array(ra), np.array(dec))
 
-    paths, _, outlines, times = map(list, zip(*observations))
+    paths, _, outlines, times, images = map(list, zip(*observations))
+    horizon = moon = None
+    if args.overlay and all(observer_given):
+        # The horizon and the Moon move during a session, so draw them at its middle
+        middle = Time(np.mean([time.jd for time in times]), format="jd", scale="utc")
+        horizon, moon = horizon_and_moon(observer_location(args), middle)
     labels = [local_time(time, timezone) for time in times]
 
     if track is None and len(outlines) == 1:
@@ -345,7 +424,8 @@ def main():
     if output is None:
         output = default_output(paths, args.query)
     draw_chart(outlines, output, labels=labels, fov=args.fov,
-               magnitude=min(args.magnitude, 6.0), track=track, title=title)
+               magnitude=min(args.magnitude, 6.0), track=track, title=title,
+               images=images if args.overlay else None, horizon=horizon, moon=moon)
     print(f"Saved {output}")
 
     if failed:
