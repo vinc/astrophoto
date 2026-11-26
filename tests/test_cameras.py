@@ -332,8 +332,10 @@ class BackButtonFocusTests(ConfiguredTests):
 
 class PreviewWindowTests(unittest.TestCase):
     def test_an_unreachable_display_suggests_running_without_a_window(self):
-        import tkinter
-        error = tkinter.TclError('couldn\'t connect to display "localhost:10.0"')
+        class TclError(Exception):
+            """Stands in for tkinter.TclError, which a Python without Tk cannot import."""
+
+        error = TclError('couldn\'t connect to display "localhost:10.0"')
         with patch.object(camera.plt, "figure", side_effect=error), \
                 self.assertRaisesRegex(SystemExit, r'(?s)couldn\'t connect to display.*--no-plot'):
             camera.preview_figure()
