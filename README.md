@@ -43,11 +43,9 @@ scale_low = 3
 scale_high = 20
 ```
 
-With a known `camera`, `focus` reports star sizes in arcseconds and scales its
-aperture to the pixel size, and `center` gives the plate solver the image scale
-from the lens focal length (falling back to `[solve]` otherwise).
-
 ## Usage
+
+See the [manual](manual.md) for every command and option.
 
 ### Before a session
 
@@ -105,12 +103,6 @@ astrophoto capture dark
 astrophoto capture flat
 astrophoto convert 2026*/*.CR2
 ```
-
-On a camera with live view such as the EOS 600D, `astrophoto focus --live`
-measures zoomed live-view frames instead of full RAW captures, and
-`astrophoto focus --auto` drives the lens through a V-curve and leaves it at
-the smallest stars. `--auto` needs the lens switch on AF, so set C.Fn IV-1 to
-"AE lock/AF" to keep the shutter from refocusing the lens before each exposure.
 
 ### After a session
 
