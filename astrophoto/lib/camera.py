@@ -11,18 +11,21 @@ import rawpy
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
 
-from astrophoto.lib.gphoto import drive_options, run_gphoto2
+from astrophoto.lib.gphoto import custom_function, drive_options, get_config, run_gphoto2, set_custom_function
 
 @dataclass(frozen=True)
 class Camera:
     name: str
     pixel_size: float  # micrometres
     live_view: bool
+    # Custom function that sets what the shutter button does, and the values that move autofocus off it
+    back_button_focus: tuple | None = None
 
 # Names match the EXIF model that the camera writes into its RAW files
 CAMERAS = {camera.name: camera for camera in [
     Camera("Canon EOS 20D", pixel_size=6.4, live_view=False),
-    Camera("Canon EOS 600D", pixel_size=4.3, live_view=True),
+    # C.Fn IV-1: AF/AE lock becomes AE lock/AF, and AF/AF lock (no AE lock) becomes AE/AF (no AE lock)
+    Camera("Canon EOS 600D", pixel_size=4.3, live_view=True, back_button_focus=(0x701, {0: 1, 2: 3})),
 ]}
 
 def pixel_scale(camera, focal_length, binning=1):
@@ -58,6 +61,22 @@ def preview_figure(**kwargs):
         plt.close(figure)
         raise SystemExit(f"Matplotlib backend '{plt.get_backend()}' cannot open a preview window\n{help_text}")
     return figure
+
+def ensure_back_button_focus():
+    """Stop the shutter button from autofocusing, so captures keep a focus set by driving the lens.
+
+    Return the camera model when its setting was changed, or None when it was already set or is unknown.
+    """
+    model, functions = get_config("cameramodel", "customfuncex")
+    camera = CAMERAS.get(model)
+    if camera is None or camera.back_button_focus is None:
+        return None
+    function, changes = camera.back_button_focus
+    current = custom_function(functions, function)
+    if current not in changes:
+        return None
+    run_gphoto2(["gphoto2", "--set-config", f"customfuncex={set_custom_function(functions, function, changes[current])}"])
+    return model
 
 def live_preview(directory, zoom=None, drive=0, step=2, iso=None):
     """Grab one live-view frame, optionally zoomed and after moving the focus, and return its path."""

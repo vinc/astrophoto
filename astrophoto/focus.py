@@ -11,7 +11,8 @@ from astropy.stats import sigma_clipped_stats
 from scipy.ndimage import label
 
 from astrophoto.lib.camera import (
-    CAMERAS, capture, display_limits, image_optics, live_preview, move_focus, pixel_scale, preview_figure, read_image,
+    CAMERAS, capture, display_limits, ensure_back_button_focus, image_optics, live_preview, move_focus, pixel_scale,
+    preview_figure, read_image,
 )
 from astrophoto.lib.gphoto import FOCUS_STEPS
 from astrophoto.lib.config import camera_profile, command_settings
@@ -191,6 +192,13 @@ def show_focus(figure, data, stars, title, interactive=True, history=None, xlabe
 
 def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False):
     """Scan the focus through a V-curve in live view and leave the lens at its minimum HFR."""
+    try:
+        model = ensure_back_button_focus()
+    except (subprocess.CalledProcessError, ValueError, IndexError) as exc:
+        print(f"Could not check whether the shutter button autofocuses: {exc}", flush=True)
+    else:
+        if model:
+            print(f"Moved autofocus off the shutter button of the {model} so captures keep this focus", flush=True)
     # Every measured position is reached moving towards infinity, so the lens backlash is always taken up
     move_focus(-(span + BACKLASH), step)
     move_focus(BACKLASH, step)

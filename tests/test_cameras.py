@@ -173,8 +173,12 @@ class CaptureTests(unittest.TestCase):
 class FakeCamera:
     """Stand in for gphoto2: track the lens position and save live-view frames blurred by defocus."""
 
-    def __init__(self, best=3, backlash=0):
+    # The EOS 600D custom functions as gphoto2 shows them, with C.Fn IV-1 (701) left to fill in
+    FUNCTIONS = "c8,4,1,2c,3,101,1,0,103,1,0,10f,1,0,2,2c,3,201,1,0,202,1,0,203,1,0,3,20,2,50e,1,0,60f,1,0,4,38,4,701,1,{:x},704,1,0,811,1,0,80f,1,0,"
+
+    def __init__(self, best=3, backlash=0, model="Canon EOS 600D", shutter=0):
         self.position, self.best, self.backlash = 0, best, backlash
+        self.model, self.functions = model, self.FUNCTIONS.format(shutter)
         self.direction = 0
         self.commands = []
         rng = np.random.default_rng(1)
@@ -192,7 +196,12 @@ class FakeCamera:
 
     def __call__(self, command, cwd=None, **kwargs):
         self.commands.append(command)
+        output = ""
+        for name in [command[i + 1] for i, option in enumerate(command) if option == "--get-config"]:
+            output += f"Label: {name}\nCurrent: {self.model if name == 'cameramodel' else self.functions}\nEND\n"
         for option in command:
+            if option.startswith("customfuncex="):
+                self.functions = option.split("=", 1)[1]
             if option.startswith("manualfocusdrive="):
                 direction, size = option.split("=")[1].split()
                 sign = 1 if direction == "Far" else -1
@@ -207,7 +216,7 @@ class FakeCamera:
             name = command[command.index("--filename") + 1]
             import matplotlib.image
             matplotlib.image.imsave(Path(cwd) / f"thumb_{name}", self.frame(), cmap="gray", vmin=0, vmax=255)
-        return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(command, 0, output, "")
 
 
 class AutofocusTests(ConfiguredTests):
@@ -271,6 +280,54 @@ class AutofocusTests(ConfiguredTests):
                     contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
                 focus.main()
             self.assertEqual(raised.exception.code, 2)
+
+
+class BackButtonFocusTests(ConfiguredTests):
+    def run_auto(self, fake):
+        argv = ["focus.py", "--auto", "--no-plot", "--step", "1", "--span", "4"]
+        with patch.object(sys, "argv", argv), patch.object(gphoto.subprocess, "run", side_effect=fake), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            focus.main()
+        return output.getvalue()
+
+    def test_auto_moves_autofocus_off_the_shutter_button(self):
+        for shutter, expected in [(0, 1), (2, 3)]:
+            with self.subTest(shutter=shutter):
+                fake = FakeCamera(best=1, shutter=shutter)
+                output = self.run_auto(fake)
+                self.assertEqual(fake.functions, FakeCamera.FUNCTIONS.format(expected))
+                self.assertIn("Moved autofocus off the shutter button of the Canon EOS 600D", output)
+
+    def test_settings_already_using_the_rear_button_or_unknown_cameras_are_left_alone(self):
+        for model, shutter in [("Canon EOS 600D", 1), ("Canon EOS 600D", 3), ("Canon EOS 5D Mark II", 0)]:
+            with self.subTest(model=model, shutter=shutter):
+                fake = FakeCamera(best=1, model=model, shutter=shutter)
+                output = self.run_auto(fake)
+                self.assertEqual(fake.functions, FakeCamera.FUNCTIONS.format(shutter))
+                self.assertFalse(any(o.startswith("customfuncex=") for c in fake.commands for o in c))
+                self.assertNotIn("Moved autofocus", output)
+
+    def test_a_failed_check_does_not_stop_focusing(self):
+        fake = FakeCamera(best=1)
+        original = fake.__call__
+
+        def refuse(command, **kwargs):
+            if "--get-config" in command:
+                raise subprocess.CalledProcessError(1, command, stderr="")
+            return original(command, **kwargs)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            output = self.run_auto(refuse)
+        self.assertIn("Could not check whether the shutter button autofocuses", output)
+        self.assertEqual(fake.position, 1)
+
+    def test_custom_functions_are_parsed_by_structure(self):
+        text = FakeCamera.FUNCTIONS.format(0)
+        self.assertEqual(gphoto.custom_function(text, 0x701), 0)
+        self.assertIsNone(gphoto.custom_function(text, 0x999))
+        self.assertEqual(gphoto.set_custom_function(text, 0x701, 1), FakeCamera.FUNCTIONS.format(1))
+        with self.assertRaises(ValueError):
+            gphoto.set_custom_function(text, 0x999, 1)
 
 
 class NoFocusTests(unittest.TestCase):

@@ -128,7 +128,9 @@ between frames, showing the latest and best HFR and a chart of past readings.
 `--auto`
 : Drive the lens through a range of focus positions in live view, fit the
   HFR curve, and leave the lens at its sharpest position. Needs a camera with
-  live view and the lens switch on AF.
+  live view and the lens switch on AF. On an EOS 600D, it also sets C.Fn IV-1
+  to "AE lock/AF" if needed, so the shutter button no longer autofocuses and
+  later captures keep the focus; autofocus by hand then uses the rear ✱ button.
 
 `--zoom {1,5,10}`
 : Live-view zoom for `--live` and `--auto` (default: 5).
