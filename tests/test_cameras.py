@@ -260,6 +260,33 @@ class AutofocusTests(ConfiguredTests):
         # Frames without stars are skipped rather than ending the curve
         self.assertAlmostEqual(focus.fit_minimum([0, 1, 2, 3, 4], [3, None, 1, None, 3]), 2, delta=0.1)
 
+    def test_stray_readings_do_not_move_the_fitted_minimum(self):
+        positions = list(range(-8, 9))
+        hfrs = [float(np.hypot(1.5, 0.6 * (p + 1))) for p in positions]
+        # Noise taken for a sharp star, including at the edge of the scan
+        hfrs[12], hfrs[16] = 1.0, 0.9
+        self.assertAlmostEqual(focus.fit_minimum(positions, hfrs), -1, delta=0.5)
+
+    def test_a_noisy_night_scan_still_finds_the_dip(self):
+        # Readings from a real scan with one to three stars per frame and two stray readings
+        hfrs = [5.74, 5.29, 5.01, 5.82, None, 5.83, 3.06, 2.12, 3.63, 4.10, 3.94, 4.53, 1.65, 4.85, 4.85, 5.30, 1.32]
+        self.assertTrue(-2 <= focus.fit_minimum(list(range(-8, 9)), hfrs) <= 1)
+
+    def test_each_step_is_the_median_of_several_frames(self):
+        fake = FakeCamera(best=1)
+        argv = ["focus.py", "--auto", "--no-plot", "--step", "1", "--span", "3", "--samples", "3"]
+        with patch.object(sys, "argv", argv), patch.object(gphoto.subprocess, "run", side_effect=fake), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            focus.main()
+        previews = [command for command in fake.commands if "--capture-preview" in command]
+        # Seven scanned positions and the final check, three frames each
+        self.assertEqual(len(previews), 8 * 3)
+        # Only the first frame at each position moves the lens
+        moving = [command for command in previews if any(o.startswith("manualfocusdrive=") for o in command)]
+        self.assertEqual(len(moving), 6)
+        self.assertEqual(fake.position, 1)
+        self.assertIn("3 of 3 frames", output.getvalue())
+
     def test_live_mode_measures_zoomed_previews(self):
         fake = FakeCamera(best=0)
         argv = ["focus.py", "--live", "--no-plot", "--frames", "2", "--interval", "0"]

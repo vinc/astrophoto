@@ -142,6 +142,10 @@ between frames, showing the latest and best HFR and a chart of past readings.
 : Steps scanned on each side of the starting position for `--auto`
   (default: 8). Increase it if the rough focus is far off.
 
+`--samples N`
+: Live-view frames measured at each step for `--auto` (default: 3). More
+  frames give a steadier curve when few stars are visible.
+
 `--shutterspeed SPEED`
 : Shutter speed for RAW captures (default: `1/4`).
 

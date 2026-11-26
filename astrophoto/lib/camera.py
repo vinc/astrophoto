@@ -91,7 +91,8 @@ def live_preview(directory, zoom=None, drive=0, step=2, iso=None):
     command += drive_options(drive, step)
     command += ["--capture-preview", "--force-overwrite", "--filename", "preview.jpg"]
     # gphoto2 prefixes preview names with thumb_, so run it where that name stays inside the directory
-    run_gphoto2(command, cwd=directory)
+    # gphoto2 reports each saved file on stdout, which would clutter the measurements
+    run_gphoto2(command, cwd=directory, stdout=subprocess.DEVNULL)
     files = list(directory.glob("*preview.jpg"))
     if len(files) != 1:
         raise RuntimeError("Expected one downloaded live-view frame")
@@ -100,7 +101,7 @@ def live_preview(directory, zoom=None, drive=0, step=2, iso=None):
 def move_focus(steps, step=2):
     """Move the focus by a signed number of steps without taking a picture."""
     if steps:
-        run_gphoto2(["gphoto2", "--set-config", "viewfinder=1", *drive_options(steps, step)])
+        run_gphoto2(["gphoto2", "--set-config", "viewfinder=1", *drive_options(steps, step)], stdout=subprocess.DEVNULL)
 
 def capture(directory, shutterspeed=None, iso=None):
     directory = Path(directory).resolve()

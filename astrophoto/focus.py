@@ -9,6 +9,7 @@ import numpy as np
 from astropy.nddata import Cutout2D
 from astropy.stats import sigma_clipped_stats
 from scipy.ndimage import label
+from scipy.optimize import least_squares
 
 from astrophoto.lib.camera import (
     CAMERAS, capture, display_limits, ensure_back_button_focus, image_optics, live_preview, move_focus, pixel_scale,
@@ -141,14 +142,26 @@ def fit_minimum(positions, hfrs):
     if len(pairs) < 3:
         return None
     positions, hfrs = (np.array(values, dtype=float) for values in zip(*pairs))
-    best = int(np.argmin(hfrs))
-    if best in (0, len(hfrs) - 1):
+
+    # Defocused stars grow along a hyperbola whose asymptotes form the V
+    def residuals(parameters):
+        best, slope, centre = parameters
+        return np.sqrt(best**2 + (slope * (positions - centre)) ** 2) - hfrs
+
+    # A heavy-tailed loss keeps a stray reading, such as noise taken for a star, from dragging the fit
+    scale = 0.1 * float(np.median(hfrs))
+    span = float(np.ptp(positions)) or 1.0
+    fits = [
+        least_squares(residuals, [hfrs.min(), np.ptp(hfrs) / span, centre], loss="cauchy", f_scale=scale)
+        for centre in positions
+    ]
+    centre = float(min(fits, key=lambda fit: fit.cost).x[2])
+    # The scan must have passed through the minimum, with a reading on each side of it
+    if not positions.min() < centre < positions.max():
         return None
-    low, high = max(0, best - 3), min(len(hfrs), best + 4)
-    curve, slope, _ = np.polyfit(positions[low:high], hfrs[low:high], 2)
-    if curve <= 0:
-        return float(positions[best])
-    return float(np.clip(-slope / (2 * curve), positions[low], positions[high - 1]))
+    if not (positions < centre).any() or not (positions > centre).any():
+        return None
+    return centre
 
 def show_focus(figure, data, stars, title, interactive=True, history=None, xlabel="Frame"):
     figure.clear()
@@ -190,7 +203,7 @@ def show_focus(figure, data, stars, title, interactive=True, history=None, xlabe
     if interactive:
         plt.pause(0.1)
 
-def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False):
+def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False, samples=3):
     """Scan the focus through a V-curve in live view and leave the lens at its minimum HFR."""
     try:
         model = ensure_back_button_focus()
@@ -205,11 +218,21 @@ def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False
     positions, hfrs = [], []
 
     def measure(position, drive):
-        with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
-            path = live_preview(temporary, zoom, drive=drive, step=step, iso=iso)
-            data, saturated, scale = read_image(path)
-        stars, hfr, problem = frame_hfr(data, saturated, scale, radius)
-        title = problem or f"HFR {hfr:.2f} px | {len(stars)} stars"
+        # The median of a few frames outvotes a frame where noise passed for a star
+        readings = []
+        for sample in range(samples):
+            with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
+                path = live_preview(temporary, zoom, drive=drive if sample == 0 else 0, step=step, iso=iso)
+                data, saturated, scale = read_image(path)
+            stars, hfr, problem = frame_hfr(data, saturated, scale, radius)
+            if hfr is not None:
+                readings.append((hfr, data, stars))
+        if not readings:
+            print(f"Step {position:+d}: {problem}", flush=True)
+            return data, stars, None, problem
+        hfr = float(np.median([reading[0] for reading in readings]))
+        _, data, stars = min(readings, key=lambda reading: abs(reading[0] - hfr))
+        title = f"HFR {hfr:.2f} px | {len(stars)} stars | {len(readings)} of {samples} frames"
         print(f"Step {position:+d}: {title}", flush=True)
         return data, stars, hfr, title
 
@@ -254,6 +277,7 @@ def main():
     parser.add_argument("--zoom", type=int, choices=(1, 5, 10), default=5, help="Live-view zoom (default: 5)")
     parser.add_argument("--step", type=int, choices=FOCUS_STEPS, default=2, help="Lens drive step size for --auto (default: 2)")
     parser.add_argument("--span", type=int, default=8, help="Steps scanned on each side of the start for --auto (default: 8)")
+    parser.add_argument("--samples", type=int, default=3, help="Live-view frames measured at each step for --auto (default: 3)")
     parser.add_argument("--interval", type=float, default=1, help="Pause between captures in seconds (default: 1)")
     parser.add_argument("--frames", type=int, default=0, help="Number of new captures; 0 repeats until stopped")
     parser.add_argument(
@@ -280,6 +304,8 @@ def main():
         parser.error("--live and --auto capture new frames, so omit the input files")
     if args.span < 2:
         parser.error("--span must be at least 2")
+    if args.samples < 1:
+        parser.error("--samples must be at least 1")
 
     interactive = not args.no_plot and (not args.files or args.plot)
     figure = preview_figure(figsize=(14, 5)) if interactive else None
@@ -290,7 +316,7 @@ def main():
     history = []
     if args.auto:
         try:
-            autofocus(args.span, args.step, args.zoom, args.radius, settings["iso"], figure, interactive)
+            autofocus(args.span, args.step, args.zoom, args.radius, settings["iso"], figure, interactive, args.samples)
             if args.save_preview:
                 figure.savefig(args.save_preview, dpi=150)
                 print(f"  Saved {args.save_preview}")
