@@ -330,6 +330,15 @@ class BackButtonFocusTests(ConfiguredTests):
             gphoto.set_custom_function(text, 0x999, 1)
 
 
+class PreviewWindowTests(unittest.TestCase):
+    def test_an_unreachable_display_suggests_running_without_a_window(self):
+        import tkinter
+        error = tkinter.TclError('couldn\'t connect to display "localhost:10.0"')
+        with patch.object(camera.plt, "figure", side_effect=error), \
+                self.assertRaisesRegex(SystemExit, r'(?s)couldn\'t connect to display.*--no-plot'):
+            camera.preview_figure()
+
+
 class NoFocusTests(unittest.TestCase):
     def test_failed_autofocus_explains_the_fix(self):
         error = subprocess.CalledProcessError(1, "gphoto2", stderr="Canon EOS Capture failed to release: Perhaps no focus?\n")

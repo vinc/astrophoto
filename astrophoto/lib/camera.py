@@ -55,7 +55,8 @@ def preview_figure(**kwargs):
     )
     try:
         figure = plt.figure(**kwargs)
-    except (ImportError, RuntimeError) as exc:
+    # Each GUI toolkit has its own error for a missing or unreachable display, such as Tk's TclError
+    except Exception as exc:
         raise SystemExit(f"Cannot open a preview window: {exc}\n{help_text}") from exc
     if figure.canvas.required_interactive_framework is None:
         plt.close(figure)
