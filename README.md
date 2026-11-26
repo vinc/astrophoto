@@ -37,10 +37,6 @@ iso = 3200
 [center]
 shutterspeed = 2
 iso = 3200
-
-[solve]
-scale_low = 3
-scale_high = 20
 ```
 
 ## Usage

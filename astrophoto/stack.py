@@ -197,6 +197,10 @@ def stack_header(reference, files):
             header.remove(key, ignore_missing=True, remove_all=True)
 
     header["NCOMBINE"] = (len(files), "Number of frames stacked")
+    # Plate solving reads the image scale from the binned pixel size
+    if "XPIXSZ" in header:
+        header["XPIXSZ"] = (2 * float(header["XPIXSZ"]), "Pixel width in micrometres, including binning")
+    header["XBINNING"] = (2, "Pixels combined horizontally")
 
     times = []
     for path in files:

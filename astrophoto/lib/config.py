@@ -6,7 +6,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from astrophoto.lib.localtime import local_timezone
 
 OBSERVER = {"latitude": "degrees", "longitude": "degrees", "elevation": "meters"}
-SOLVE = {"scale_low": 3.0, "scale_high": 20.0}
+# Only used when an image does not record its focal length and pixel size; 50 degrees covers a 28 mm lens
+SOLVE = {"scale_low": 3.0, "scale_high": 50.0}
 
 
 def config_path():

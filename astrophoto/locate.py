@@ -19,7 +19,7 @@ from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
 
 from astrophoto.convert import convert
-from astrophoto.lib.camera import CAMERAS, display_limits, pixel_scale, stack_display_limits
+from astrophoto.lib.camera import CAMERAS, display_limits, stack_display_limits
 from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
 from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
 
@@ -50,11 +50,16 @@ def _save_solution(output, cached, source, source_info, timezone, raw):
 
 def scale_options(header, scale_low, scale_high, camera=None):
     """Return solve-field options for the image scale, as tight as the metadata allows."""
-    camera = CAMERAS.get(header.get("INSTRUME"), camera)
     focal = header.get("FOCALLEN")
-    # Stacks are binned and drop RAWFILE, so only single RAW frames match the sensor pixels
-    if camera is not None and "RAWFILE" in header and isinstance(focal, (int, float)) and focal > 0:
-        scale = pixel_scale(camera, focal)
+    camera = CAMERAS.get(header.get("INSTRUME"), camera)
+    # Single RAW frames keep every sensor pixel; stacks record their binning
+    binning = header.get("XBINNING", 1 if "RAWFILE" in header else None)
+    if camera is not None and binning:
+        pixel = camera.pixel_size * float(binning)
+    else:
+        pixel = header.get("XPIXSZ")
+    if isinstance(focal, (int, float)) and focal > 0 and isinstance(pixel, (int, float)) and pixel > 0:
+        scale = 206.265 * pixel / focal
         # EXIF focal lengths of zoom lenses are rounded, so allow some slack
         return ["--scale-units", "arcsecperpix", "--scale-low", f"{0.85 * scale:.3f}", "--scale-high", f"{1.15 * scale:.3f}"]
     return ["--scale-units", "degwidth", "--scale-low", str(scale_low), "--scale-high", str(scale_high)]

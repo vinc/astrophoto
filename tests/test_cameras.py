@@ -83,6 +83,48 @@ class ScaleTests(unittest.TestCase):
         options = locate.scale_options(header, 3, 20, camera.CAMERAS["Canon EOS 600D"])
         self.assertEqual(options[3], f"{0.85 * 206.265 * 6.4 / 300:.3f}")
 
+    def test_stacks_use_their_binned_pixels(self):
+        header = fits.Header({"INSTRUME": "Canon EOS 600D", "FOCALLEN": 28.0, "NCOMBINE": 24, "XBINNING": 2})
+        options = locate.scale_options(header, 3, 20)
+        # A 2x2-binned 600D frame at 28 mm has 63 arcseconds per pixel
+        self.assertEqual(options[:2], ["--scale-units", "arcsecperpix"])
+        self.assertAlmostEqual(float(options[3]) / 0.85, 206.265 * 4.3 * 2 / 28, places=2)
+
+    def test_unknown_cameras_use_the_recorded_pixel_size(self):
+        header = fits.Header({"INSTRUME": "Canon EOS 1100D", "FOCALLEN": 50.0, "XPIXSZ": 10.4, "XBINNING": 2})
+        options = locate.scale_options(header, 3, 20)
+        self.assertAlmostEqual(float(options[5]) / 1.15, 206.265 * 10.4 / 50, places=2)
+
+    def test_stack_header_records_its_binning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "frame.fit"
+            fits.writeto(path, np.zeros((4, 4)), fits.Header({"RAWFILE": "IMG_1.CR2", "XPIXSZ": 4.3, "XBINNING": 1}))
+            from astrophoto import stack
+            header = stack.stack_header(path, [path])
+        self.assertEqual((header["XBINNING"], header["XPIXSZ"]), (2, 8.6))
+        self.assertNotIn("RAWFILE", header)
+
+    def test_pixel_size_is_read_from_the_exif_focal_plane_resolution(self):
+        from astrophoto import convert
+
+        class Tag:
+            def __init__(self, text, values):
+                self.text, self.values = text, values
+
+            def __str__(self):
+                return self.text
+
+        # 5184 pixels across a 22.3 mm wide sensor, in pixels per inch
+        tags = {"EXIF FocalPlaneXResolution": Tag("5904.5", None), "EXIF FocalPlaneResolutionUnit": Tag("Pixels/Inch", [2])}
+        self.assertAlmostEqual(convert.exif_pixel_size(tags), 4.3, places=2)
+        tags["EXIF FocalPlaneResolutionUnit"] = Tag("3", [3])
+        tags["EXIF FocalPlaneXResolution"] = Tag("2325", None)
+        self.assertAlmostEqual(convert.exif_pixel_size(tags), 4.3, places=2)
+        self.assertIsNone(convert.exif_pixel_size({}))
+        # A resolution taken from the JPEG size rather than the sensor gives an implausible pixel
+        tags["EXIF FocalPlaneXResolution"] = Tag("72", None)
+        self.assertIsNone(convert.exif_pixel_size(tags))
+
     def test_stacks_unknown_cameras_and_missing_focal_lengths_keep_the_width_range(self):
         eos600d = camera.CAMERAS["Canon EOS 600D"]
         width = ["--scale-units", "degwidth", "--scale-low", "3", "--scale-high", "20"]

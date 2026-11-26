@@ -43,7 +43,7 @@ A table named after a command holds that command's settings:
 | `[capture.light]`, `[capture.dark]`, `[capture.flat]` | The same keys, for one kind of frame |
 | `[focus]` | `shutterspeed`, `iso` |
 | `[center]` | `shutterspeed`, `iso` |
-| `[solve]` | `scale_low`, `scale_high`: image width range in degrees for plate solving (default: 3 to 20) |
+| `[solve]` | `scale_low`, `scale_high`: image width range in degrees for plate solving, used only for images that do not record their focal length and pixel size (default: 3 to 50) |
 
 ## Common options
 
