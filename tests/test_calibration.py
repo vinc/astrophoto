@@ -182,6 +182,27 @@ class DarkLibraryTests(unittest.TestCase):
         self.assertIn("taken at 21 °C", output)
         self.assertEqual(errors.getvalue(), "")
 
+    def test_each_step_reports_its_progress_in_order(self):
+        lights, dark_frames = self.session("first")
+        flats = self.root / "flats"
+        flats.mkdir()
+        flat_frames = []
+        for index in range(2):
+            flat_frames.append(flats / f"flat{index}.fit")
+            image = np.random.default_rng(index).normal(8000, 20, (240, 320)).astype(np.float32)
+            fits.writeto(flat_frames[-1], image, fits.Header({**HEADER, "EXPTIME": 0.02}))
+        reports = []
+        quietly(stack.stack_directory, lights, dark_files=dark_frames, flat_files=flat_frames,
+                progress=lambda *report: reports.append(report))
+        stages = list(dict.fromkeys(stage for stage, _, _ in reports))
+        self.assertEqual(stages, ["Combining darks", "Combining flats", "Aligning lights", "Stacking lights", "Saving"])
+        for name in stages:
+            steps = [(done, total) for stage, done, total in reports if stage == name]
+            # Each step counts up to its end without going back
+            self.assertEqual([done for done, _ in steps], sorted(done for done, _ in steps))
+            self.assertEqual(steps[-1][0], steps[-1][1])
+        self.assertEqual([done for stage, done, _ in reports if stage == "Aligning lights"], [0, 1, 2, 3])
+
     def test_darks_and_the_library_cannot_be_combined(self):
         lights, dark_frames = self.session("first")
         with self.assertRaisesRegex(ValueError, "either dark frames or the dark library"):

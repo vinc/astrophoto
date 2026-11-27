@@ -17,6 +17,8 @@
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
+  /* Elements styled with a display, such as .view, would otherwise ignore the hidden attribute */
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -72,6 +74,9 @@
   .correction.inside { color: var(--good); }
   .report { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: pre-line; }
   .note { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .progress { margin: 0 0 10px; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
   .subhead { font-size: 13px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 20px 0 4px; }
   input.wide { width: 13em; }
   label.check { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text); padding-bottom: 7px; }
@@ -222,7 +227,11 @@
     </div>
     <div id="calibrated" hidden>
       <div class="title" id="calibrated-title"></div>
-      <div class="view" id="calibrated-view"></div>
+      <div class="progress" id="stack-progress" hidden>
+        <div class="bar"><div id="stack-bar"></div></div>
+        <div class="report" id="stack-progress-text"></div>
+      </div>
+      <div class="view" id="calibrated-view" hidden></div>
       <h2 class="subhead">Live stack</h2>
     </div>
     <div class="title" id="stack-title"></div>
@@ -393,6 +402,12 @@ async function loadDirectories() {
 }
 
 let stackingBusy = false;
+let stage = {name: null};
+
+function clock(seconds) {
+  const total = Math.round(seconds);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
 let lastSeries = null;
 function updateStackButton() {
   $("stack-start").disabled = stackingBusy || !$("stack-start").dataset.ready;
@@ -512,13 +527,36 @@ const handlers = {
   stacking(event) {
     stackingBusy = Boolean(event.name);
     updateStackButton();
+    $("stack-progress").hidden = !stackingBusy;
     if (stackingBusy) {
       $("calibrated").hidden = false;
       $("calibrated-title").textContent = "Stacking…";
-    } else if ($("calibrated-title").textContent === "Stacking…") {
+      $("stack-bar").style.width = "0";
+      $("stack-progress-text").textContent = "";
+      stage = {name: null};
+    } else if ($("calibrated-title").textContent.startsWith("Stacking")) {
       // A finished stack is announced before the job ends, so this one failed
       $("calibrated-title").textContent = "Stacking failed; see the log below";
     }
+  },
+  stack_progress(event) {
+    // A page that connects after a stack replays its last progress, which is old news
+    if (!stackingBusy) return;
+    if (event.stage !== stage.name) stage = {name: event.stage, elapsed: event.elapsed, done: event.done};
+    const fraction = event.total ? Math.min(event.done / event.total, 1) : 0;
+    $("stack-bar").style.width = `${(100 * fraction).toFixed(1)}%`;
+    let text = event.stage === "Aligning lights"
+      ? `${event.stage}: ${Math.floor(event.done)} of ${event.total} frames`
+      : `${event.stage}: ${Math.round(100 * fraction)}%`;
+    text += ` · ${clock(event.elapsed)} elapsed`;
+    // Estimate what is left of this step from its pace so far, once there is enough to go on
+    const spent = event.elapsed - stage.elapsed;
+    const progressed = event.done - stage.done;
+    if (progressed > 0 && spent >= 5 && fraction < 1) {
+      text += ` · about ${clock(spent / progressed * (event.total - event.done))} left in this step`;
+    }
+    $("calibrated-title").textContent = `Stacking ${event.directory}…`;
+    $("stack-progress-text").textContent = text;
   },
   calibrated(event) {
     const parts = [];
@@ -528,6 +566,7 @@ const handlers = {
     if (event.deband) parts.push(`deband ${event.deband}`);
     $("calibrated").hidden = false;
     $("calibrated-title").textContent = `${event.directory}${parts.length ? ` with ${parts.join(" and ")}` : ""}, saved as ${event.file}`;
+    $("calibrated-view").hidden = false;
     showImage($("calibrated-view"), event.image);
     loadDirectories();
   },

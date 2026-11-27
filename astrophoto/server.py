@@ -643,7 +643,19 @@ class App:
             f"deband {options['deband']:g}" if options["deband"] else None,
         ) if text]
         self.hub.log(f"Stacking {lights}" + (f" with {' and '.join(calibration)}" if calibration else ""))
-        stack.stack_directory(directory, **options)
+        start = time.monotonic()
+        last = {"stage": None, "time": 0.0}
+
+        def progress(stage, done, total):
+            now = time.monotonic()
+            # Rows are combined many times a second; a browser needs a few updates a second at most
+            if stage == last["stage"] and done < total and now - last["time"] < 0.5:
+                return
+            last.update(stage=stage, time=now)
+            self.hub.publish("stack_progress", directory=lights, stage=stage, done=done, total=total,
+                             elapsed=round(now - start, 1))
+
+        stack.stack_directory(directory, progress=progress, **options)
         prefix = f"{directory.name}-rgb" if options["rgb"] else directory.name
         png = directory / f"{prefix}-stack.png"
         image = self.images.put("calibrated", preview_file(png))

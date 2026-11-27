@@ -495,6 +495,23 @@ class CalibratedStackTests(ServerCase):
         self.stack(darks="library")
         self.assertEqual(self.latest("calibrated")["darks"], "library")
 
+    def test_progress_is_published_while_stacking(self):
+        events = []
+        publish = self.app.hub.publish
+
+        def record(kind, /, **data):
+            if kind == "stack_progress":
+                events.append(data)
+            publish(kind, **data)
+
+        with patch.object(self.app.hub, "publish", side_effect=record):
+            self.stack(darks="20261127-2130-dark")
+        stages = list(dict.fromkeys(event["stage"] for event in events))
+        self.assertEqual(stages, ["Combining darks", "Aligning lights", "Stacking lights", "Saving"])
+        self.assertTrue(all(event["directory"] == "20261127-2100-light" for event in events))
+        self.assertEqual((events[-1]["done"], events[-1]["total"]), (1, 1))
+        self.assertTrue(all(event["elapsed"] >= 0 for event in events))
+
     def test_deband_defaults_to_the_stack_table_and_can_be_changed(self):
         _, _, body = self.get("/api/config")
         self.assertEqual(json.loads(body)["stack"], {"deband": 1.0})

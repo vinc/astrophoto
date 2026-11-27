@@ -84,10 +84,14 @@ def normalize_flat(data):
             plane /= level
     return data
 
-def master_flat(paths):
+def no_progress(stage, done, total):
+    pass
+
+def master_flat(paths, progress=no_progress):
     images = []
     metadata = {}
-    for path in paths:
+    for index, path in enumerate(paths):
+        progress("Combining flats", index, len(paths) + 1)
         data, header = read_frame(path)
         shape = images[0].shape if images else data.shape
         check_flat_match(path, data, header, shape, metadata)
@@ -112,15 +116,19 @@ def master_flat(paths):
             if key in header:
                 metadata[key] = header[key]
 
-    flat, _, _ = combine_frames(images, method="median")
+    # Reading the frames and combining them each count as part of the step
+    flat, _, _ = combine_frames(images, method="median",
+                                progress=lambda done, total: progress("Combining flats", len(paths) + done / total,
+                                                                      len(paths) + 1))
     if not np.isfinite(flat).all() or np.any(flat <= 0):
         raise ValueError("Master flat contains invalid or non-positive response pixels")
     return normalize_flat(flat), metadata
 
-def master_dark(paths):
+def master_dark(paths, progress=no_progress):
     images = []
     metadata = {}
-    for path in paths:
+    for index, path in enumerate(paths):
+        progress("Combining darks", index, len(paths) + 1)
         data, header = read_frame(path)
         shape = images[0].shape if images else data.shape
         check_dark_match(path, data, header, shape, metadata)
@@ -132,7 +140,9 @@ def master_dark(paths):
         images.append(data)
 
     # Detector patterns stay fixed: combine without registration or normalization
-    dark, _, _ = combine_frames(images, method="median")
+    dark, _, _ = combine_frames(images, method="median",
+                                progress=lambda done, total: progress("Combining darks", len(paths) + done / total,
+                                                                      len(paths) + 1))
     return dark, metadata
 
 def reduce_banding(image, amount):
@@ -273,7 +283,7 @@ def align_saturation(flags, transform, shape, footprint):
     result[footprint] = 0
     return result
 
-def combine_frames(images, method="mean", sigma=3, saturation=None):
+def combine_frames(images, method="mean", sigma=3, saturation=None, progress=None):
     shape = images[0].shape
     result = np.full(shape, np.nan, dtype=np.float32)
     coverage = np.zeros(shape, dtype=np.int32)
@@ -305,6 +315,8 @@ def combine_frames(images, method="mean", sigma=3, saturation=None):
             flags = np.stack([mask[rows] for mask in saturation])
             channels = (flags[..., None] & np.array([1, 2, 4], dtype=np.uint8)) != 0
             saturated[rows] = np.sum(channels & ~np.ma.getmaskarray(contributors), axis=0)
+        if progress is not None:
+            progress(min(y + 128, shape[0]), shape[0])
 
     if saturation is not None:
         fraction = np.divide(saturated, accepted, out=np.zeros(shape, dtype=np.float32), where=accepted > 0)
@@ -336,7 +348,9 @@ def coverage_crop(coverage, minimum):
 
 def stack_directory(directory, method="mean", normalize=True, sigma=3,
                     min_coverage=0, output_prefix=None, dark_files=None, deband=0,
-                    flat_files=None, rgb=False, bayer_pattern=None, dark_library=False, realign=False):
+                    flat_files=None, rgb=False, bayer_pattern=None, dark_library=False, realign=False,
+                    progress=no_progress):
+    """Stack the FITS frames of a directory, reporting each step to progress(stage, done, total)."""
     dark_files = list(dict.fromkeys(Path(path).resolve() for path in (dark_files or [])))
     flat_files = list(dict.fromkeys(Path(path).resolve() for path in (flat_files or [])))
     if set(dark_files) & set(flat_files):
@@ -356,7 +370,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
 
     if dark_files and dark_library:
         raise ValueError("Use either dark frames or the dark library, not both")
-    dark, dark_metadata = master_dark(dark_files) if dark_files else (None, None)
+    dark, dark_metadata = master_dark(dark_files, progress) if dark_files else (None, None)
     library_dark = None
     light_temperature = darks.median_temperature(files) if dark_files or dark_library else None
     if dark_files:
@@ -379,13 +393,14 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         warning = darks.temperature_warning(dark_temperature, light_temperature)
         if warning:
             print(warning, file=sys.stderr)
-    flat, flat_metadata = master_flat(flat_files) if flat_files else (None, None)
+    flat, flat_metadata = master_flat(flat_files, progress) if flat_files else (None, None)
     if flat_files:
         print(f"Combined {len(flat_files)} flat frames")
     saved_alignment = None if realign else alignment.load(directory)
     reused = 0
     colour = color_metadata(middle, fits.getheader(middle), bayer_pattern) if rgb else None
     colour_options = {"rgb": True, "bayer_pattern": bayer_pattern, "return_saturation": True} if rgb else {}
+    progress("Aligning lights", 0, len(files))
     reference = load(middle, dark, dark_metadata, deband=deband,
                      flat=flat, flat_metadata=flat_metadata, **colour_options)
     if rgb:
@@ -397,9 +412,13 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     used = [middle]
     offsets = [[0.0] * 3 if rgb else 0.0]
 
+    # The reference frame is the first one done
+    done = 1
     for path in files:
         if path == middle:
             continue
+        progress("Aligning lights", done, len(files))
+        done += 1
 
         image = load(path, dark, dark_metadata, deband=deband,
                      flat=flat, flat_metadata=flat_metadata, **colour_options)
@@ -440,11 +459,14 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
 
     if reused:
         print(f"Reused the saved alignment of {reused} frames; pass --realign to match their stars again")
+    progress("Aligning lights", len(files), len(files))
+    combining = lambda rows, total: progress("Stacking lights", rows, total)
     if rgb:
-        stack, coverage, accepted, saturation = combine_frames(aligned, method, sigma, saturation=saturation)
+        stack, coverage, accepted, saturation = combine_frames(aligned, method, sigma, saturation=saturation,
+                                                               progress=combining)
         coverage = coverage.min(axis=-1)
     else:
-        stack, coverage, accepted = combine_frames(aligned, method, sigma)
+        stack, coverage, accepted = combine_frames(aligned, method, sigma, progress=combining)
     rows, columns = slice(0, stack.shape[0]), slice(0, stack.shape[1])
     if min_coverage > 0:
         minimum = int(np.ceil(min_coverage * len(aligned)))
@@ -460,6 +482,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     png_path = directory / f"{prefix}-stack.png"
     coverage_path = directory / f"{prefix}-coverage.png"
 
+    progress("Saving", 0, 1)
     header = stack_header(middle, used)
     if dark is not None:
         header["DARKCOR"] = (True, "Master dark subtracted before binning")
@@ -536,6 +559,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     print(f"Created {fits_path}")
     print(f"Created {png_path}")
     print(f"Created {coverage_path}")
+    progress("Saving", 1, 1)
 
 def main():
     parser = argparse.ArgumentParser(
