@@ -20,6 +20,25 @@ def exif_float(tags, key):
     return float(Fraction(value)) if value is not None else None
 
 
+def exif_pixel_size(tags):
+    """Return the sensor pixel width in micrometres from the EXIF focal plane resolution, or None."""
+    resolution = exif_float(tags, "EXIF FocalPlaneXResolution")
+    unit = tags.get("EXIF FocalPlaneResolutionUnit")
+    if not resolution or unit is None:
+        return None
+    values = getattr(unit, "values", None)
+    code = values[0] if values else str(unit)
+    microns = {2: 25400, 3: 10000, "2": 25400, "3": 10000}.get(code)
+    if microns is None:
+        text = str(unit).lower()
+        microns = 25400 if "inch" in text else 10000 if "centim" in text else None
+    if microns is None:
+        return None
+    size = microns / resolution
+    # Anything outside this range is not a plausible camera sensor pixel
+    return size if 1 <= size <= 20 else None
+
+
 def convert(path, tz, output=None):
     with rawpy.imread(str(path)) as raw:
         # Preserve the original Bayer mosaic without demosaicing
@@ -74,6 +93,11 @@ def convert(path, tz, output=None):
 
     camera = exif_value(tags, "Image Model")
     lens = exif_value(tags, "EXIF LensModel")
+
+    pixel = exif_pixel_size(tags)
+    if pixel is not None:
+        hdr["XPIXSZ"] = (round(pixel, 3), "Pixel width in micrometres, including binning")
+        hdr["XBINNING"] = (1, "Pixels combined horizontally")
 
     if camera:
         hdr["INSTRUME"] = camera

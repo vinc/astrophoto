@@ -367,5 +367,62 @@ class ChartCommandTests(unittest.TestCase):
         self.assertIsNone(calls["track"])
         self.assertEqual(calls["output"].name, "stack-chart.png")
 
+class OverlayTests(unittest.TestCase):
+    def test_images_are_painted_into_their_footprint(self):
+        header = make_header(ra=56.75, dec=24.1, angle=0, scale=0.01, size=(300, 200))
+        pixels = np.zeros((200, 300, 4), dtype=np.float32)
+        pixels[..., 0], pixels[..., 3] = 1, 1
+        wcs = chart.chart_wcs([56.75, 24.1], 10)
+        canvas = chart.project_images([(pixels, WCS(header).celestial)], wcs)
+        # A 3 x 2 degree image covers about 6% of a 10 degree wide chart, all in red
+        covered = canvas[..., 3] > 0
+        self.assertAlmostEqual(covered.mean(), 3 * 2 / (10 * 7.5), delta=0.01)
+        self.assertTrue((canvas[covered, 0] == 1).all())
+        self.assertTrue(covered[chart.HEIGHT // 2, chart.WIDTH // 2])
+        self.assertFalse(covered[0, 0])
+
+    def test_sky_folded_back_by_a_diverging_solution_is_not_painted(self):
+        header = make_header(ra=56.75, dec=24.1, angle=0, scale=0.01, size=(300, 200))
+        real = WCS(header).celestial
+
+        class Diverging:
+            """A solution whose inverse fails far from the image, landing every point on its centre pixel."""
+            pixel_scale_matrix = real.pixel_scale_matrix
+
+            def pixel_to_world_values(self, x, y):
+                return real.pixel_to_world_values(x, y)
+
+            def all_pix2world(self, x, y, origin):
+                return real.all_pix2world(x, y, origin)
+
+            def all_world2pix(self, ra, dec, origin, quiet=False):
+                return np.full(np.shape(ra), 149.5), np.full(np.shape(ra), 99.5)
+
+        pixels = np.ones((200, 300, 4), dtype=np.float32)
+        canvas = chart.project_images([(pixels, Diverging())], chart.chart_wcs([56.75, 24.1], 10))
+        # Only the chart pixels within three image pixels of the centre are really there, not the whole chart
+        self.assertLess((canvas[..., 3] > 0).sum(), 100)
+
+    def test_the_moon_is_plotted_where_the_observer_sees_it(self):
+        from astropy import units as u
+        from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_body
+        time = Time("2026-12-17T22:00:00")
+        observer = {"lon": -1.83, "lat": 51.18, "elevation": 0.1}
+        _, (ra, dec) = chart.horizon_and_moon(observer, time)
+        location = EarthLocation.from_geodetic(-1.83 * u.deg, 51.18 * u.deg, 0.1 * u.km)
+        frame = AltAz(obstime=time, location=location)
+        seen = get_body("moon", time, location).transform_to(frame)
+        plotted = SkyCoord(ra * u.deg, dec * u.deg).transform_to(frame)
+        self.assertLess(seen.separation(plotted).deg, 0.1)
+
+    def test_the_horizon_and_moon_are_placed_in_the_sky(self):
+        time = Time("2026-11-26T18:50:00")
+        (ra, dec), moon = chart.horizon_and_moon({"lon": 2.3, "lat": 48.8, "elevation": 0.1}, time)
+        self.assertEqual(len(ra), 361)
+        # The celestial pole stays 48.8 degrees above the horizon, so the horizon never reaches it
+        self.assertLess(dec.max(), 90 - 48.8 + 0.5)
+        self.assertTrue(0 <= moon[0] < 360 and -30 < moon[1] < 30)
+
+
 if __name__ == "__main__":
     unittest.main()

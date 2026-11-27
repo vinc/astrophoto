@@ -49,7 +49,7 @@ class PreviewTests(unittest.TestCase):
         figures = camera.plt.get_fignums()
         with self.assertRaisesRegex(SystemExit, "cannot open a preview window") as error:
             camera.preview_figure()
-        self.assertIn("python -m pip install PyQt6", str(error.exception))
+        self.assertIn("--save-preview", str(error.exception))
         self.assertIn("--no-plot", str(error.exception))
         self.assertEqual(camera.plt.get_fignums(), figures)
 

@@ -93,9 +93,9 @@ class ConfigTests(unittest.TestCase):
                     self.run_helper(config.camera_timezone)
 
     def test_solve_scale_defaults_and_config(self):
-        self.assertEqual(self.run_helper(config.solve_scale), (3.0, 20.0))
+        self.assertEqual(self.run_helper(config.solve_scale), (3.0, 50.0))
         self.write("[solve]\nscale_low = 16\n")
-        self.assertEqual(self.run_helper(config.solve_scale), (16.0, 20.0))
+        self.assertEqual(self.run_helper(config.solve_scale), (16.0, 50.0))
         for text, message in [
             ("solve = 3", r"\[solve\] in .* must be a table"),
             ("[solve]\nscale_min = 3", r"Unknown setting scale_min in \[solve\]"),

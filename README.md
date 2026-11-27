@@ -19,6 +19,7 @@ latitude = 51.18
 longitude = -1.83
 elevation = 100
 timezone = "Europe/Paris"
+camera = "Canon EOS 600D" # or "Canon EOS 20D"
 
 [capture]
 frames = 24
@@ -29,12 +30,18 @@ shutterspeed = 5
 [capture.flat]
 shutterspeed = 50
 
-[solve]
-scale_low = 3
-scale_high = 20
+[focus]
+shutterspeed = "1/4"
+iso = 3200
+
+[center]
+shutterspeed = 2
+iso = 3200
 ```
 
 ## Usage
+
+See the [manual](manual.md) for every command and option.
 
 ### Before a session
 
