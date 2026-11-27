@@ -72,7 +72,7 @@ class Hub:
         self.lock = threading.Lock()
         self.clients = set()
         self.latest = {}
-        self.logs = deque(maxlen=100)
+        self.logs = deque(maxlen=200)
 
     def publish(self, kind, /, **data):
         event = {"type": kind, "time": time.time(), **data}
@@ -90,7 +90,9 @@ class Hub:
 
     def log(self, text):
         print(text, flush=True)
-        self.publish("log", text=text)
+        # Once the server's output is wrapped, printing the line is what sends it to browsers
+        if getattr(sys.stdout, "hub", None) is not self:
+            self.publish("log", text=text)
 
     def subscribe(self):
         client = queue.Queue(maxsize=200)
@@ -106,12 +108,15 @@ class Hub:
 class Timestamped:
     """Wrap an output stream so each line starts with the date and time, like [2026-11-27T21:05:03] text.
 
-    Threads print at once, and print writes a line and its newline separately, so each thread's unfinished line
-    is held until its newline arrives.
+    Once given a hub, each line also goes to browsers' log, except indented detail lines, such as those convert
+    prints for every frame, which the page shows elsewhere. Threads print at once, and print writes a line and its
+    newline separately, so each thread's unfinished line is held until its newline arrives.
     """
 
-    def __init__(self, stream):
+    def __init__(self, stream, error=False):
         self.stream = stream
+        self.error = error
+        self.hub = None
         self.lock = threading.Lock()
         self.partial = {}
 
@@ -121,6 +126,8 @@ class Timestamped:
             *lines, rest = (self.partial.pop(thread, "") + text).split("\n")
             for line in lines:
                 self.stream.write(f"[{datetime.now():%Y-%m-%dT%H:%M:%S}] {line}\n" if line else "\n")
+                if self.hub is not None and line.strip() and not line[0].isspace():
+                    self.hub.publish("log", text=line, **({"error": True} if self.error else {}))
             if rest:
                 self.partial[thread] = rest
             self.stream.flush()
@@ -898,7 +905,7 @@ def main():
     add_observer_arguments(parser, required=False, note=", for the Center tab")
     args = parser.parse_args()
     # Everything the server and the commands it runs print, from any thread, is dated
-    sys.stdout, sys.stderr = Timestamped(sys.stdout), Timestamped(sys.stderr)
+    sys.stdout, sys.stderr = Timestamped(sys.stdout), Timestamped(sys.stderr, error=True)
     settings = command_settings(parser, "server", DEFAULTS)
     host = args.host if args.host is not None else settings["host"]
     try:
@@ -926,6 +933,8 @@ def main():
     app = App(focus_settings, camera, center_settings=center_settings, observer=observer,
               timezone=camera_timezone(parser), scale=solve_scale(parser), capture_settings=capture_defaults,
               stack_settings=stack.stack_settings(parser))
+    # From now on, what the server and the commands it runs print also reaches the page's log
+    sys.stdout.hub = sys.stderr.hub = app.hub
     try:
         server = Server((host, port), app)
     except OSError as exc:

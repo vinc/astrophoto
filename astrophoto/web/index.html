@@ -597,7 +597,7 @@ const handlers = {
   autofocus(event) {
     toast(`Focused at step ${event.step > 0 ? "+" : ""}${event.step}, HFR ${event.hfr.toFixed(2)} px`);
   },
-  log(event) { log(`[${timestamp(event.time)}] ${event.text}`); },
+  log(event) { log(`[${timestamp(event.time)}] ${event.text}`, Boolean(event.error)); },
   error(event) { toast(event.message); },
 };
 

@@ -632,6 +632,26 @@ class LogTests(unittest.TestCase):
         for line in lines:
             self.assertRegex(line, rf"^{self.STAMP}(first|second|third) line \d+$")
 
+    def test_printed_lines_reach_browsers_once_a_hub_is_given(self):
+        import contextlib
+        import io
+        hub = server.Hub()
+        output, errors = server.Timestamped(io.StringIO()), server.Timestamped(io.StringIO(), error=True)
+        print("Before the hub", file=output)
+        output.hub = errors.hub = hub
+        print("Combined 24 dark frames", file=output)
+        # Details that commands indent, such as convert's for each frame, stay in the terminal
+        print("frame.CR2 -> frame.fit\n  Exposure: 5.0 s\n", file=output)
+        print("*** Error: No camera found ***", file=errors)
+        self.assertEqual([(event["text"], event.get("error", False)) for event in hub.logs], [
+            ("Combined 24 dark frames", False), ("frame.CR2 -> frame.fit", False),
+            ("*** Error: No camera found ***", True),
+        ])
+        # The server's own messages go out once, through the wrapped output
+        with contextlib.redirect_stdout(output):
+            hub.log("Saved frame 1")
+        self.assertEqual([event["text"] for event in hub.logs].count("Saved frame 1"), 1)
+
     def test_log_lines_reach_browsers_without_the_stamp(self):
         import contextlib
         import io
