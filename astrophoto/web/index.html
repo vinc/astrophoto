@@ -72,6 +72,7 @@
   .correction.inside { color: var(--good); }
   .report { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: pre-line; }
   .note { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .subhead { font-size: 13px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 20px 0 4px; }
   input.wide { width: 13em; }
   label.check { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text); padding-bottom: 7px; }
   label.check input { width: auto; }
@@ -205,6 +206,21 @@
     </div>
   </section>
   <section id="stack">
+    <div class="controls">
+      <fieldset>
+        <legend>Calibrated stack</legend>
+        <label>Lights <select id="stack-lights"></select></label>
+        <label>Darks <select id="stack-darks"></select></label>
+        <label>Flats <select id="stack-flats"></select></label>
+        <label class="check"><input type="checkbox" id="stack-rgb"> Colour</label>
+        <button class="action primary" id="stack-start">Stack</button>
+      </fieldset>
+    </div>
+    <div id="calibrated" hidden>
+      <div class="title" id="calibrated-title"></div>
+      <div class="view" id="calibrated-view"></div>
+      <h2 class="subhead">Live stack</h2>
+    </div>
     <div class="title" id="stack-title"></div>
     <div class="view" id="stack-view"><div class="empty">Capture light frames to see them stacked as they arrive.</div></div>
   </section>
@@ -352,6 +368,42 @@ function setupCapture() {
   });
 }
 
+async function loadDirectories() {
+  let found;
+  try {
+    found = await (await fetch("/api/directories")).json();
+  } catch (error) {
+    return;
+  }
+  const refill = (select, names, extra) => {
+    const previous = select.value;
+    select.replaceChildren(...extra.map(([value, label]) => new Option(label, value)), ...names.map((name) => new Option(name, name)));
+    // Keep the choice if it is still there; otherwise the newest series comes first
+    if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+  };
+  refill($("stack-lights"), found.light, []);
+  refill($("stack-darks"), found.dark, [["none", "None"], ["library", "Library"]]);
+  refill($("stack-flats"), found.flat, [["none", "None"]]);
+  $("stack-start").dataset.ready = found.light.length ? "1" : "";
+  updateStackButton();
+}
+
+let stackingBusy = false;
+let lastSeries = null;
+function updateStackButton() {
+  $("stack-start").disabled = stackingBusy || !$("stack-start").dataset.ready;
+}
+
+function setupStack() {
+  $("stack-start").onclick = () => post("/api/stack/start", {
+    lights: $("stack-lights").value,
+    darks: $("stack-darks").value,
+    flats: $("stack-flats").value,
+    rgb: $("stack-rgb").checked,
+  });
+  loadDirectories();
+}
+
 function cell(text, className = "") {
   const td = document.createElement("td");
   td.textContent = text;
@@ -365,6 +417,7 @@ function setupTabs() {
     buttons.forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
     document.querySelectorAll("main section").forEach((section) => section.classList.toggle("active", section.id === name));
     try { localStorage.setItem("tab", name); } catch (error) { /* ignore */ }
+    if (name === "stack") loadDirectories();
   };
   buttons.forEach((button) => { button.onclick = () => show(button.dataset.tab); });
   let saved = null;
@@ -410,6 +463,11 @@ const handlers = {
     if (event.image) showImage($("focus-view"), event.image);
   },
   series(event) {
+    // A new series directory appears in the stacking choices
+    if (event.directory !== lastSeries) {
+      lastSeries = event.directory;
+      loadDirectories();
+    }
     const stacked = event.frames.filter((row) => row.status === "stacked").length;
     const kind = event.kind[0].toUpperCase() + event.kind.slice(1);
     let title = `${kind} series ${event.directory}: ${event.frames.length} of ${event.planned} frames`;
@@ -436,6 +494,27 @@ const handlers = {
   },
   frame(event) {
     showImage($("frame-view"), event.image);
+  },
+  stacking(event) {
+    stackingBusy = Boolean(event.name);
+    updateStackButton();
+    if (stackingBusy) {
+      $("calibrated").hidden = false;
+      $("calibrated-title").textContent = "Stacking…";
+    } else if ($("calibrated-title").textContent === "Stacking…") {
+      // A finished stack is announced before the job ends, so this one failed
+      $("calibrated-title").textContent = "Stacking failed; see the log below";
+    }
+  },
+  calibrated(event) {
+    const parts = [];
+    if (event.darks === "library") parts.push("the library's dark");
+    else if (event.darks !== "none") parts.push(`darks from ${event.darks}`);
+    if (event.flats !== "none") parts.push(`flats from ${event.flats}`);
+    $("calibrated").hidden = false;
+    $("calibrated-title").textContent = `${event.directory}${parts.length ? ` with ${parts.join(" and ")}` : ""}, saved as ${event.file}`;
+    showImage($("calibrated-view"), event.image);
+    loadDirectories();
   },
   stack(event) {
     let title = `${event.frames} frame${event.frames === 1 ? "" : "s"} stacked from ${event.directory}`;
@@ -485,6 +564,7 @@ fetch("/api/config").then((response) => response.json()).then((value) => {
   setupFocus();
   setupCenter();
   setupCapture();
+  setupStack();
   setupTabs();
   document.querySelectorAll(".stops").forEach((button) => { button.onclick = () => post("/api/stop"); });
   handlers.job({name: null});

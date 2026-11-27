@@ -429,6 +429,89 @@ class CaptureServerTests(ServerCase):
                 self.assertIn(message, result["error"])
 
 
+class CalibratedStackTests(ServerCase):
+    def setUp(self):
+        super().setUp()
+        from astrophoto.lib import darks
+        from tests.test_calibration import raw_frame, series
+        self.root = Path(tempfile.mkdtemp(prefix="astrophoto-server-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        patcher = patch.object(darks, "library_path", return_value=self.root / "library")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.app.root = self.root
+        for name in ("20261127-2100-light", "20261127-2200-light", "20261127-2130-dark", "20261127-2140-flat",
+                     "20261127-2150-dark", "notes"):
+            (self.root / name).mkdir()
+        series(self.root / "20261127-2100-light", count=3)
+        for index in range(3):
+            raw_frame(self.root / "20261127-2130-dark", f"dark{index}.fit", seed=index, dark=True)
+            flat = self.root / "20261127-2140-flat" / f"flat{index}.fit"
+            image = np.random.default_rng(index).normal(8000, 20, (240, 320)).astype(np.float32)
+            fits.writeto(flat, image, fits.Header({"INSTRUME": "Canon EOS 600D", "ISO": 800, "BLACKLVL": 100.0,
+                                                   "WHITELEV": 16000}))
+
+    def stack(self, **body):
+        status, result = self.post("/api/stack/start", {"lights": "20261127-2100-light", **body})
+        self.assertEqual(status, 200, result)
+        self.app.stacking.join(timeout=120)
+
+    def test_series_directories_are_listed_newest_first(self):
+        _, _, body = self.get("/api/directories")
+        self.assertEqual(json.loads(body), {
+            "light": ["20261127-2200-light", "20261127-2100-light"],
+            "dark": ["20261127-2150-dark", "20261127-2130-dark"],
+            "flat": ["20261127-2140-flat"],
+        })
+
+    def test_lights_are_stacked_with_darks_and_flats(self):
+        self.stack(darks="20261127-2130-dark", flats="20261127-2140-flat")
+        event = self.latest("calibrated")
+        self.assertEqual((event["file"], event["darks"], event["flats"]),
+                         ("20261127-2100-light-stack.fit", "20261127-2130-dark", "20261127-2140-flat"))
+        header = fits.getheader(self.root / "20261127-2100-light" / event["file"])
+        self.assertTrue(header["DARKCOR"] and header["FLATCOR"])
+        _, _, image = self.get(event["image"])
+        self.assertTrue(image.startswith(b"\x89PNG"))
+        self.assertIsNone(self.latest("stacking")["name"])
+        # The master dark went into the library, for a later session without darks
+        self.stack(darks="library")
+        self.assertEqual(self.latest("calibrated")["darks"], "library")
+
+    def test_colour_stacks_are_saved_with_an_rgb_prefix(self):
+        self.stack(rgb=True)
+        event = self.latest("calibrated")
+        self.assertEqual((event["file"], event["rgb"]), ("20261127-2100-light-rgb-stack.fit", True))
+        _, _, image = self.get(event["image"])
+        self.assertTrue(image.startswith(b"\x89PNG"))
+
+    def test_a_missing_library_dark_is_reported(self):
+        self.stack(darks="library")
+        self.assertIsNone(self.latest("calibrated"))
+        self.assertIn("No master dark for Canon EOS 600D at ISO 800 and 5 s", self.app.hub.logs[-1]["text"])
+
+    def test_only_series_in_the_session_can_be_stacked(self):
+        for body, message in [
+            ({"lights": "../20261127-2100-light"}, "No light series named"),
+            ({"lights": "notes"}, "No light series named notes"),
+            ({"lights": "20261127-2200-light"}, "No FITS frames in 20261127-2200-light yet"),
+            ({"lights": "20261127-2100-light", "darks": "20261127-2150-dark"}, "No FITS frames in 20261127-2150-dark"),
+            ({"lights": "20261127-2100-light", "flats": "20261127-2130-dark"}, "No flat series named"),
+            ({"lights": 3}, "Choose a light series"),
+        ]:
+            with self.subTest(body=body):
+                status, result = self.post("/api/stack/start", body)
+                self.assertEqual(status, 400)
+                self.assertIn(message, result["error"])
+
+    def test_stacking_runs_beside_a_camera_job(self):
+        self.post("/api/focus/start", {"live": True, "interval": 0.2})
+        self.stack()
+        self.assertEqual(self.app.jobs.running(), "focus")
+        self.assertIsNotNone(self.latest("calibrated"))
+        self.post("/api/stop")
+
+
 class AddressTests(unittest.TestCase):
     def test_a_specific_host_is_shown_as_given(self):
         self.assertEqual(server.addresses("192.168.1.20"), ["192.168.1.20"])

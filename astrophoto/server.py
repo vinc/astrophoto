@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 import queue
+import re
 import shutil
 import socket
 import subprocess
@@ -42,6 +43,8 @@ TRANSIENT = {"error", "autofocus"}
 PREVIEW_WIDTH = 1600
 # Seconds between saves of the live stack during a series, as writing a full frame takes a few seconds
 SAVE_INTERVAL = 60
+# Series directories as capture names them, with a number added for a second series in the same minute
+SERIES = re.compile(r"\d{8}-\d{4}-(light|dark|flat)(-\d+)?")
 
 
 class RequestError(ValueError):
@@ -113,10 +116,11 @@ class Images:
 
 
 class Jobs:
-    """Run one camera job at a time in the background, stopping it on request."""
+    """Run one job at a time in the background, stopping it on request, and announce it as an event."""
 
-    def __init__(self, hub):
+    def __init__(self, hub, event="job"):
         self.hub = hub
+        self.event = event
         self.lock = threading.Lock()
         self.thread = None
         self.name = None
@@ -133,7 +137,7 @@ class Jobs:
             self.stop_event = threading.Event()
             self.name = name
             self.thread = threading.Thread(target=self._run, args=(name, function, self.stop_event), daemon=True)
-            self.hub.publish("job", name=name)
+            self.hub.publish(self.event, name=name)
             self.thread.start()
 
     def _run(self, name, function, stop):
@@ -150,7 +154,7 @@ class Jobs:
             with self.lock:
                 if self.thread is threading.current_thread():
                     self.name = None
-            self.hub.publish("job", name=None)
+            self.hub.publish(self.event, name=None)
 
     def stop(self):
         with self.lock:
@@ -208,18 +212,30 @@ def render_pointing(path, query, result):
     return render(lambda figure: center.show_pointing(figure, path, query, result, interactive=False), (10, 7))
 
 
-def preview_png(data, low, high):
-    """Return an image as a grey PNG between two levels, binned down to at most PREVIEW_WIDTH pixels wide."""
+def shrink(data):
+    """Bin an image, grey or colour, down to at most PREVIEW_WIDTH pixels wide."""
     factor = -(-data.shape[1] // PREVIEW_WIDTH)
-    if factor > 1:
-        height, width = data.shape[0] // factor * factor, data.shape[1] // factor * factor
-        blocks = data[:height, :width].reshape(height // factor, factor, width // factor, factor)
-        # Uncovered stack edges are NaN; a block with any data keeps it
-        with np.errstate(invalid="ignore"), warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            data = np.nanmean(blocks, axis=(1, 3))
+    if factor == 1:
+        return data
+    height, width = data.shape[0] // factor * factor, data.shape[1] // factor * factor
+    blocks = data[:height, :width].reshape(height // factor, factor, width // factor, factor, *data.shape[2:])
+    # Uncovered stack edges are NaN; a block with any data keeps it
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.nanmean(blocks, axis=(1, 3))
+
+
+def preview_png(data, low, high):
+    """Return an image as a grey PNG between two levels, small enough for a browser."""
     output = io.BytesIO()
-    mpimage.imsave(output, np.nan_to_num(data, nan=low), cmap="gray", vmin=low, vmax=high, format="png")
+    mpimage.imsave(output, np.nan_to_num(shrink(data), nan=low), cmap="gray", vmin=low, vmax=high, format="png")
+    return output.getvalue()
+
+
+def preview_file(path):
+    """Return a saved PNG, grey or colour, small enough for a browser."""
+    output = io.BytesIO()
+    mpimage.imsave(output, np.clip(shrink(mpimage.imread(path)), 0, 1), format="png")
     return output.getvalue()
 
 
@@ -247,6 +263,8 @@ class App:
         self.root = Path.cwd() if root is None else Path(root)
         # Captured frames wait here to be converted, measured and stacked, so the camera never waits for them
         self.processing = queue.Queue()
+        # Stacking only uses the computer, so it runs beside camera jobs rather than instead of them
+        self.stacking = Jobs(self.hub, event="stacking")
         self.series_lock = threading.Lock()
         self.series = None
         self.live = None
@@ -559,6 +577,57 @@ class App:
         self.hub.publish("stack", directory=directory.name, frames=len(live), image=self.stack_image,
                          saved=saved, saved_frames=count)
 
+    # Calibrated stack
+
+    def directories(self):
+        """Return the series directories in the session, newest first, by kind of frame."""
+        found = {kind: [] for kind in KINDS}
+        for path in sorted(self.root.iterdir(), reverse=True) if self.root.is_dir() else []:
+            match = SERIES.fullmatch(path.name)
+            if match and path.is_dir():
+                found[match.group(1)].append(path.name)
+        return found
+
+    def series_frames(self, name, kind):
+        """Return the frames of a series directory picked in the page, refusing any other path."""
+        if name not in self.directories()[kind]:
+            raise RequestError(f"No {kind} series named {name}")
+        frames = sorted(path for path in (self.root / name).glob("*.fit") if not path.name.endswith("-stack.fit"))
+        if not frames:
+            raise RequestError(f"No FITS frames in {name} yet")
+        return frames
+
+    def stack_start(self, body):
+        lights = body.get("lights")
+        if not isinstance(lights, str):
+            raise RequestError("Choose a light series")
+        self.series_frames(lights, "light")
+        darks = body.get("darks", "none")
+        flats = body.get("flats", "none")
+        if not isinstance(darks, str) or not isinstance(flats, str):
+            raise RequestError("darks and flats must be series names, none, or library for darks")
+        dark_files = [] if darks in ("none", "library") else self.series_frames(darks, "dark")
+        flat_files = [] if flats == "none" else self.series_frames(flats, "flat")
+        rgb = bool(body.get("rgb", False))
+        options = {"dark_files": dark_files, "flat_files": flat_files, "dark_library": darks == "library", "rgb": rgb}
+        self.stacking.start("stacking", lambda stop: self.calibrated_stack(lights, darks, flats, options))
+        return {"ok": True}
+
+    def calibrated_stack(self, lights, darks, flats, options):
+        directory = self.root / lights
+        calibration = [text for text in (
+            "the library's dark" if darks == "library" else None if darks == "none" else f"darks from {darks}",
+            None if flats == "none" else f"flats from {flats}",
+        ) if text]
+        self.hub.log(f"Stacking {lights}" + (f" with {' and '.join(calibration)}" if calibration else ""))
+        stack.stack_directory(directory, **options)
+        prefix = f"{directory.name}-rgb" if options["rgb"] else directory.name
+        png = directory / f"{prefix}-stack.png"
+        image = self.images.put("calibrated", preview_file(png))
+        self.hub.log(f"Saved {prefix}-stack.fit and .png in {lights}")
+        self.hub.publish("calibrated", directory=lights, file=f"{prefix}-stack.fit", image=image,
+                         darks=darks, flats=flats, rgb=options["rgb"])
+
     def stop(self, body):
         name = self.jobs.stop()
         return {"ok": True, "stopped": name}
@@ -571,6 +640,7 @@ class App:
         self.jobs.join(timeout)
         self.processing.put(None)
         self.processor.join(timeout)
+        self.stacking.join(timeout)
 
 
 # Request validation
@@ -639,6 +709,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, page, "text/html; charset=utf-8")
         elif path == "/api/config":
             self.send_json(200, self.app.config())
+        elif path == "/api/directories":
+            self.send_json(200, self.app.directories())
         elif path == "/api/events":
             self.stream_events()
         elif path.startswith("/api/image/"):
@@ -658,6 +730,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/focus/move": self.app.focus_move,
             "/api/center/start": self.app.center_start,
             "/api/capture/start": self.app.capture_start,
+            "/api/stack/start": self.app.stack_start,
             "/api/stop": self.app.stop,
         }
         route = routes.get(urlsplit(self.path).path)

@@ -6,6 +6,7 @@ import numpy as np
 from astropy.io import fits
 from matplotlib import pyplot as plt
 
+from astrophoto.lib import alignment
 from astrophoto.lib.camera import stack_display_limits
 from astrophoto.stack import normalize_background, stack_header
 
@@ -40,6 +41,8 @@ class LiveStack:
         self.m2 = None
         self.count = None
         self.paths = []
+        # For each frame name, the matrix mapping its pixels onto the reference's
+        self.matrices = {}
         self.rejected = 0
 
     def __len__(self):
@@ -55,6 +58,7 @@ class LiveStack:
             raise ValueError("No finite pixels")
         if self.reference is None:
             registered, shift, rotation = image.copy(), (0.0, 0.0), 0.0
+            matrix = np.eye(3)
             stars = find_stars(image)
         else:
             transform, _ = astroalign.find_transform(find_stars(image), self.reference_stars)
@@ -64,6 +68,7 @@ class LiveStack:
             registered, _ = normalize_background(registered, self.reference)
             shift = tuple(float(value) for value in transform.translation)
             rotation = float(np.degrees(transform.rotation))
+            matrix = transform.params
         if self.reference is None:
             self.reference, self.reference_stars = image, stars
             self.mean = np.zeros(image.shape, dtype=np.float64)
@@ -71,6 +76,7 @@ class LiveStack:
             self.count = np.zeros(image.shape, dtype=np.int32)
         self._accumulate(registered)
         self.paths.append(Path(path))
+        self.matrices[Path(path).name] = matrix
         return {"shift": shift, "rotation": rotation}
 
     def _accumulate(self, values):
@@ -94,7 +100,7 @@ class LiveStack:
         return np.where(self.count > 0, self.mean, np.nan).astype(np.float32)
 
     def write(self, fits_path, png_path):
-        """Save the stack as a FITS file with a coverage extension, and as a PNG."""
+        """Save the stack as a FITS file with a coverage extension, and as a PNG, with each frame's alignment."""
         stack = self.image()
         # The first frame is the reference, so its header describes the stack's pixel grid
         header = stack_header(self.paths[0], self.paths)
@@ -109,3 +115,4 @@ class LiveStack:
         coverage = fits.ImageHDU(self.count, fits.Header({"BUNIT": "count"}), name="COVERAGE")
         fits.HDUList([fits.PrimaryHDU(stack, header), coverage]).writeto(fits_path, overwrite=True)
         plt.imsave(png_path, stack, cmap="gray", vmin=low, vmax=high)
+        alignment.save(Path(fits_path).parent, self.paths[0].name, self.matrices)

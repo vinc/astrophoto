@@ -253,7 +253,11 @@ Aligns and stacks the FITS files in a directory into
 `<prefix>-coverage.png`.
 
 `--dark FILE ...`
-: Dark frames to subtract.
+: Dark frames to subtract. Their master dark is kept in the dark library.
+
+`--dark-library`
+: Subtract the newest master dark in the library taken with the same camera,
+  ISO and exposure time, for a session without its own dark frames.
 
 `--flat FILE ...`
 : Flat frames to divide by.
@@ -283,6 +287,10 @@ Aligns and stacks the FITS files in a directory into
 
 `--output-prefix NAME`
 : Output basename (default: the directory name).
+
+`--realign`
+: Match the stars of every frame again, instead of reusing the alignment
+  saved by the server's live stack.
 
 ## locate
 
@@ -378,8 +386,11 @@ The Stack tab shows the light frames of the series stacked as they arrive,
 aligned to the first frame, without calibration. Frames that cannot be aligned
 are left out. The stack is saved in the series directory as
 `<directory>-live-stack.fit` and `.png` every minute and at the end of the
-series; run `stack` on the directory afterwards for the full stack with darks
-and flats.
+series.
+
+Below it, Stack makes the full stack of a light series, like `stack`, with
+the darks of a dark series or from the dark library, the flats of a flat
+series, and colour if chosen. It runs while the camera keeps working.
 
 There is no password: anyone who can reach the address can use the camera.
 
@@ -400,3 +411,5 @@ Configuration: `[server]`, `[focus]`, `[center]`, `[capture]`, `[solve]`,
 | `~/.local/share/astrophoto` | Indexes and catalogs from `download` |
 | `~/.cache/astrophoto` | Cached forecasts and ephemerides |
 | `<image>.new` | Saved plate solution of an image, reused by later commands |
+| `~/.local/share/astrophoto/darks` | Dark library: master darks kept by `stack --dark` |
+| `<directory>/alignment.json` | Frame alignment saved by the server's live stack, reused by `stack` |
