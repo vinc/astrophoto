@@ -11,6 +11,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -88,7 +89,7 @@ class Hub:
                     pass
 
     def log(self, text):
-        print(f"[{datetime.now():%Y-%m-%dT%H:%M:%S}] {text}", flush=True)
+        print(text, flush=True)
         self.publish("log", text=text)
 
     def subscribe(self):
@@ -100,6 +101,37 @@ class Hub:
     def unsubscribe(self, client):
         with self.lock:
             self.clients.discard(client)
+
+
+class Timestamped:
+    """Wrap an output stream so each line starts with the date and time, like [2026-11-27T21:05:03] text.
+
+    Threads print at once, and print writes a line and its newline separately, so each thread's unfinished line
+    is held until its newline arrives.
+    """
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.lock = threading.Lock()
+        self.partial = {}
+
+    def write(self, text):
+        with self.lock:
+            thread = threading.get_ident()
+            *lines, rest = (self.partial.pop(thread, "") + text).split("\n")
+            for line in lines:
+                self.stream.write(f"[{datetime.now():%Y-%m-%dT%H:%M:%S}] {line}\n" if line else "\n")
+            if rest:
+                self.partial[thread] = rest
+            self.stream.flush()
+        return len(text)
+
+    def flush(self):
+        self.stream.flush()
+
+    def __getattr__(self, name):
+        # Anything else, such as encoding or fileno, is the wrapped stream's
+        return getattr(self.stream, name)
 
 
 class Images:
@@ -844,6 +876,8 @@ def main():
     parser.add_argument("--port", type=int, help="Port to listen on (default: 8000)")
     add_observer_arguments(parser, required=False, note=", for the Center tab")
     args = parser.parse_args()
+    # Everything the server and the commands it runs print, from any thread, is dated
+    sys.stdout, sys.stderr = Timestamped(sys.stdout), Timestamped(sys.stderr)
     settings = command_settings(parser, "server", DEFAULTS)
     host = args.host if args.host is not None else settings["host"]
     try:

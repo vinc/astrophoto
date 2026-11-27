@@ -563,15 +563,44 @@ class CalibratedStackTests(ServerCase):
 
 
 class LogTests(unittest.TestCase):
-    def test_log_lines_are_printed_with_the_date_and_time(self):
+    STAMP = r"\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\] "
+
+    def test_every_printed_line_starts_with_the_date_and_time(self):
+        import io
+        output = io.StringIO()
+        stream = server.Timestamped(output)
+        print("Combined 24 dark frames", file=stream)
+        stream.write("Aligned frame1.fit\nAligned ")
+        stream.write("frame2.fit\n\n")
+        self.assertRegex(output.getvalue(), rf"^{self.STAMP}Combined 24 dark frames\n{self.STAMP}Aligned frame1.fit\n"
+                                            rf"{self.STAMP}Aligned frame2.fit\n\n$")
+        self.assertEqual(stream.encoding, output.encoding)
+
+    def test_lines_from_threads_printing_at_once_are_not_mixed(self):
+        import io
+        output = io.StringIO()
+        stream = server.Timestamped(output)
+
+        def chatter(name):
+            for index in range(200):
+                print(f"{name} line {index}", file=stream)
+
+        threads = [threading.Thread(target=chatter, args=(name,)) for name in ("first", "second", "third")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 600)
+        for line in lines:
+            self.assertRegex(line, rf"^{self.STAMP}(first|second|third) line \d+$")
+
+    def test_log_lines_reach_browsers_without_the_stamp(self):
         import contextlib
         import io
-        import re
         hub = server.Hub()
-        with contextlib.redirect_stdout(io.StringIO()) as output:
+        with contextlib.redirect_stdout(io.StringIO()):
             hub.log("Saved frame 1")
-        self.assertRegex(output.getvalue(), r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\] Saved frame 1\n$")
-        # Browsers get the text and the time separately, and format the time themselves
         self.assertEqual(hub.logs[-1]["text"], "Saved frame 1")
         self.assertAlmostEqual(hub.logs[-1]["time"], time.time(), delta=5)
 
