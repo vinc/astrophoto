@@ -515,10 +515,16 @@ class CalibratedStackTests(ServerCase):
 
 class AddressTests(unittest.TestCase):
     def test_a_specific_host_is_shown_as_given(self):
-        self.assertEqual(server.addresses("192.168.1.20"), ["192.168.1.20"])
+        self.assertEqual(server.address("192.168.1.20"), "192.168.1.20")
 
-    def test_a_wildcard_bind_lists_this_machine(self):
-        self.assertIn(server.socket.gethostname(), server.addresses("0.0.0.0"))
+    def test_a_wildcard_bind_shows_the_network_address(self):
+        with patch.object(server.socket, "socket") as probe:
+            probe.return_value.__enter__.return_value.getsockname.return_value = ("192.168.1.55", 40000)
+            self.assertEqual(server.address("0.0.0.0"), "192.168.1.55")
+
+    def test_without_a_network_the_host_name_is_shown(self):
+        with patch.object(server.socket, "socket", side_effect=OSError("Network is unreachable")):
+            self.assertEqual(server.address("0.0.0.0"), server.socket.gethostname())
 
 
 if __name__ == "__main__":

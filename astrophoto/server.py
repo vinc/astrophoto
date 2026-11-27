@@ -789,20 +789,17 @@ class Server(ThreadingHTTPServer):
         super().__init__(address, Handler)
 
 
-def addresses(host):
-    """Return the host names to open the page at, finding this machine's network address for a wildcard bind."""
+def address(host):
+    """Return the address to open the page at, finding this machine's network address for a wildcard bind."""
     if host not in ("0.0.0.0", "::", ""):
-        return [host]
-    names = []
+        return host
     try:
         # Connecting a UDP socket sends nothing, but picks the interface that leads to the network
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
             probe.connect(("192.0.2.1", 9))
-            names.append(probe.getsockname()[0])
+            return probe.getsockname()[0]
     except OSError:
-        pass
-    names.append(socket.gethostname())
-    return names
+        return socket.gethostname()
 
 
 def main():
@@ -846,9 +843,7 @@ def main():
     except OSError as exc:
         raise SystemExit(f"Cannot listen on {host}:{port}: {exc}") from exc
     threading.Thread(target=app.watch_status, daemon=True).start()
-    for name in addresses(host):
-        print(f"Open http://{name}:{port}/", flush=True)
-    print("There is no password: anyone on this network can use the camera. Ctrl-C to stop", flush=True)
+    print(f"Listening on http://{address(host)}:{port}/", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
