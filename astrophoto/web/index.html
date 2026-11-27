@@ -265,6 +265,14 @@ async function post(path, body = {}) {
   }
 }
 
+function timestamp(seconds) {
+  // Local date and time, as the server prints them: 2026-11-27T21:05:03
+  const date = new Date(seconds * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 function log(text, error = false) {
   const box = $("log");
   const line = document.createElement("div");
@@ -589,7 +597,7 @@ const handlers = {
   autofocus(event) {
     toast(`Focused at step ${event.step > 0 ? "+" : ""}${event.step}, HFR ${event.hfr.toFixed(2)} px`);
   },
-  log(event) { log(event.text); },
+  log(event) { log(`[${timestamp(event.time)}] ${event.text}`); },
   error(event) { toast(event.message); },
 };
 

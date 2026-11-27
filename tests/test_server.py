@@ -562,6 +562,20 @@ class CalibratedStackTests(ServerCase):
         self.post("/api/stop")
 
 
+class LogTests(unittest.TestCase):
+    def test_log_lines_are_printed_with_the_date_and_time(self):
+        import contextlib
+        import io
+        import re
+        hub = server.Hub()
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            hub.log("Saved frame 1")
+        self.assertRegex(output.getvalue(), r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\] Saved frame 1\n$")
+        # Browsers get the text and the time separately, and format the time themselves
+        self.assertEqual(hub.logs[-1]["text"], "Saved frame 1")
+        self.assertAlmostEqual(hub.logs[-1]["time"], time.time(), delta=5)
+
+
 class AddressTests(unittest.TestCase):
     def test_a_specific_host_is_shown_as_given(self):
         self.assertEqual(server.address("192.168.1.20"), "192.168.1.20")

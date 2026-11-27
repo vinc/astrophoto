@@ -1,5 +1,6 @@
 import argparse
 from collections import deque
+from datetime import datetime
 import io
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -87,7 +88,7 @@ class Hub:
                     pass
 
     def log(self, text):
-        print(text, flush=True)
+        print(f"[{datetime.now():%Y-%m-%dT%H:%M:%S}] {text}", flush=True)
         self.publish("log", text=text)
 
     def subscribe(self):
