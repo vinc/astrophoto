@@ -13,6 +13,7 @@ COMMANDS = {
     "locate": "Mark a Solar System body in full-frame images",
     "crop": "Crop a Solar System body from RAW or FITS images",
     "chart": "Draw a star chart locating plate-solved images",
+    "server": "Serve a web app to focus, point and capture from a browser",
 }
 
 

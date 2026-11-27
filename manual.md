@@ -20,6 +20,7 @@ Commands, in the order of a session:
 | [`locate`](#locate) | Mark a Solar System body in full-frame images |
 | [`crop`](#crop) | Crop a Solar System body from images |
 | [`chart`](#chart) | Star chart locating plate-solved images |
+| [`server`](#server) | Web app to run the camera from a browser |
 
 ## Configuration
 
@@ -43,6 +44,7 @@ A table named after a command holds that command's settings:
 | `[capture.light]`, `[capture.dark]`, `[capture.flat]` | The same keys, for one kind of frame |
 | `[focus]` | `shutterspeed`, `iso` |
 | `[center]` | `shutterspeed`, `iso` |
+| `[server]` | `host`, `port` |
 | `[solve]` | `scale_low`, `scale_high`: image width range in degrees for plate solving, used only for images that do not record their focal length and pixel size (default: 3 to 50) |
 
 ## Common options
@@ -329,6 +331,34 @@ marking a target at each image time.
   `<kind>-chart-NNNN.png` in the current directory).
 
 Configuration: `[solve]`, `timezone`.
+
+## server
+
+```
+astrophoto server [--host ADDRESS] [--port PORT]
+```
+
+Serves a web app for running the camera from a phone or laptop on the same
+network, and prints the address to open. The app runs one camera task at a
+time and shows what is running, the camera model, its battery level, and the
+free disk space. The Night button turns the page red to keep your eyes dark
+adapted.
+
+The Focus tab measures the HFR of stars over and over, from live view or
+from RAW captures, like `focus` and `focus --live`. The Near and Far buttons
+move the lens by one step of each size between frames, and Autofocus scans
+the focus like `focus --auto`. Live view, the lens buttons, and Autofocus
+need a camera with live view.
+
+There is no password: anyone who can reach the address can use the camera.
+
+`--host ADDRESS`
+: Address to listen on (default: `0.0.0.0`, every network interface).
+
+`--port PORT`
+: Port to listen on (default: 8000).
+
+Configuration: `[server]`, `[focus]`, `camera`.
 
 ## Files
 

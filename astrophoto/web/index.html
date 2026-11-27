@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astrophoto</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #15191e;
+    --line: #262c34;
+    --text: #d6dbe1;
+    --muted: #7d8794;
+    --accent: #5aa9e6;
+    --good: #5fbf7f;
+    --bad: #e06c6c;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  /* Night mode keeps only red light, to save dark adaptation */
+  body.night::after {
+    content: ""; position: fixed; inset: 0; background: #f00;
+    mix-blend-mode: multiply; pointer-events: none; z-index: 10;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  #status { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 13px; flex: 1; }
+  #status b { color: var(--text); font-weight: 500; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-right: 5px; }
+  .dot.on { background: var(--good); }
+  nav { display: flex; gap: 4px; padding: 8px 16px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  nav button {
+    background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted);
+    padding: 8px 12px; font: inherit; cursor: pointer; white-space: nowrap;
+  }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  nav button:disabled { opacity: .4; cursor: default; }
+  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+  section { display: none; }
+  section.active { display: block; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+  fieldset {
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+    padding: 10px 12px; margin: 0; display: flex; flex-wrap: wrap; align-items: end; gap: 8px 10px;
+  }
+  legend { color: var(--muted); font-size: 12px; padding: 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+  label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; }
+  input, select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 8px; font: inherit; width: 6.5em;
+  }
+  button.action {
+    background: #1e2630; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 12px; font: inherit; cursor: pointer; min-width: 3em;
+  }
+  button.action:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: #1c3a52; border-color: #2c5878; }
+  button.danger { background: #4a2020; border-color: #6a3030; }
+  button.action:disabled { opacity: .4; cursor: default; }
+  select { width: auto; }
+  .drive { display: flex; flex-wrap: wrap; gap: 4px; }
+  .drive button { white-space: nowrap; padding: 7px 9px; }
+  #focus-title { font-size: 16px; margin: 4px 0 8px; min-height: 1.4em; }
+  #focus-title .best { color: var(--good); }
+  .view {
+    background: #000; color: var(--text); border: 1px solid var(--line); border-radius: 8px; min-height: 120px;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .view img { width: 100%; height: auto; display: block; }
+  .view .empty { color: var(--muted); padding: 40px 16px; text-align: center; }
+  #log {
+    margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 12px; font: 12px/1.5 ui-monospace, monospace; color: var(--muted);
+    max-height: 180px; overflow-y: auto; white-space: pre-wrap;
+  }
+  #log .error { color: var(--bad); }
+  #toast {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: calc(100% - 32px);
+    background: #4a2020; border: 1px solid #6a3030; color: var(--text); padding: 8px 14px; border-radius: 8px;
+    display: none; z-index: 5;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Astrophoto</h1>
+  <div id="status">
+    <span><span id="link" class="dot"></span><b id="camera">Connecting…</b></span>
+    <span>Battery <b id="battery">–</b></span>
+    <span>Disk <b id="disk">–</b></span>
+    <span>Running <b id="job">nothing</b></span>
+  </div>
+  <button class="action" id="night" title="Red light only">Night</button>
+</header>
+<nav>
+  <button class="active" data-tab="focus">Focus</button>
+  <button disabled title="Coming next">Center</button>
+  <button disabled title="Coming later">Capture</button>
+  <button disabled title="Coming later">Stack</button>
+</nav>
+<main>
+  <section id="focus" class="active">
+    <div class="controls">
+      <fieldset>
+        <legend>Measure</legend>
+        <label>Source
+          <select id="source">
+            <option value="live">Live view</option>
+            <option value="raw">RAW capture</option>
+          </select>
+        </label>
+        <label class="live-only">Zoom <select id="zoom"></select></label>
+        <label>ISO <input id="iso" placeholder="camera"></label>
+        <label class="raw-only">Shutter <input id="shutterspeed"></label>
+        <label>Pause (s) <input id="interval" type="number" min="0" step="0.5"></label>
+        <button class="action primary" id="start">Start</button>
+        <button class="action danger" id="stop">Stop</button>
+      </fieldset>
+      <fieldset class="needs-live">
+        <legend>Drive the lens</legend>
+        <div class="drive" id="drive"></div>
+      </fieldset>
+      <fieldset class="needs-live">
+        <legend>Autofocus</legend>
+        <label>Span <input id="span" type="number" min="2"></label>
+        <label>Step <select id="step"></select></label>
+        <label>Samples <input id="samples" type="number" min="1"></label>
+        <button class="action primary" id="auto">Autofocus</button>
+      </fieldset>
+    </div>
+    <div id="focus-title"></div>
+    <div class="view" id="focus-view"><div class="empty">Start measuring to see stars and their HFR; lower is sharper.</div></div>
+  </section>
+  <div id="log"></div>
+</main>
+<div id="toast"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+let config = null;
+
+function toast(message) {
+  const box = $("toast");
+  box.textContent = message;
+  box.style.display = "block";
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { box.style.display = "none"; }, 6000);
+}
+
+async function post(path, body = {}) {
+  try {
+    const response = await fetch(path, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok) toast(result.error || response.statusText);
+    return result;
+  } catch (error) {
+    toast(`Cannot reach the server: ${error.message}`);
+  }
+}
+
+function log(text, error = false) {
+  const box = $("log");
+  const line = document.createElement("div");
+  if (error) line.className = "error";
+  line.textContent = text;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
+  box.append(line);
+  while (box.childElementCount > 200) box.firstChild.remove();
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function fill(select, values, selected) {
+  select.replaceChildren(...values.map((value) => new Option(value, value, false, value === selected)));
+}
+
+function setupFocus() {
+  const defaults = config.focus;
+  fill($("zoom"), config.zooms, defaults.zoom);
+  fill($("step"), config.steps, defaults.step);
+  $("iso").value = defaults.iso ?? "";
+  $("shutterspeed").value = defaults.shutterspeed ?? "";
+  $("interval").value = defaults.interval;
+  $("span").value = defaults.span;
+  $("samples").value = defaults.samples;
+  const drive = $("drive");
+  // Largest steps on the outside: Near 3, Near 2, Near 1, Far 1, Far 2, Far 3
+  const sizes = [...config.steps].reverse();
+  for (const [label, sign, list] of [["Near", -1, sizes], ["Far", 1, config.steps]]) {
+    for (const size of list) {
+      const button = document.createElement("button");
+      button.className = "action";
+      button.textContent = `${label} ${size}`;
+      button.onclick = () => post("/api/focus/move", {steps: sign, size});
+      drive.append(button);
+    }
+  }
+  if (!config.live_view) {
+    $("source").value = "raw";
+    $("source").disabled = true;
+    document.querySelectorAll(".needs-live").forEach((element) => { element.style.display = "none"; });
+  }
+  const showSource = () => {
+    const live = $("source").value === "live";
+    document.querySelectorAll(".live-only").forEach((element) => { element.style.display = live ? "" : "none"; });
+    document.querySelectorAll(".raw-only").forEach((element) => { element.style.display = live ? "none" : ""; });
+  };
+  $("source").onchange = showSource;
+  showSource();
+  $("start").onclick = () => post("/api/focus/start", {
+    live: $("source").value === "live",
+    zoom: Number($("zoom").value),
+    iso: $("iso").value.trim(),
+    shutterspeed: $("shutterspeed").value.trim(),
+    interval: Number($("interval").value),
+  });
+  $("stop").onclick = () => post("/api/stop");
+  $("auto").onclick = () => post("/api/focus/auto", {
+    span: Number($("span").value),
+    step: Number($("step").value),
+    samples: Number($("samples").value),
+    zoom: Number($("zoom").value),
+    iso: $("iso").value.trim(),
+  });
+}
+
+function showImage(view, url) {
+  let image = view.querySelector("img");
+  if (!image) {
+    image = new Image();
+    image.alt = "";
+    image.onclick = () => window.open(image.src, "_blank");
+    view.replaceChildren(image);
+  }
+  // Swap in the new frame only once it has loaded, so the view never flashes empty
+  const next = new Image();
+  next.onload = () => { image.src = next.src; };
+  next.src = url;
+}
+
+function bytes(value) {
+  return value >= 1e12 ? `${(value / 1e12).toFixed(1)} TB` : `${(value / 1e9).toFixed(1)} GB`;
+}
+
+const handlers = {
+  status(event) {
+    $("camera").textContent = event.camera || (config && config.camera ? `${config.camera} not found` : "No camera");
+    $("link").classList.toggle("on", Boolean(event.camera));
+    $("battery").textContent = event.battery || "–";
+    $("disk").textContent = bytes(event.disk_free);
+  },
+  job(event) {
+    $("job").textContent = event.name || "nothing";
+    const busy = Boolean(event.name);
+    $("start").disabled = busy;
+    $("auto").disabled = busy;
+    $("stop").disabled = !busy;
+    $("drive").querySelectorAll("button").forEach((button) => { button.disabled = event.name === "autofocus"; });
+  },
+  focus(event) {
+    const title = $("focus-title");
+    title.textContent = event.frame ? `Frame ${event.frame}: ${event.title}` : event.title;
+    if (event.image) showImage($("focus-view"), event.image);
+  },
+  autofocus(event) {
+    toast(`Focused at step ${event.step > 0 ? "+" : ""}${event.step}, HFR ${event.hfr.toFixed(2)} px`);
+  },
+  log(event) { log(event.text); },
+  error(event) { toast(event.message); },
+};
+
+function connect() {
+  const events = new EventSource("/api/events");
+  events.onmessage = (message) => {
+    const event = JSON.parse(message.data);
+    handlers[event.type]?.(event);
+  };
+  events.onerror = () => {
+    $("link").classList.remove("on");
+    $("camera").textContent = "Server unreachable, reconnecting…";
+  };
+}
+
+try {
+  if (localStorage.getItem("night") === "1") document.body.classList.add("night");
+} catch (error) { /* Private windows may refuse storage */ }
+$("night").onclick = () => {
+  const night = document.body.classList.toggle("night");
+  try { localStorage.setItem("night", night ? "1" : "0"); } catch (error) { /* ignore */ }
+};
+
+fetch("/api/config").then((response) => response.json()).then((value) => {
+  config = value;
+  setupFocus();
+  handlers.job({name: null});
+  connect();
+}).catch((error) => toast(`Cannot reach the server: ${error.message}`));
+</script>
+</body>
+</html>

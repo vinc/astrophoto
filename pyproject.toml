@@ -26,3 +26,6 @@ astrophoto = "astrophoto.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["astrophoto*"]
+
+[tool.setuptools.package-data]
+astrophoto = ["web/*.html"]
