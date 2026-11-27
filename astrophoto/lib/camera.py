@@ -51,9 +51,7 @@ def image_optics(path):
 
 def preview_figure(**kwargs):
     help_text = (
-        "Install a GUI toolkit with 'python -m pip install PyQt6' and run from a graphical session\n"
-        "If Agg was configured explicitly, use MPLBACKEND=QtAgg\n"
-        "Use --no-plot for measurements without a preview window"
+        "Use --save-preview FILE to save the preview as an image instead, with --no-plot to skip the window"
     )
     try:
         figure = plt.figure(**kwargs)
