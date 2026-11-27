@@ -464,6 +464,16 @@ class ReviewFixTests(ConfiguredTests):
                     self.assertRaisesRegex(locate.PlateSolveError, "exit status 255"):
                 locate.solve_image(source, temporary, None, 3, 50)
 
+    def test_unusable_fits_binning_falls_back_for_the_solver(self):
+        for extra, units in [({}, "degwidth"), ({"XPIXSZ": 8.6}, "arcsecperpix")]:
+            header = fits.Header({"INSTRUME": "Canon EOS 600D", "FOCALLEN": 300.0, "RAWFILE": "IMG_1.CR2",
+                                  "XBINNING": "unknown", **extra})
+            with self.subTest(extra=extra):
+                options = locate.scale_options(header, 3, 50)
+                self.assertEqual(options[1], units)
+                if extra:
+                    self.assertAlmostEqual(float(options[3]) / 0.85, 206.265 * 8.6 / 300, places=2)
+
     def test_unusable_fits_binning_omits_the_arcseconds(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "stack.fit"

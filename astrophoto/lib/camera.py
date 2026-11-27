@@ -32,6 +32,16 @@ def pixel_scale(camera, focal_length, binning=1):
     """Return the image scale in arcseconds per pixel."""
     return 206.265 * camera.pixel_size * binning / focal_length
 
+def fits_binning(header):
+    """Return the pixel binning of a FITS image, or None when it is unknown or not a positive number."""
+    # Stacks are binned 2x2, including those made before they recorded it
+    default = 2 if "NCOMBINE" in header or "STACKMTH" in header else 1 if "RAWFILE" in header else None
+    binning = header.get("XBINNING", default)
+    # Other software may write binning as text or nonsense, which leaves the scale unknown
+    if isinstance(binning, bool) or not isinstance(binning, (int, float)) or not binning > 0:
+        return None
+    return float(binning)
+
 def image_optics(path):
     """Return the camera model, focal length in mm, and pixel binning recorded in a RAW or FITS image."""
     path = Path(path)
@@ -40,10 +50,8 @@ def image_optics(path):
         header = fits.getheader(path)
         model, focal = header.get("INSTRUME"), header.get("FOCALLEN")
         # Stacks are binned 2x2, including those made before they recorded it
-        binning = header.get("XBINNING", 2 if "NCOMBINE" in header or "STACKMTH" in header else 1)
-        # Other software may write binning as text or nonsense, which leaves the scale unknown
-        if isinstance(binning, bool) or not isinstance(binning, (int, float)) or not binning > 0:
-            binning = None
+        # A FITS image of unknown origin is taken as unbinned, as before binning was recorded
+        binning = fits_binning(header) if any(key in header for key in ("XBINNING", "NCOMBINE", "STACKMTH")) else 1
     else:
         with path.open("rb") as file:
             tags = exifread.process_file(file, details=False)

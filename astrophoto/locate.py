@@ -19,7 +19,7 @@ from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
 
 from astrophoto.convert import convert
-from astrophoto.lib.camera import CAMERAS, display_limits, stack_display_limits
+from astrophoto.lib.camera import CAMERAS, display_limits, fits_binning, stack_display_limits
 from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
 from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
 
@@ -53,9 +53,9 @@ def scale_options(header, scale_low, scale_high, camera=None):
     focal = header.get("FOCALLEN")
     camera = CAMERAS.get(header.get("INSTRUME"), camera)
     # Single RAW frames keep every sensor pixel; stacks record their binning
-    binning = header.get("XBINNING", 1 if "RAWFILE" in header else None)
+    binning = fits_binning(header) if "XBINNING" in header or "RAWFILE" in header else None
     if camera is not None and binning:
-        pixel = camera.pixel_size * float(binning)
+        pixel = camera.pixel_size * binning
     else:
         pixel = header.get("XPIXSZ")
     if isinstance(focal, (int, float)) and focal > 0 and isinstance(pixel, (int, float)) and pixel > 0:
