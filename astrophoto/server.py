@@ -266,7 +266,7 @@ class App:
             for kind in KINDS
         }
         self.root = Path.cwd() if root is None else Path(root)
-        self.stack_settings = {"deband": 0.0} if stack_settings is None else stack_settings
+        self.stack_settings = {"deband": 1.0} if stack_settings is None else stack_settings
         # Captured frames wait here to be converted, measured and stacked, so the camera never waits for them
         self.processing = queue.Queue()
         # Stacking only uses the computer, so it runs beside camera jobs rather than instead of them

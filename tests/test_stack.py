@@ -102,7 +102,7 @@ class DebandingTests(unittest.TestCase):
             config = Path(temporary) / "astrophoto" / "config.toml"
             config.parent.mkdir()
             for text, argv, expected in [
-                ("", [], 0),
+                ("", [], 1),
                 ("[stack]\ndeband = 0.6\n", [], 0.6),
                 ("[stack]\ndeband = 0.6\n", ["--deband", "0"], 0),
             ]:

@@ -283,8 +283,8 @@ warning.
   field (default: 0).
 
 `--deband AMOUNT`
-: Remove horizontal banding, from 0 to 1 (default: 0, or `deband` in
-  `[stack]`). Useful on older Canon cameras.
+: Remove horizontal banding, from 0 to 1, where 0 turns it off (default: 1,
+  or `deband` in `[stack]`).
 
 `--rgb`
 : Keep colour; output files get an `-rgb` prefix.

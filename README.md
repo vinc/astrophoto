@@ -113,8 +113,7 @@ astrophoto stack 20261221-2149-light \
     --flat 20261221-*-flat/*.fit
 ```
 
-Add `--deband 1.0` to remove horizontal banding on older Canon cameras,
-and `--rgb` to render an RGB image.
+Add `--rgb` to render an RGB image.
 
 Mark an object in the full image:
 

@@ -19,8 +19,8 @@ from astrophoto.lib.config import command_settings
 from astrophoto.lib.color import BAYER_PATTERNS, bin_rgb, color_metadata, luminance, rgb_display_header, render_rgb, saturation_flags
 
 DEBAND_WINDOW = 65
-# Settings of the [stack] table in config.toml
-DEFAULTS = {"deband": "0"}
+# Settings of the [stack] table in config.toml; full debanding suits both the EOS 20D and 600D
+DEFAULTS = {"deband": "1"}
 
 
 def stack_settings(parser):
@@ -566,7 +566,7 @@ def main():
     parser.add_argument("--flat", nargs="+", type=Path,
                         help="Unstacked flat FITS files; normalize and divide before binning")
     parser.add_argument("--deband", type=float, metavar="AMOUNT",
-                        help="Horizontal row correction strength, 0 to 1 (default: 0, disabled, or deband in [stack])")
+                        help="Horizontal row correction strength, 0 to 1, where 0 disables it (default: 1, or deband in [stack])")
     parser.add_argument("--rgb", action="store_true",
                         help="Keep RGB colour at the usual 2x2-binned size; save with an -rgb prefix")
     parser.add_argument("--bayer-pattern", choices=BAYER_PATTERNS,

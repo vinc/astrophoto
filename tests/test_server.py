@@ -497,7 +497,7 @@ class CalibratedStackTests(ServerCase):
 
     def test_deband_defaults_to_the_stack_table_and_can_be_changed(self):
         _, _, body = self.get("/api/config")
-        self.assertEqual(json.loads(body)["stack"], {"deband": 0.0})
+        self.assertEqual(json.loads(body)["stack"], {"deband": 1.0})
         self.app.stack_settings = {"deband": 0.5}
         self.stack()
         header = fits.getheader(self.root / "20261127-2100-light" / "20261127-2100-light-stack.fit")
