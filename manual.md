@@ -398,8 +398,6 @@ Below it, Stack makes the full stack of a light series, like `stack`, with
 the darks of a dark series or from the dark library, the flats of a flat
 series, and colour if chosen. It runs while the camera keeps working.
 
-There is no password: anyone who can reach the address can use the camera.
-
 `--host ADDRESS`
 : Address to listen on (default: `0.0.0.0`, every network interface).
 
