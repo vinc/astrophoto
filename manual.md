@@ -367,8 +367,8 @@ astrophoto server [--host ADDRESS] [--port PORT] [--latitude DEG --longitude DEG
 
 Serves a web app for running the camera from a phone or laptop on the same
 network, and prints the address to open. The app runs one camera task at a
-time and shows what is running, the camera model, its battery level, and the
-free disk space. The Night button turns the page red to keep your eyes dark
+time and shows what is running, the camera model, its battery level, the
+free disk space, and the computer's CPU and memory use and ACPI temperature. The Night button turns the page red to keep your eyes dark
 adapted.
 
 The Focus tab measures the HFR of stars over and over, from live view or

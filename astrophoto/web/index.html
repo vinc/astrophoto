@@ -115,6 +115,9 @@
     <span><span id="link" class="dot"></span><b id="camera">Connecting…</b></span>
     <span>Battery <b id="battery">–</b></span>
     <span>Disk <b id="disk">–</b></span>
+    <span>CPU <b id="cpu">–</b></span>
+    <span>RAM <b id="memory">–</b></span>
+    <span id="temperature-item" hidden>Temp <b id="temperature">–</b></span>
     <span>Running <b id="job">nothing</b></span>
   </div>
   <button class="action" id="night" title="Red light only">Night</button>
@@ -449,6 +452,13 @@ const handlers = {
     $("link").classList.toggle("on", Boolean(event.camera));
     $("battery").textContent = event.battery || "–";
     $("disk").textContent = bytes(event.disk_free);
+  },
+  system(event) {
+    $("cpu").textContent = event.cpu === null ? "–" : `${event.cpu}%`;
+    $("memory").textContent = event.memory === null ? "–" : `${event.memory}%`;
+    // Not every computer has an ACPI temperature sensor
+    $("temperature-item").hidden = event.temperature === null;
+    if (event.temperature !== null) $("temperature").textContent = `${event.temperature} °C`;
   },
   job(event) {
     $("job").textContent = event.name || "nothing";

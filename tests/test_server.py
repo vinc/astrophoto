@@ -194,6 +194,22 @@ class ServerTests(ServerCase):
         status = self.latest("status")
         self.assertEqual((status["camera"], status["busy"]), ("Canon EOS 600D", True))
 
+    def test_computer_readings_are_published(self):
+        from astrophoto.lib.system import CpuUsage
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for relative, text in [("proc/stat", "cpu  100 0 100 800 0 0 0 0\n"),
+                               ("proc/meminfo", "MemTotal: 1000 kB\nMemAvailable: 600 kB\n"),
+                               ("sys/class/thermal/thermal_zone0/type", "acpitz\n"),
+                               ("sys/class/thermal/thermal_zone0/temp", "36000\n")]:
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / relative).write_text(text)
+        cpu = CpuUsage(root)
+        (root / "proc/stat").write_text("cpu  150 0 150 900 0 0 0 0\n")
+        self.app.check_system(cpu, root)
+        event = self.latest("system")
+        self.assertEqual((event["cpu"], event["memory"], event["temperature"]), (50, 40, 36))
+
     def test_live_view_requests_are_refused_without_live_view(self):
         self.start(camera.CAMERAS["Canon EOS 20D"])
         for path in ["/api/focus/auto", "/api/focus/move", "/api/focus/start"]:

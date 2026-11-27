@@ -31,11 +31,14 @@ from astrophoto.lib.config import (
 from astrophoto.locate import PlateSolveError
 from astrophoto.lib.gphoto import ENGLISH, FOCUS_STEPS, camera_lock
 from astrophoto.lib.livestack import LiveStack
+from astrophoto.lib.system import CpuUsage, acpi_temperature, memory_percent
 
 DEFAULTS = {"host": "0.0.0.0", "port": "8000"}
 ZOOMS = (1, 5, 10)
 # Seconds between camera and disk status checks
 STATUS_INTERVAL = 30
+# Seconds between readings of the computer's CPU, memory and temperature, which cost nothing to read
+SYSTEM_INTERVAL = 5
 # Seconds between keep-alive comments on an idle event stream
 KEEPALIVE = 15
 # Events about something that just happened, which a browser connecting later has no use for
@@ -301,6 +304,14 @@ class App:
             self.check_status()
             self.status_wanted.wait(self.status_interval)
             self.status_wanted.clear()
+
+    def watch_system(self, root="/"):
+        cpu = CpuUsage(root)
+        while not self.closing.wait(SYSTEM_INTERVAL):
+            self.check_system(cpu, root)
+
+    def check_system(self, cpu, root="/"):
+        self.hub.publish("system", cpu=cpu.percent(), memory=memory_percent(root), temperature=acpi_temperature(root))
 
     def check_status(self):
         model = battery = None
@@ -843,6 +854,7 @@ def main():
     except OSError as exc:
         raise SystemExit(f"Cannot listen on {host}:{port}: {exc}") from exc
     threading.Thread(target=app.watch_status, daemon=True).start()
+    threading.Thread(target=app.watch_system, daemon=True).start()
     print(f"Listening on http://{address(host)}:{port}/", flush=True)
     try:
         server.serve_forever()
