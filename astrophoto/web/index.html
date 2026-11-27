@@ -67,8 +67,14 @@
   select { width: auto; }
   .drive { display: flex; flex-wrap: wrap; gap: 4px; }
   .drive button { white-space: nowrap; padding: 7px 9px; }
-  #focus-title { font-size: 16px; margin: 4px 0 8px; min-height: 1.4em; }
-  #focus-title .best { color: var(--good); }
+  .title { font-size: 16px; margin: 4px 0 8px; min-height: 1.4em; }
+  .correction { font-size: 22px; font-weight: 600; margin: 4px 0; min-height: 1.4em; }
+  .correction.inside { color: var(--good); }
+  .report { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: pre-line; }
+  .note { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  input.wide { width: 13em; }
+  label.check { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text); padding-bottom: 7px; }
+  label.check input { width: auto; }
   .view {
     background: #000; color: var(--text); border: 1px solid var(--line); border-radius: 8px; min-height: 120px;
     display: flex; align-items: center; justify-content: center; overflow: hidden;
@@ -101,7 +107,7 @@
 </header>
 <nav>
   <button class="active" data-tab="focus">Focus</button>
-  <button disabled title="Coming next">Center</button>
+  <button data-tab="center">Center</button>
   <button disabled title="Coming later">Capture</button>
   <button disabled title="Coming later">Stack</button>
 </nav>
@@ -120,8 +126,8 @@
         <label>ISO <input id="iso" placeholder="camera"></label>
         <label class="raw-only">Shutter <input id="shutterspeed"></label>
         <label>Pause (s) <input id="interval" type="number" min="0" step="0.5"></label>
-        <button class="action primary" id="start">Start</button>
-        <button class="action danger" id="stop">Stop</button>
+        <button class="action primary starts" id="start">Start</button>
+        <button class="action danger stops">Stop</button>
       </fieldset>
       <fieldset class="needs-live">
         <legend>Drive the lens</legend>
@@ -132,11 +138,33 @@
         <label>Span <input id="span" type="number" min="2"></label>
         <label>Step <select id="step"></select></label>
         <label>Samples <input id="samples" type="number" min="1"></label>
-        <button class="action primary" id="auto">Autofocus</button>
+        <button class="action primary starts" id="auto">Autofocus</button>
       </fieldset>
     </div>
-    <div id="focus-title"></div>
+    <div class="title" id="focus-title"></div>
     <div class="view" id="focus-view"><div class="empty">Start measuring to see stars and their HFR; lower is sharper.</div></div>
+  </section>
+  <section id="center">
+    <p class="note" id="center-off" hidden>Set latitude, longitude and elevation in config.toml, then restart the server, to point the camera.</p>
+    <div class="controls">
+      <fieldset>
+        <legend>Target</legend>
+        <label>Name <input id="query" class="wide" placeholder="M31, vesta, Betelgeuse" autocapitalize="off"></label>
+        <label>or RA (deg) <input id="ra" type="number" step="any" min="0" max="360"></label>
+        <label>Dec (deg) <input id="dec" type="number" step="any" min="-90" max="90"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Capture</legend>
+        <label>Shutter <input id="center-shutterspeed" placeholder="camera"></label>
+        <label>ISO <input id="center-iso" placeholder="camera"></label>
+        <label class="check"><input type="checkbox" id="loop" checked> Repeat</label>
+        <button class="action primary starts" id="point">Point</button>
+        <button class="action danger stops">Stop</button>
+      </fieldset>
+    </div>
+    <div class="correction" id="correction"></div>
+    <div class="report" id="report"></div>
+    <div class="view" id="center-view"><div class="empty">Capture and plate-solve a frame to see how far to move the camera.</div></div>
   </section>
   <div id="log"></div>
 </main>
@@ -221,7 +249,6 @@ function setupFocus() {
     shutterspeed: $("shutterspeed").value.trim(),
     interval: Number($("interval").value),
   });
-  $("stop").onclick = () => post("/api/stop");
   $("auto").onclick = () => post("/api/focus/auto", {
     span: Number($("span").value),
     step: Number($("step").value),
@@ -229,6 +256,46 @@ function setupFocus() {
     zoom: Number($("zoom").value),
     iso: $("iso").value.trim(),
   });
+}
+
+function setupCenter() {
+  const defaults = config.center;
+  $("center-shutterspeed").value = defaults.shutterspeed ?? "";
+  $("center-iso").value = defaults.iso ?? "";
+  if (!defaults.observer) {
+    $("center-off").hidden = false;
+    $("point").classList.remove("starts");
+    $("point").disabled = true;
+  }
+  const point = () => {
+    const query = $("query").value.trim();
+    const body = {
+      shutterspeed: $("center-shutterspeed").value.trim(),
+      iso: $("center-iso").value.trim(),
+      loop: $("loop").checked,
+    };
+    if (query) body.query = query;
+    else if ($("ra").value !== "" && $("dec").value !== "") {
+      body.ra = Number($("ra").value);
+      body.dec = Number($("dec").value);
+    }
+    post("/api/center/start", body);
+  };
+  $("point").onclick = point;
+  $("query").onkeydown = (event) => { if (event.key === "Enter") point(); };
+}
+
+function setupTabs() {
+  const buttons = document.querySelectorAll("nav button[data-tab]");
+  const show = (name) => {
+    buttons.forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
+    document.querySelectorAll("main section").forEach((section) => section.classList.toggle("active", section.id === name));
+    try { localStorage.setItem("tab", name); } catch (error) { /* ignore */ }
+  };
+  buttons.forEach((button) => { button.onclick = () => show(button.dataset.tab); });
+  let saved = null;
+  try { saved = localStorage.getItem("tab"); } catch (error) { /* ignore */ }
+  if (saved && $(saved)) show(saved);
 }
 
 function showImage(view, url) {
@@ -259,15 +326,22 @@ const handlers = {
   job(event) {
     $("job").textContent = event.name || "nothing";
     const busy = Boolean(event.name);
-    $("start").disabled = busy;
-    $("auto").disabled = busy;
-    $("stop").disabled = !busy;
+    document.querySelectorAll(".starts").forEach((button) => { button.disabled = busy; });
+    document.querySelectorAll(".stops").forEach((button) => { button.disabled = !busy; });
     $("drive").querySelectorAll("button").forEach((button) => { button.disabled = event.name === "autofocus"; });
   },
   focus(event) {
     const title = $("focus-title");
     title.textContent = event.frame ? `Frame ${event.frame}: ${event.title}` : event.title;
     if (event.image) showImage($("focus-view"), event.image);
+  },
+  center(event) {
+    const correction = $("correction");
+    correction.textContent = event.title;
+    correction.classList.toggle("inside", event.inside);
+    // The first report line repeats the target and time; the correction is shown above
+    $("report").textContent = event.report.filter((line) => line.trim() !== event.title).map((line) => line.trim()).join("\n");
+    if (event.image) showImage($("center-view"), event.image);
   },
   autofocus(event) {
     toast(`Focused at step ${event.step > 0 ? "+" : ""}${event.step}, HFR ${event.hfr.toFixed(2)} px`);
@@ -299,6 +373,9 @@ $("night").onclick = () => {
 fetch("/api/config").then((response) => response.json()).then((value) => {
   config = value;
   setupFocus();
+  setupCenter();
+  setupTabs();
+  document.querySelectorAll(".stops").forEach((button) => { button.onclick = () => post("/api/stop"); });
   handlers.job({name: null});
   connect();
 }).catch((error) => toast(`Cannot reach the server: ${error.message}`));

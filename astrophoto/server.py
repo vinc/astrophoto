@@ -17,9 +17,13 @@ from urllib.parse import urlsplit
 from matplotlib import style
 from matplotlib.figure import Figure
 
-from astrophoto import focus
+from astrophoto import center, focus
 from astrophoto.lib.camera import capture, live_preview, move_focus
-from astrophoto.lib.config import camera_profile, command_settings
+from astrophoto.lib.catalog import AmbiguousObject
+from astrophoto.lib.config import (
+    SOLVE, add_observer_arguments, camera_profile, camera_timezone, command_settings, observer_location, solve_scale,
+)
+from astrophoto.locate import PlateSolveError
 from astrophoto.lib.gphoto import ENGLISH, FOCUS_STEPS, camera_lock
 
 DEFAULTS = {"host": "0.0.0.0", "port": "8000"}
@@ -174,22 +178,39 @@ def camera_status():
     return (values + [None, None])[:2]
 
 
-def render_focus(data, stars, title, history, xlabel):
+def render(draw, size):
+    """Draw a figure with draw(figure) and return it as PNG bytes."""
     # A dark figure keeps the page from lighting up the field at night
     with style.context("dark_background"):
-        figure = Figure(figsize=(14, 5))
-        focus.show_focus(figure, data, stars, title, interactive=False, history=history, xlabel=xlabel)
+        figure = Figure(figsize=size)
+        draw(figure)
         output = io.BytesIO()
         figure.savefig(output, format="png", dpi=80)
     return output.getvalue()
 
 
+def render_focus(data, stars, title, history, xlabel):
+    return render(
+        lambda figure: focus.show_focus(figure, data, stars, title, interactive=False, history=history, xlabel=xlabel),
+        (14, 5),
+    )
+
+
+def render_pointing(path, query, result):
+    return render(lambda figure: center.show_pointing(figure, path, query, result, interactive=False), (10, 7))
+
+
 class App:
-    def __init__(self, focus_settings, camera=None, radius=None, status_interval=STATUS_INTERVAL):
+    def __init__(self, focus_settings, camera=None, radius=None, status_interval=STATUS_INTERVAL,
+                 center_settings=None, observer=None, timezone=None, scale=None):
         self.hub = Hub()
         self.images = Images()
         self.jobs = Jobs(self.hub)
         self.focus_settings = focus_settings
+        self.center_settings = dict(center.DEFAULTS) if center_settings is None else center_settings
+        self.observer = observer
+        self.timezone = timezone
+        self.scale = (SOLVE["scale_low"], SOLVE["scale_high"]) if scale is None else scale
         self.camera = camera
         self.radius = focus.default_radius(camera) if radius is None else radius
         self.status_interval = status_interval
@@ -204,6 +225,11 @@ class App:
                 "shutterspeed": self.focus_settings["shutterspeed"],
                 "iso": self.focus_settings["iso"],
                 "zoom": 5, "step": 2, "span": 8, "samples": 3, "interval": 1,
+            },
+            "center": {
+                "shutterspeed": self.center_settings["shutterspeed"],
+                "iso": self.center_settings["iso"],
+                "observer": self.observer is not None,
             },
             "zooms": ZOOMS,
             "steps": FOCUS_STEPS,
@@ -315,6 +341,64 @@ class App:
         self.hub.log(f"Moved focus {'Far' if steps > 0 else 'Near'} {size} x{abs(steps)}")
         return {"ok": True}
 
+    # Center
+
+    def center_start(self, body):
+        if self.observer is None:
+            raise RequestError("Set latitude, longitude and elevation in config.toml, or pass them to the server")
+        query = body.get("query")
+        if query is not None and not isinstance(query, str):
+            raise RequestError("query must be text")
+        query = (query or "").strip() or None
+        if query is None:
+            ra, dec = body.get("ra"), body.get("dec")
+            if ra is None or dec is None:
+                raise RequestError("Give a target name, or both RA and Dec")
+            ra, dec = number(body, "ra", None), number(body, "dec", None)
+            if not (0 <= ra < 360 and -90 <= dec <= 90):
+                raise RequestError("RA must be in [0, 360) and Dec in [-90, 90] degrees")
+        else:
+            ra = dec = None
+        settings = {
+            "shutterspeed": text(body, "shutterspeed", self.center_settings["shutterspeed"]),
+            "iso": text(body, "iso", self.center_settings["iso"]),
+        }
+        loop = bool(body.get("loop", False))
+        try:
+            target = center.resolve_target(query, ra, dec)
+        except AmbiguousObject as exc:
+            raise RequestError(str(exc)) from exc
+        self.jobs.start("center", lambda stop: self.center_loop(stop, target, settings, loop))
+        return {"ok": True, "target": target.query}
+
+    def center_loop(self, stop, target, settings, loop):
+        near = None
+        self.hub.log(f"Pointing at {target.query}" + ("; move the camera between captures" if loop else ""))
+        while not stop.is_set():
+            with tempfile.TemporaryDirectory(prefix="astrophoto-center-") as temporary:
+                try:
+                    solved, result = center.point(
+                        temporary, target, self.observer, settings, self.timezone, self.scale,
+                        camera=self.camera, near=near, log=lambda text: print(text, flush=True),
+                    )
+                except (PlateSolveError, subprocess.CalledProcessError) as exc:
+                    if not loop:
+                        raise
+                    # The camera may have moved further than the hinted search area
+                    near = None
+                    self.hub.log(f"{error_text(exc)}; retrying with the next capture")
+                    stop.wait(1)
+                    continue
+                near = (*result["center"], center.NEAR_RADIUS)
+                image = self.images.put("center", render_pointing(solved, target.query, result))
+            self.hub.publish(
+                "center", target=result["target_name"], title=result["title"], report=result["report"],
+                pan=result["pan"], tilt=result["tilt"], inside=result["inside"], image=image,
+            )
+            if not loop:
+                break
+            stop.wait(1)
+
     def stop(self, body):
         name = self.jobs.stop()
         return {"ok": True, "stopped": name}
@@ -408,6 +492,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/focus/start": self.app.focus_start,
             "/api/focus/auto": self.app.focus_auto,
             "/api/focus/move": self.app.focus_move,
+            "/api/center/start": self.app.center_start,
             "/api/stop": self.app.stop,
         }
         route = routes.get(urlsplit(self.path).path)
@@ -481,10 +566,12 @@ def addresses(host):
 def main():
     parser = argparse.ArgumentParser(
         description="Serve a web app to focus, point and capture from a browser",
-        epilog="Settings can also be set in the [server] table of config.toml; focus settings come from [focus].",
+        epilog="Settings can also be set in the [server] table of config.toml; the tabs use the settings of the "
+               "focus and center commands.",
     )
     parser.add_argument("--host", help="Address to listen on (default: 0.0.0.0, every network interface)")
     parser.add_argument("--port", type=int, help="Port to listen on (default: 8000)")
+    add_observer_arguments(parser, required=False, note=", for the Center tab")
     args = parser.parse_args()
     settings = command_settings(parser, "server", DEFAULTS)
     host = args.host if args.host is not None else settings["host"]
@@ -495,11 +582,21 @@ def main():
     if not 0 < port < 65536:
         parser.error("port must be from 1 to 65535")
     focus_settings = command_settings(parser, "focus", focus.DEFAULTS)
+    center_settings = command_settings(parser, "center", center.DEFAULTS)
     camera = camera_profile(parser)
-    if shutil.which("gphoto2") is None:
-        print("gphoto2 not found: the page will load, but camera commands will fail", flush=True)
+    observer = None
+    if None not in (args.latitude, args.longitude, args.elevation):
+        if not (-90 <= args.latitude <= 90 and -180 <= args.longitude <= 180):
+            parser.error("Invalid observer latitude or longitude")
+        observer = observer_location(args)
+    else:
+        print("The observer position is not set, so the Center tab is off", flush=True)
+    for tool in ("gphoto2", "solve-field"):
+        if shutil.which(tool) is None:
+            print(f"{tool} not found: the page will load, but commands that need it will fail", flush=True)
 
-    app = App(focus_settings, camera)
+    app = App(focus_settings, camera, center_settings=center_settings, observer=observer,
+              timezone=camera_timezone(parser), scale=solve_scale(parser))
     try:
         server = Server((host, port), app)
     except OSError as exc:

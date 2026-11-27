@@ -335,7 +335,7 @@ Configuration: `[solve]`, `timezone`.
 ## server
 
 ```
-astrophoto server [--host ADDRESS] [--port PORT]
+astrophoto server [--host ADDRESS] [--port PORT] [--latitude DEG --longitude DEG --elevation M]
 ```
 
 Serves a web app for running the camera from a phone or laptop on the same
@@ -350,6 +350,11 @@ move the lens by one step of each size between frames, and Autofocus scans
 the focus like `focus --auto`. Live view, the lens buttons, and Autofocus
 need a camera with live view.
 
+The Center tab captures and plate-solves a frame like `center`, then shows how
+far to pan and tilt the camera, with the target marked on the frame. With
+Repeat, it keeps capturing so you can follow the camera as you move it. It
+needs the observer position.
+
 There is no password: anyone who can reach the address can use the camera.
 
 `--host ADDRESS`
@@ -358,7 +363,8 @@ There is no password: anyone who can reach the address can use the camera.
 `--port PORT`
 : Port to listen on (default: 8000).
 
-Configuration: `[server]`, `[focus]`, `camera`.
+Configuration: `[server]`, `[focus]`, `[center]`, `[solve]`, `camera`,
+`timezone`.
 
 ## Files
 
