@@ -640,31 +640,39 @@ class App:
         return found
 
     def series_frames(self, name, kind):
-        """Return the frames of a series directory picked in the page, refusing any other path."""
+        """Return the FITS frames of a series directory picked in the page, refusing any other path."""
         if name not in self.directories()[kind]:
             raise RequestError(f"No {kind} series named {name}")
-        frames = sorted(path for path in (self.root / name).glob("*.fit") if not path.name.endswith("-stack.fit"))
-        if not frames:
-            raise RequestError(f"No FITS frames in {name} yet")
-        return frames
+        return sorted(path for path in (self.root / name).glob("*.fit") if not path.name.endswith("-stack.fit"))
+
+    def unconverted(self, name):
+        """Return the RAW files of a series directory that have no FITS frame yet."""
+        return sorted(path for path in (self.root / name).iterdir()
+                      if path.suffix.lower() == ".cr2" and not path.with_suffix(".fit").exists())
+
+    def check_series(self, name, kind):
+        """Refuse a series directory with neither FITS frames nor RAW files to convert."""
+        if not self.series_frames(name, kind) and not self.unconverted(name):
+            raise RequestError(f"No frames in {name} yet")
 
     def stack_start(self, body):
         lights = body.get("lights")
         if not isinstance(lights, str):
             raise RequestError("Choose a light series")
-        self.series_frames(lights, "light")
+        self.check_series(lights, "light")
         darks = body.get("darks", "none")
         flats = body.get("flats", "none")
         if not isinstance(darks, str) or not isinstance(flats, str):
             raise RequestError("darks and flats must be series names, none, or library for darks")
-        dark_files = [] if darks in ("none", "library") else self.series_frames(darks, "dark")
-        flat_files = [] if flats == "none" else self.series_frames(flats, "flat")
+        if darks not in ("none", "library"):
+            self.check_series(darks, "dark")
+        if flats != "none":
+            self.check_series(flats, "flat")
         rgb = bool(body.get("rgb", False))
         deband = number(body, "deband", self.stack_settings["deband"], minimum=0)
         if deband > 1:
             raise RequestError("deband must be from 0 to 1")
-        options = {"dark_files": dark_files, "flat_files": flat_files, "dark_library": darks == "library", "rgb": rgb,
-                   "deband": deband}
+        options = {"dark_library": darks == "library", "rgb": rgb, "deband": deband}
         self.stacking.start("stacking", lambda stop: self.calibrated_stack(lights, darks, flats, options))
         return {"ok": True}
 
@@ -688,7 +696,20 @@ class App:
             self.hub.publish("stack_progress", directory=lights, stage=stage, done=done, total=total,
                              elapsed=round(now - start, 1))
 
-        stack.stack_directory(directory, progress=progress, **options)
+        # Series captured outside the server only have their RAW files
+        series = [(lights, "light")] + [(name, kind) for name, kind in ((darks, "dark"), (flats, "flat"))
+                                        if name not in ("none", "library")]
+        raw = [path for name, _ in series for path in self.unconverted(name)]
+        if raw:
+            self.hub.log(f"Converting {len(raw)} RAW files to FITS")
+        for index, path in enumerate(raw):
+            progress("Converting", index, len(raw))
+            convert.convert(path, self.timezone)
+        if raw:
+            progress("Converting", len(raw), len(raw))
+        dark_files = self.series_frames(darks, "dark") if darks not in ("none", "library") else []
+        flat_files = self.series_frames(flats, "flat") if flats != "none" else []
+        stack.stack_directory(directory, progress=progress, dark_files=dark_files, flat_files=flat_files, **options)
         prefix = f"{directory.name}-rgb" if options["rgb"] else directory.name
         png = directory / f"{prefix}-stack.png"
         image = self.images.put("calibrated", preview_file(png))

@@ -553,7 +553,7 @@ const handlers = {
     if (event.stage !== stage.name) stage = {name: event.stage, elapsed: event.elapsed, done: event.done};
     const fraction = event.total ? Math.min(event.done / event.total, 1) : 0;
     $("stack-bar").style.width = `${(100 * fraction).toFixed(1)}%`;
-    let text = event.stage === "Aligning lights"
+    let text = event.stage === "Aligning lights" || event.stage === "Converting"
       ? `${event.stage}: ${Math.floor(event.done)} of ${event.total} frames`
       : `${event.stage}: ${Math.round(100 * fraction)}%`;
     text += ` · ${clock(event.elapsed)} elapsed`;

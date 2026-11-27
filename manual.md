@@ -399,7 +399,8 @@ series.
 
 Below it, Stack makes the full stack of a light series, like `stack`, with
 the darks of a dark series or from the dark library, the flats of a flat
-series, debanding, and color if chosen. It runs while the camera keeps
+series, debanding, and color if chosen. RAW files without a FITS frame, as
+`capture` leaves them, are converted first. It runs while the camera keeps
 working.
 
 `--host ADDRESS`

@@ -495,6 +495,43 @@ class CalibratedStackTests(ServerCase):
         self.stack(darks="library")
         self.assertEqual(self.latest("calibrated")["darks"], "library")
 
+    def test_raw_files_without_fits_frames_are_converted_first(self):
+        from tests.test_calibration import raw_frame
+        # A series captured with the capture command, never converted, and a dark series converted halfway
+        lights, darks = self.root / "20261127-2200-light", self.root / "20261127-2150-dark"
+        for index in range(3):
+            (lights / f"frame{index}.CR2").write_text("raw")
+            (darks / f"dark{index}.CR2").write_text("raw")
+        raw_frame(darks, "dark0.fit", seed=0, dark=True)
+        converted = []
+
+        def fake_convert(path, tz):
+            converted.append(path.name)
+            index = int(path.stem[-1])
+            if path.stem.startswith("dark"):
+                return raw_frame(path.parent, f"{path.stem}.fit", seed=index, dark=True)
+            return raw_frame(path.parent, f"{path.stem}.fit", 2 * index, -index, seed=index)
+
+        events = []
+        publish = self.app.hub.publish
+
+        def record(kind, /, **data):
+            if kind == "stack_progress":
+                events.append(data)
+            publish(kind, **data)
+
+        with patch.object(convert, "convert", side_effect=fake_convert), \
+                patch.object(self.app.hub, "publish", side_effect=record):
+            status, result = self.post("/api/stack/start", {"lights": "20261127-2200-light", "darks": "20261127-2150-dark"})
+            self.assertEqual(status, 200, result)
+            self.app.stacking.join(timeout=120)
+        self.assertEqual(sorted(converted), ["dark1.CR2", "dark2.CR2", "frame0.CR2", "frame1.CR2", "frame2.CR2"])
+        self.assertEqual(events[0]["stage"], "Converting")
+        self.assertEqual(self.latest("calibrated")["file"], "20261127-2200-light-stack.fit")
+        header = fits.getheader(lights / "20261127-2200-light-stack.fit")
+        self.assertEqual((header["NCOMBINE"], header["NDARKS"]), (3, 3))
+        self.assertIn("Converting 5 RAW files to FITS", [event["text"] for event in self.app.hub.logs])
+
     def test_progress_is_published_while_stacking(self):
         events = []
         publish = self.app.hub.publish
@@ -544,8 +581,8 @@ class CalibratedStackTests(ServerCase):
         for body, message in [
             ({"lights": "../20261127-2100-light"}, "No light series named"),
             ({"lights": "notes"}, "No light series named notes"),
-            ({"lights": "20261127-2200-light"}, "No FITS frames in 20261127-2200-light yet"),
-            ({"lights": "20261127-2100-light", "darks": "20261127-2150-dark"}, "No FITS frames in 20261127-2150-dark"),
+            ({"lights": "20261127-2200-light"}, "No frames in 20261127-2200-light yet"),
+            ({"lights": "20261127-2100-light", "darks": "20261127-2150-dark"}, "No frames in 20261127-2150-dark yet"),
             ({"lights": "20261127-2100-light", "flats": "20261127-2130-dark"}, "No flat series named"),
             ({"lights": 3}, "Choose a light series"),
         ]:
