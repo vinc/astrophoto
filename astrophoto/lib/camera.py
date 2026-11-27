@@ -2,8 +2,6 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 import subprocess
-import tempfile
-import threading
 
 import exifread
 import matplotlib.image
@@ -97,71 +95,6 @@ def live_preview(directory, zoom=None, drive=0, step=2, iso=None):
     if len(files) != 1:
         raise RuntimeError("Expected one downloaded live-view frame")
     return files[0]
-
-def split_frames(buffer):
-    """Split complete JPEG frames off the front of a motion-JPEG byte stream, returning them and the rest."""
-    frames = []
-    while True:
-        start = buffer.find(b"\xff\xd8")
-        end = buffer.find(b"\xff\xd9", start + 2) if start >= 0 else -1
-        if end < 0:
-            return frames, buffer[start:] if start >= 0 else b""
-        frames.append(buffer[start:end + 2])
-        buffer = buffer[end + 2:]
-
-class LiveView:
-    """Keep live view running and hand out its latest frame, so the mirror stays up and the exposure settles."""
-
-    def __init__(self, zoom=None, iso=None):
-        command = ["gphoto2", "--set-config", "viewfinder=1"]
-        if iso is not None:
-            command += ["--set-config", f"iso={iso}"]
-        if zoom is not None:
-            command += ["--set-config", f"eoszoom={zoom}"]
-        command += ["--capture-movie", "--stdout"]
-        # A file collects gphoto2's messages, since an unread pipe would eventually stall it
-        self.errors = tempfile.TemporaryFile()
-        try:
-            self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=self.errors)
-        except FileNotFoundError:
-            raise SystemExit("gphoto2 not found")
-        self.latest, self.count = None, 0
-        self.ready = threading.Condition()
-        self.reader = threading.Thread(target=self._read, daemon=True)
-        self.reader.start()
-
-    def _read(self):
-        buffer = b""
-        while chunk := self.process.stdout.read1(1 << 16):
-            frames, buffer = split_frames(buffer + chunk)
-            if frames:
-                with self.ready:
-                    self.latest, self.count = frames[-1], self.count + len(frames)
-                    self.ready.notify_all()
-        with self.ready:
-            self.ready.notify_all()
-
-    def frame(self, directory, seen=0, timeout=10):
-        """Save a frame newer than the `seen` count as a JPEG and return its path and the new count."""
-        with self.ready:
-            self.ready.wait_for(lambda: self.count > seen or not self.reader.is_alive(), timeout)
-            if self.count <= seen:
-                self.errors.seek(0)
-                message = self.errors.read().decode(errors="replace").strip().splitlines()
-                raise RuntimeError("Live view stopped" + (f": {message[-1]}" if message else ""))
-            latest, count = self.latest, self.count
-        path = Path(directory) / "live-view.jpg"
-        path.write_bytes(latest)
-        return path, count
-
-    def close(self):
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-        self.errors.close()
 
 def move_focus(steps, step=2):
     """Move the focus by a signed number of steps without taking a picture."""

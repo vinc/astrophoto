@@ -6,7 +6,6 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
@@ -262,37 +261,6 @@ class FakeCamera:
         return subprocess.CompletedProcess(command, 0, output, "")
 
 
-class FakeStream:
-    """Stand in for a gphoto2 --capture-movie process that streams the given bytes and then ends."""
-
-    class Output:
-        """Hand out one JPEG frame per read, a moment apart, like a camera streaming live view."""
-
-        def __init__(self, data):
-            self.chunks = [b"\xff\xd8" + part for part in data.split(b"\xff\xd8")[1:]]
-
-        def read1(self, size):
-            time.sleep(0.05)
-            return self.chunks.pop(0) if self.chunks else b""
-
-    def __init__(self, data, errors=b""):
-        self.stdout = self.Output(data)
-        self.error_text = errors
-        self.terminated = False
-
-    def poll(self):
-        return 0 if self.terminated else None
-
-    def terminate(self):
-        self.terminated = True
-
-    def wait(self, timeout=None):
-        return 0
-
-    def kill(self):
-        self.terminated = True
-
-
 class AutofocusTests(ConfiguredTests):
     def test_v_curve_is_fitted_from_the_near_side_and_the_lens_left_at_its_minimum(self):
         for best, step in [(3, 1), (-2, 2), (0, 1)]:
@@ -361,43 +329,19 @@ class AutofocusTests(ConfiguredTests):
         self.assertEqual(fake.position, 1)
         self.assertIn("3 of 3 frames", output.getvalue())
 
-    def test_live_mode_reads_frames_from_one_running_live_view(self):
+    def test_live_mode_measures_zoomed_previews(self):
         fake = FakeCamera(best=0)
-        frames = []
-        for _ in range(3):
-            buffer = io.BytesIO()
-            import matplotlib.image
-            matplotlib.image.imsave(buffer, fake.frame(), cmap="gray", vmin=0, vmax=255, format="jpeg")
-            frames.append(buffer.getvalue())
-        stream = FakeStream(b"gphoto2 header" + b"".join(frames))
         argv = ["focus.py", "--live", "--no-plot", "--frames", "2", "--interval", "0"]
-        with patch.object(sys, "argv", argv), patch.object(camera.subprocess, "Popen", return_value=stream) as popen, \
+        with patch.object(sys, "argv", argv), patch.object(gphoto.subprocess, "run", side_effect=fake), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             focus.main()
-        # One gphoto2 process for the whole session, so live view and the mirror stay up between frames
-        popen.assert_called_once()
-        command = popen.call_args.args[0]
-        self.assertIn("eoszoom=5", command)
-        self.assertIn("--capture-movie", command)
-        readings = [line for line in output.getvalue().splitlines() if line.startswith("live-view.jpg:")]
+        self.assertEqual(len(fake.commands), 2)
+        self.assertIn("eoszoom=5", fake.commands[0])
+        self.assertNotIn("manualfocusdrive", " ".join(fake.commands[0]))
+        readings = [line for line in output.getvalue().splitlines() if line.startswith("thumb_preview.jpg:")]
         self.assertEqual(len(readings), 2)
         self.assertRegex(readings[0], r"HFR \d+\.\d+ px \| \d+ stars")
-        self.assertTrue(stream.terminated)
-
-    def test_a_stopped_live_view_reports_why(self):
-        stream = FakeStream(b"", errors=b"*** Error: Could not start live view ***\n")
-        with patch.object(camera.subprocess, "Popen", return_value=stream), tempfile.TemporaryDirectory() as temporary:
-            view = camera.LiveView()
-            view.errors.write(stream.error_text)
-            with self.assertRaisesRegex(RuntimeError, "Live view stopped: \\*\\*\\* Error: Could not start live view"):
-                view.frame(temporary, timeout=1)
-            view.close()
-
-    def test_motion_jpeg_is_split_into_whole_frames(self):
-        frames, rest = camera.split_frames(b"junk\xff\xd8one\xff\xd9\xff\xd8two\xff\xd9\xff\xd8thr")
-        self.assertEqual(frames, [b"\xff\xd8one\xff\xd9", b"\xff\xd8two\xff\xd9"])
-        self.assertEqual(rest, b"\xff\xd8thr")
-        self.assertEqual(camera.split_frames(b"no frame yet"), ([], b""))
+        self.assertNotIn('"', readings[0])
 
     def test_live_and_auto_reject_saved_files(self):
         for option in ["--live", "--auto"]:

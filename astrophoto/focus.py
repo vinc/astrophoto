@@ -12,8 +12,7 @@ from scipy.ndimage import label
 from scipy.optimize import least_squares
 
 from astrophoto.lib.camera import (
-    CAMERAS, LiveView, capture, display_limits, ensure_back_button_focus, image_optics, live_preview, move_focus,
-    pixel_scale,
+    CAMERAS, capture, display_limits, ensure_back_button_focus, image_optics, live_preview, move_focus, pixel_scale,
     preview_figure, read_image,
 )
 from astrophoto.lib.gphoto import FOCUS_STEPS
@@ -333,7 +332,6 @@ def main():
         return
     if not args.files:
         print("Adjust focus between captures; lower HFR is better. Ctrl-C or close the window to stop")
-    stream, seen = (LiveView(args.zoom, settings["iso"]) if args.live else None), 0
     try:
         while args.files or not args.frames or count < args.frames:
             if figure is not None and not plt.fignum_exists(figure.number):
@@ -343,7 +341,7 @@ def main():
                     if args.files:
                         path = args.files[count]
                     elif args.live:
-                        path, seen = stream.frame(temporary, seen)
+                        path = live_preview(temporary, args.zoom, iso=settings["iso"])
                     else:
                         path = capture(temporary, settings["shutterspeed"], settings["iso"])
                 except subprocess.CalledProcessError as exc:
@@ -386,8 +384,6 @@ def main():
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
         raise SystemExit(str(exc)) from exc
     finally:
-        if stream is not None:
-            stream.close()
         if figure is not None:
             plt.close(figure)
 
