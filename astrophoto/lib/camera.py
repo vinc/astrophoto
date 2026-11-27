@@ -20,12 +20,16 @@ class Camera:
     live_view: bool
     # Custom function that sets what the shutter button does, and the values that move autofocus off it
     back_button_focus: tuple | None = None
+    # Where capture stores a series by default: "ram" downloads each frame as it is taken, "card" downloads at the end
+    capture_target: str = "card"
 
 # Names match the EXIF model that the camera writes into its RAW files
 CAMERAS = {camera.name: camera for camera in [
     Camera("Canon EOS 20D", pixel_size=6.4, live_view=False),
     # C.Fn IV-1: AF/AE lock becomes AE lock/AF, and AF/AF lock (no AE lock) becomes AE/AF (no AE lock)
-    Camera("Canon EOS 600D", pixel_size=4.3, live_view=True, back_button_focus=(0x701, {0: 1, 2: 3})),
+    # Frames come about 8 s apart through RAM against 9 s onto the card, before its download, for 5 s exposures
+    Camera("Canon EOS 600D", pixel_size=4.3, live_view=True, back_button_focus=(0x701, {0: 1, 2: 3}),
+           capture_target="ram"),
 ]}
 
 def pixel_scale(camera, focal_length, binning=1):

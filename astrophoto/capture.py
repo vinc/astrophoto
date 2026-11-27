@@ -1,14 +1,21 @@
 import argparse
+import contextlib
 from datetime import datetime
 from pathlib import Path
 import shutil
+import signal
 import subprocess
+import sys
+import threading
 
 from astrophoto.lib.gphoto import camera_lock, run_gphoto2
-from astrophoto.lib.config import read_config
+from astrophoto.lib.config import camera_profile, read_config
 
 KINDS = ("light", "dark", "flat")
-DEFAULTS = {"frames": 20, "iso": "800", "aperture": "4.0", "shutterspeed": "5"}
+# A target of None leaves the choice to the camera profile
+DEFAULTS = {"frames": 20, "iso": "800", "aperture": "4.0", "shutterspeed": "5", "target": None}
+# gphoto2's names for where the camera stores a capture
+TARGETS = {"ram": "Internal RAM", "card": "Memory card"}
 CAMERA_SETTINGS = ("iso", "aperture", "shutterspeed")
 # Flats are shot on a lightbox, far brighter than the sky
 KIND_DEFAULTS = {"flat": {"shutterspeed": "50"}}
@@ -36,12 +43,16 @@ def _config_settings(parser, table, path, name):
             if not isinstance(value, int) or value < 1:
                 parser.error(f"frames in [{name}] of {path} must be an integer of at least 1")
             settings[key] = value
+        elif key == "target":
+            if value not in TARGETS:
+                parser.error(f"target in [{name}] of {path} must be one of: {', '.join(TARGETS)}")
+            settings[key] = value
         else:
             settings[key] = str(value)
     return settings
 
 
-def capture_settings(parser, kind, options):
+def capture_settings(parser, kind, options, camera=None):
     config, path = read_config(parser)
     table = config.get("capture", {})
     base = _config_settings(parser, table, path, "capture")
@@ -49,6 +60,8 @@ def capture_settings(parser, kind, options):
     settings = {}
     for layer in (DEFAULTS, base, KIND_DEFAULTS.get(kind, {}), overrides, options):
         settings.update(layer)
+    if settings["target"] is None:
+        settings["target"] = "card" if camera is None else camera.capture_target
     return settings
 
 
@@ -74,12 +87,75 @@ def series_directory(kind, time=None):
     return Path(f"{time or datetime.now():%Y%m%d-%H%M}-{kind}")
 
 
-def capture_series(directory, settings, log=print):
-    """Capture a series of RAW frames onto the card, download them to a directory, and delete them from the card.
+def capture_series(directory, settings, log=print, stop=None, on_frame=None):
+    """Capture a series of RAW frames into a directory and return their paths.
 
-    Return the downloaded paths. Raise CaptureError, or CalledProcessError when gphoto2 fails.
+    With settings["target"] "ram", each frame is downloaded as it is taken and passed to on_frame(path), and the
+    series ends early, between frames, once the stop event is set. With "card", the whole series is shot onto the
+    card, then downloaded and deleted from it. Raise CaptureError, or CalledProcessError when gphoto2 fails.
     """
     directory = Path(directory)
+    if settings.get("target", "card") == "ram":
+        return _capture_to_ram(directory, settings, log, stop, on_frame)
+    paths = _capture_to_card(directory, settings, log)
+    for path in paths:
+        if on_frame is not None:
+            on_frame(path)
+    return paths
+
+
+def _camera_settings(settings):
+    return [
+        "--set-config", "syncdatetime=1",
+        "--set-config", f"capturetarget={TARGETS[settings.get('target', 'card')]}",
+        "--set-config", "imageformat=RAW",
+        "--set-config", f"iso={settings['iso']}",
+        "--set-config", f"aperture={settings['aperture']}",
+        "--set-config", f"shutterspeed={settings['shutterspeed']}",
+    ]
+
+
+def _capture_to_ram(directory, settings, log, stop, on_frame):
+    frames = settings["frames"]
+    directory.mkdir(parents=True, exist_ok=True)
+    log(f"Capturing pictures in {directory} ...")
+    paths = []
+    # One gphoto2 run per frame, so the series can stop between frames: interrupting gphoto2 during an
+    # exposure cancels it and leaves the camera unresponsive until it is reconnected
+    for index in range(1, frames + 1):
+        if stop is not None and stop.is_set():
+            log(f"Stopped after {len(paths)} of {frames} pictures")
+            break
+        before = set(directory.iterdir())
+        try:
+            run_gphoto2(
+                ["gphoto2", *_camera_settings(settings), "--capture-image-and-download",
+                 "--filename", f"{directory}/%Y%m%d-%H%M%S-{index:03d}.%C"],
+                stdout=subprocess.DEVNULL,
+                # Keep a Ctrl-C in the terminal from reaching gphoto2
+                start_new_session=True,
+            )
+        except subprocess.CalledProcessError:
+            log(f"Stopped after {len(paths)} of {frames} pictures")
+            raise
+        new = [path for path in directory.iterdir() if path not in before and path.is_file()]
+        if len(new) != 1 or new[0].stat().st_size == 0:
+            raise CaptureError(
+                f"Expected one picture for frame {index}, found {len(new)}"
+                f"{' empty' if len(new) == 1 else ''}; stopped after {len(paths)} of {frames} pictures"
+            )
+        path = new[0]
+        # Pictures taken to RAM are named capt0000.cr2, but those from the card IMG_0001.CR2
+        if path.suffix != path.suffix.upper():
+            path = path.rename(path.with_suffix(path.suffix.upper()))
+        paths.append(path)
+        log(f"Saved {path.name} ({index} of {frames})")
+        if on_frame is not None:
+            on_frame(path)
+    return paths
+
+
+def _capture_to_card(directory, settings, log):
     # The whole series must not be interleaved with other camera commands
     with camera_lock:
         # The pictures are deleted from the card by number once downloaded
@@ -90,12 +166,7 @@ def capture_series(directory, settings, log=print):
         directory.mkdir(parents=True, exist_ok=True)
         log(f"Capturing pictures in {directory} ...")
         run_gphoto2([
-            "gphoto2",
-            "--set-config", "syncdatetime=1",
-            "--set-config", "imageformat=RAW",
-            "--set-config", f"iso={settings['iso']}",
-            "--set-config", f"aperture={settings['aperture']}",
-            "--set-config", f"shutterspeed={settings['shutterspeed']}",
+            "gphoto2", *_camera_settings(settings),
             "--capture-image",
             "--interval", "1",
             "--frames", str(settings["frames"]),
@@ -129,6 +200,23 @@ def capture_series(directory, settings, log=print):
     return downloaded
 
 
+@contextlib.contextmanager
+def stop_on_interrupt(stop):
+    """Turn the first Ctrl-C into a request to stop after the current frame, and a second into an abort."""
+    def interrupt(signum, frame):
+        if stop.is_set():
+            raise KeyboardInterrupt
+        stop.set()
+        print("Stopping after this picture; press Ctrl-C again to abort it, "
+              "which may leave the camera needing to be reconnected", file=sys.stderr, flush=True)
+
+    previous = signal.signal(signal.SIGINT, interrupt)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Capture light, dark, or flat frames with gphoto2",
@@ -143,18 +231,28 @@ def main():
         "--shutterspeed",
         help="Shutter speed setting passed to gphoto2, or 'help' to list the camera's choices (default: 5, or 50 for flat frames)",
     )
+    parser.add_argument(
+        "--target", choices=TARGETS,
+        help="Download each frame as it is taken from the camera's memory (ram), or the whole series at the end "
+             "from its card (card) (default: ram for the Canon EOS 600D, card otherwise)",
+    )
     args = parser.parse_args()
     queries = [name for name in CAMERA_SETTINGS if getattr(args, name) == "help"]
     options = {key: getattr(args, key) for key in DEFAULTS if getattr(args, key) is not None}
-    settings = None if queries else capture_settings(parser, args.kind, options)
     if shutil.which("gphoto2") is None:
         raise SystemExit("gphoto2 not found")
+    settings = None if queries else capture_settings(parser, args.kind, options, camera_profile(parser))
     try:
         if queries:
             for name in queries:
                 run_gphoto2(["gphoto2", "--get-config", name])
             return
-        capture_series(series_directory(args.kind), settings, log=lambda text: print(text, flush=True))
+        stop = threading.Event()
+        interrupt = stop_on_interrupt(stop) if settings["target"] == "ram" else contextlib.nullcontext()
+        with interrupt:
+            capture_series(series_directory(args.kind), settings, log=lambda text: print(text, flush=True), stop=stop)
+    except KeyboardInterrupt:
+        raise SystemExit(130)
     except CaptureError as exc:
         raise SystemExit(str(exc)) from exc
     except subprocess.CalledProcessError as exc:

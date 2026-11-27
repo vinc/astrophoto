@@ -40,7 +40,7 @@ A table named after a command holds that command's settings:
 
 | Table | Keys |
 |---|---|
-| `[capture]` | `frames`, `iso`, `aperture`, `shutterspeed` |
+| `[capture]` | `frames`, `iso`, `aperture`, `shutterspeed`, `target` |
 | `[capture.light]`, `[capture.dark]`, `[capture.flat]` | The same keys, for one kind of frame |
 | `[focus]` | `shutterspeed`, `iso` |
 | `[center]` | `shutterspeed`, `iso` |
@@ -198,12 +198,19 @@ Configuration: `[center]`, `[solve]`, `camera`, `timezone`.
 ## capture
 
 ```
-astrophoto capture [light|dark|flat] [--frames N] [--iso ISO] [--aperture F] [--shutterspeed SPEED]
+astrophoto capture [light|dark|flat] [--frames N] [--iso ISO] [--aperture F] [--shutterspeed SPEED] [--target ram|card]
 ```
 
-Captures a sequence of RAW frames, downloads them to a new
-`YYYYMMDD-HHMM-<kind>` directory, and deletes them from the camera once they
-are all downloaded. The camera card must be empty before starting.
+Captures a sequence of RAW frames into a new `YYYYMMDD-HHMM-<kind>` directory.
+
+With the `ram` target, each frame is taken into the camera's memory and
+downloaded before the next one. Ctrl-C stops the series once the current frame
+is saved; pressing it again aborts the frame, after which the camera may need
+to be reconnected.
+
+With the `card` target, the whole series is taken onto the camera card, then
+downloaded and deleted from the camera once every frame is downloaded. The
+card must be empty before starting.
 
 `light|dark|flat`
 : Kind of frames (default: `light`).
@@ -214,6 +221,12 @@ are all downloaded. The camera card must be empty before starting.
 `--iso ISO`, `--aperture F`, `--shutterspeed SPEED`
 : Camera settings, as the camera names them (defaults: `800`, `4.0`, `5`, or
   `50` for flats). Pass `help` to list the camera's choices.
+
+`--target ram|card`
+: Where frames are taken: the camera's memory, downloading each one as it is
+  taken, or its card, downloading the series at the end (default: `ram` for
+  the Canon EOS 600D, `card`
+  otherwise).
 
 Configuration: `[capture]`, `[capture.light]`, `[capture.dark]`,
 `[capture.flat]`.

@@ -581,6 +581,32 @@ class LibraryTests(unittest.TestCase):
             capture_command.capture_series(Path(temporary) / "light", settings, log=lambda text: None)
         run.assert_called_once()
 
+    def test_a_ram_series_reports_each_frame_and_stops_between_frames(self):
+        import threading
+        calls = []
+
+        def fake(command, **kwargs):
+            calls.append(kwargs)
+            pattern = command[command.index("--filename") + 1]
+            Path(pattern.replace("%Y%m%d-%H%M%S", "20261127-210000").replace("%C", "cr2")).write_text("raw")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        stop = threading.Event()
+        frames = []
+
+        def on_frame(path):
+            frames.append(path.name)
+            if len(frames) == 2:
+                stop.set()
+
+        settings = {"frames": 5, "iso": "800", "aperture": "4.0", "shutterspeed": "5", "target": "ram"}
+        with tempfile.TemporaryDirectory() as temporary, patch.object(gphoto.subprocess, "run", side_effect=fake):
+            paths = capture_command.capture_series(Path(temporary) / "light", settings, log=lambda text: None,
+                                                   stop=stop, on_frame=on_frame)
+        self.assertEqual(frames, ["20261127-210000-001.CR2", "20261127-210000-002.CR2"])
+        self.assertEqual([path.name for path in paths], frames)
+        self.assertTrue(all(call["start_new_session"] for call in calls))
+
     def test_series_directory_names_the_start_time_and_kind(self):
         from datetime import datetime
         self.assertEqual(capture_command.series_directory("dark", datetime(2026, 11, 27, 21, 5)),
