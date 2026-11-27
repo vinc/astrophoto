@@ -15,10 +15,13 @@ from astrophoto.lib.camera import (
     CAMERAS, capture, display_limits, ensure_back_button_focus, image_optics, live_preview, move_focus, pixel_scale,
     preview_figure, read_image,
 )
-from astrophoto.lib.gphoto import FOCUS_STEPS
+from astrophoto.lib.gphoto import FOCUS_STEPS, camera_lock
 from astrophoto.lib.config import camera_profile, command_settings
 
 class FocusRangeError(ValueError):
+    pass
+
+class AutofocusError(RuntimeError):
     pass
 
 DEFAULTS = {"shutterspeed": "1/4", "iso": None}
@@ -139,6 +142,12 @@ def frame_hfr(data, saturated, scale, radius, min_noise=0.0):
         return [], None, "No usable stars: check rough focus, exposure, or saturation"
     return stars, float(np.median([star[2] for star in stars])) * scale, None
 
+def measure_frame(path, radius):
+    """Read an image and return its data, stars, median HFR in sensor pixels, and a problem when there is none."""
+    data, saturated, scale = read_image(path)
+    stars, hfr, problem = frame_hfr(data, saturated, scale, radius, noise_floor(path))
+    return data, stars, hfr, problem
+
 def fit_minimum(positions, hfrs):
     """Return the focus position at the bottom of the V-curve, or None when the scan did not pass through it."""
     pairs = [(position, hfr) for position, hfr in zip(positions, hfrs) if hfr is not None]
@@ -206,15 +215,24 @@ def show_focus(figure, data, stars, title, interactive=True, history=None, xlabe
     if interactive:
         plt.pause(0.1)
 
-def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False, samples=3):
-    """Scan the focus through a V-curve in live view and leave the lens at its minimum HFR."""
+def autofocus(span, step, zoom, radius, iso=None, samples=3, show=None, log=print):
+    """Scan the focus through a V-curve in live view and leave the lens at its minimum HFR.
+
+    Each measurement is passed to show(data, stars, title, history), and progress messages to log(text).
+    Return the chosen step of the scan and its HFR; raise AutofocusError when no minimum is found.
+    """
+    # Another camera command between the scan's moves would lose track of the lens position
+    with camera_lock:
+        return _autofocus(span, step, zoom, radius, iso, samples, show or (lambda *_: None), log)
+
+def _autofocus(span, step, zoom, radius, iso, samples, show, log):
     try:
         model = ensure_back_button_focus()
     except (subprocess.CalledProcessError, ValueError, IndexError) as exc:
-        print(f"Could not check whether the shutter button autofocuses: {exc}", flush=True)
+        log(f"Could not check whether the shutter button autofocuses: {exc}")
     else:
         if model:
-            print(f"Moved autofocus off the shutter button of the {model} so captures keep this focus", flush=True)
+            log(f"Moved autofocus off the shutter button of the {model} so captures keep this focus")
     # Every measured position is reached moving towards infinity, so the lens backlash is always taken up
     move_focus(-(span + BACKLASH), step)
     move_focus(BACKLASH, step)
@@ -226,32 +244,29 @@ def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False
         for sample in range(samples):
             with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
                 path = live_preview(temporary, zoom, drive=drive if sample == 0 else 0, step=step, iso=iso)
-                data, saturated, scale = read_image(path)
-            stars, hfr, problem = frame_hfr(data, saturated, scale, radius, noise_floor(path))
+                data, stars, hfr, problem = measure_frame(path, radius)
             if hfr is not None:
                 readings.append((hfr, data, stars))
         if not readings:
-            print(f"Step {position:+d}: {problem}", flush=True)
+            log(f"Step {position:+d}: {problem}")
             return data, stars, None, problem
         hfr = float(np.median([reading[0] for reading in readings]))
         _, data, stars = min(readings, key=lambda reading: abs(reading[0] - hfr))
         title = f"HFR {hfr:.2f} px | {len(stars)} stars | {len(readings)} of {samples} frames"
-        print(f"Step {position:+d}: {title}", flush=True)
+        log(f"Step {position:+d}: {title}")
         return data, stars, hfr, title
 
     for position in range(-span, span + 1):
         data, stars, hfr, title = measure(position, 0 if position == -span else 1)
         positions.append(position)
         hfrs.append(hfr)
-        if figure is not None:
-            show_focus(figure, data, stars, f"Scanning step {position:+d} | {title}", interactive,
-                       history=list(zip(positions, hfrs)), xlabel="Focus step")
+        show(data, stars, f"Scanning step {position:+d} | {title}", list(zip(positions, hfrs)))
     target = fit_minimum(positions, hfrs)
     if target is None:
         # Leave the lens where it started rather than at the end of a failed scan
         move_focus(-(span + BACKLASH), step)
         move_focus(BACKLASH, step)
-        raise SystemExit(
+        raise AutofocusError(
             f"No focus minimum within {span} steps of the start: improve rough focus, "
             "aim at a brighter star, or increase --span"
         )
@@ -264,12 +279,9 @@ def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False
         if hfr is not None:
             break
     else:
-        raise SystemExit(f"Moved to step {target:+d} of the scan, but could not measure the focus there")
-    print(f"Focused at step {target:+d} of the scan", flush=True)
-    if figure is not None:
-        history = list(zip(positions, hfrs))
-        show_focus(figure, data, stars, f"Focused at step {target:+d} | {title}", interactive,
-                   history=history, xlabel="Focus step")
+        raise AutofocusError(f"Moved to step {target:+d} of the scan, but could not measure the focus there")
+    log(f"Focused at step {target:+d} of the scan")
+    show(data, stars, f"Focused at step {target:+d} | {title}", list(zip(positions, hfrs)))
     return target, hfr
 
 def main():
@@ -326,8 +338,13 @@ def main():
     count = 0
     history = []
     if args.auto:
+        def show(data, stars, title, history):
+            if figure is not None:
+                show_focus(figure, data, stars, title, interactive, history=history, xlabel="Focus step")
+
         try:
-            autofocus(args.span, args.step, args.zoom, args.radius, settings["iso"], figure, interactive, args.samples)
+            autofocus(args.span, args.step, args.zoom, args.radius, settings["iso"], args.samples, show,
+                      log=lambda text: print(text, flush=True))
             if args.save_preview:
                 figure.savefig(args.save_preview, dpi=150)
                 print(f"  Saved {args.save_preview}")
@@ -365,8 +382,7 @@ def main():
                     else:
                         time.sleep(max(args.interval, 0.1))
                     continue
-                data, saturated, scale = read_image(path)
-                stars, hfr, title = frame_hfr(data, saturated, scale, args.radius, noise_floor(path))
+                data, stars, hfr, title = measure_frame(path, args.radius)
                 if stars:
                     best = min(best, hfr)
                     title = f"{hfr_text(hfr, path, camera)} | {len(stars)} stars"

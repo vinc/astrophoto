@@ -1,4 +1,5 @@
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 import tempfile
@@ -24,6 +25,23 @@ DEFAULTS = {"shutterspeed": None, "iso": None}
 # Search radius in degrees around the previous solution while the camera is moved by hand
 NEAR_RADIUS = 10
 
+@dataclass(frozen=True)
+class Target:
+    """What to point at: a name, with fixed ICRS coordinates in degrees unless it is a Solar System body."""
+    query: str
+    coordinates: tuple | None = None
+    size: float | None = None  # major axis in degrees, when known
+
+def resolve_target(query=None, ra=None, dec=None):
+    """Return the Target for a name or for fixed coordinates; raise AmbiguousObject for an unclear name."""
+    if query is None:
+        return Target(f"RA {ra:g}, Dec {dec:g}", (ra, dec))
+    fixed = resolve(query)
+    if fixed is None:
+        # Left for the ephemeris service, as a Solar System body
+        return Target(query)
+    return Target(fixed.label, (fixed.ra, fixed.dec), fixed.size)
+
 def pointing_offset(center, target, time, observer, target_time=None):
     location = EarthLocation.from_geodetic(
         observer["lon"] * u.deg, observer["lat"] * u.deg,
@@ -44,7 +62,7 @@ def angle_text(degrees):
         return f"{abs(degrees):.2f} degrees"
     return f"{abs(degrees) * 60:.1f} arcmin"
 
-def inspect_image(path, query, observer, coordinates=None, correction_time=None, size=None):
+def inspect_image(path, query, observer, coordinates=None, correction_time=None, size=None, log=print):
     data, header = fits.getdata(path, header=True)
     if data.ndim != 2:
         raise ValueError("Expected a 2D plate-solved FITS image")
@@ -75,23 +93,42 @@ def inspect_image(path, query, observer, coordinates=None, correction_time=None,
         f"Pan {'right' if pan >= 0 else 'left'} {angle_text(pan)} and "
         f"{'raise' if tilt >= 0 else 'lower'} {angle_text(tilt)}"
     )
-    print(f"{target_name}: {time.utc.iso.split('.')[0]} UTC")
-    print(f"  Separation from centre: {angle_text(center.separation(target).deg)}")
-    print(f"  {directions}")
-    print(f"  Target is {'inside' if inside else 'outside'} the frame")
+    report = [
+        f"{target_name}: {time.utc.iso.split('.')[0]} UTC",
+        f"  Separation from centre: {angle_text(center.separation(target).deg)}",
+        f"  {directions}",
+        f"  Target is {'inside' if inside else 'outside'} the frame",
+    ]
     if size is not None:
         scales = wcs.proj_plane_pixel_scales()
         frame_width, frame_height = (scale.to_value(u.deg) * side for scale, side in zip(scales, (width, height)))
         frame = f"{frame_width:.2f} x {frame_height:.2f} degree frame"
         # Only the major axis is known, so a long object may still fit diagonally or rotated
         if size > np.hypot(frame_width, frame_height):
-            print(f"  {target_name} is {angle_text(size)} across, larger than the {frame}")
+            report.append(f"  {target_name} is {angle_text(size)} across, larger than the {frame}")
         elif size > min(frame_width, frame_height):
-            print(f"  {target_name} is {angle_text(size)} across and may be cropped in the {frame}")
+            report.append(f"  {target_name} is {angle_text(size)} across and may be cropped in the {frame}")
+    for line in report:
+        log(line)
     return {
         "x": x, "y": y, "inside": inside, "pan": pan, "tilt": tilt,
         "title": directions, "target_name": target_name, "center": (float(center.ra.deg), float(center.dec.deg)),
+        "report": report,
     }
+
+def point(directory, target, observer, settings, timezone, scale, camera=None, near=None, path=None, log=print):
+    """Plate-solve a saved image, or a new capture into a directory, and return the solved path and inspect_image result.
+
+    Raise PlateSolveError, or CalledProcessError when the capture fails.
+    """
+    source = path or capture(directory, settings["shutterspeed"], settings["iso"])
+    solved = solve_image(
+        source, directory, timezone, *scale, keep_solution=path is not None, camera=camera, near=near,
+    )
+    correction_time = Time.now() if path is None else None
+    result = inspect_image(solved, target.query, observer, target.coordinates, correction_time=correction_time,
+                           size=target.size, log=log)
+    return solved, result
 
 def show_pointing(figure, path, query, result, interactive=True):
     data, _, _ = read_image(path, bin_raw=False)
@@ -167,16 +204,10 @@ def main():
     near = None
     timezone = camera_timezone(parser)
     observer = observer_location(args)
-    coordinates = None if args.ra is None else (args.ra, args.dec)
-    query = args.query or f"RA {args.ra:g}, Dec {args.dec:g}"
-    size = None
-    if args.query:
-        try:
-            fixed = resolve(args.query)
-        except AmbiguousObject as exc:
-            raise SystemExit(str(exc)) from exc
-        if fixed is not None:
-            coordinates, query, size = (fixed.ra, fixed.dec), fixed.label, fixed.size
+    try:
+        target = resolve_target(args.query, args.ra, args.dec)
+    except AmbiguousObject as exc:
+        raise SystemExit(str(exc)) from exc
     interactive = not args.no_plot and (args.file is None or args.plot)
     figure = preview_figure(figsize=(10, 7)) if interactive else None
     if figure is None and args.save_preview:
@@ -187,10 +218,9 @@ def main():
                 break
             with tempfile.TemporaryDirectory(prefix="astrophoto-center-") as temporary:
                 try:
-                    path = args.file or capture(temporary, settings["shutterspeed"], settings["iso"])
-                    solved = solve_image(
-                        path, temporary, timezone, scale_low, scale_high,
-                        keep_solution=args.file is not None, camera=camera, near=near,
+                    solved, result = point(
+                        temporary, target, observer, settings, timezone, (scale_low, scale_high),
+                        camera=camera, near=near, path=args.file,
                     )
                 except (PlateSolveError, subprocess.CalledProcessError) as exc:
                     if not args.loop:
@@ -202,11 +232,9 @@ def main():
                         figure.suptitle("Capture or plate solving failed; retrying")
                         figure.canvas.draw_idle()
                 else:
-                    correction_time = Time.now() if args.file is None else None
-                    result = inspect_image(solved, query, observer, coordinates, correction_time=correction_time, size=size)
                     near = (*result["center"], NEAR_RADIUS)
                     if figure is not None:
-                        show_pointing(figure, solved, query, result, interactive=interactive)
+                        show_pointing(figure, solved, target.query, result, interactive=interactive)
                         if args.save_preview:
                             figure.savefig(args.save_preview, dpi=150)
                             print(f"  Saved {args.save_preview}")

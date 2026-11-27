@@ -3,9 +3,8 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 
-from astrophoto.lib.gphoto import ENGLISH, NO_FOCUS_HINT
+from astrophoto.lib.gphoto import camera_lock, run_gphoto2
 from astrophoto.lib.config import read_config
 
 KINDS = ("light", "dark", "flat")
@@ -53,28 +52,81 @@ def capture_settings(parser, kind, options):
     return settings
 
 
+class CaptureError(RuntimeError):
+    pass
+
+
 def files_on_card():
     """Return the number of files in each camera folder that holds any."""
     # Quiet mode lists one path per file, without the translated folder headers
-    result = subprocess.run(["gphoto2", "--quiet", "--list-files"], stdout=subprocess.PIPE, text=True, env=ENGLISH)
-    if result.returncode:
-        raise SystemExit(result.returncode)
+    result = run_gphoto2(["gphoto2", "--quiet", "--list-files"], stdout=subprocess.PIPE)
     folders = {}
     for line in filter(None, result.stdout.splitlines()):
         if not line.startswith("/"):
-            raise SystemExit(f"Unexpected gphoto2 file listing: {line}")
+            raise CaptureError(f"Unexpected gphoto2 file listing: {line}")
         folder = line.rsplit("/", 1)[0] or "/"
         folders[folder] = folders.get(folder, 0) + 1
     return folders
 
 
-def run(command):
-    result = subprocess.run(command, stderr=subprocess.PIPE, text=True, env=ENGLISH)
-    sys.stderr.write(result.stderr or "")
-    if result.returncode:
-        if "no focus" in (result.stderr or "").lower():
-            print(NO_FOCUS_HINT, file=sys.stderr)
-        raise SystemExit(result.returncode)
+def series_directory(kind, time=None):
+    """Return the directory for a new series of frames, named after its start time and kind."""
+    return Path(f"{time or datetime.now():%Y%m%d-%H%M}-{kind}")
+
+
+def capture_series(directory, settings, log=print):
+    """Capture a series of RAW frames onto the card, download them to a directory, and delete them from the card.
+
+    Return the downloaded paths. Raise CaptureError, or CalledProcessError when gphoto2 fails.
+    """
+    directory = Path(directory)
+    # The whole series must not be interleaved with other camera commands
+    with camera_lock:
+        # The pictures are deleted from the card by number once downloaded
+        count = sum(files_on_card().values())
+        if count:
+            raise CaptureError(f"The camera card already holds {count} files; download or delete them before capturing")
+
+        directory.mkdir(parents=True, exist_ok=True)
+        log(f"Capturing pictures in {directory} ...")
+        run_gphoto2([
+            "gphoto2",
+            "--set-config", "syncdatetime=1",
+            "--set-config", "imageformat=RAW",
+            "--set-config", f"iso={settings['iso']}",
+            "--set-config", f"aperture={settings['aperture']}",
+            "--set-config", f"shutterspeed={settings['shutterspeed']}",
+            "--capture-image",
+            "--interval", "1",
+            "--frames", str(settings["frames"]),
+        ])
+
+        log(f"Downloading pictures to {directory} ...")
+        before = set(directory.iterdir())
+        run_gphoto2([
+            "gphoto2", "--folder", "/", "--recurse",
+            "--filename", f"{directory}/%Y%m%d-%H%M%S.%C",
+            "--get-all-files",
+        ])
+
+        # gphoto2 exits successfully even when a picture is missing or overwritten locally
+        frames = settings["frames"]
+        downloaded = sorted(path for path in directory.iterdir() if path not in before and path.is_file())
+        empty = sum(1 for path in downloaded if path.stat().st_size == 0)
+        folders = files_on_card()
+        on_card = sum(folders.values())
+        if len(downloaded) != frames or empty or on_card != frames:
+            details = f", {empty} of them empty" if empty else ""
+            raise CaptureError(
+                f"Expected {frames} pictures, found {on_card} on the camera and {len(downloaded)} downloaded{details}; "
+                "left them all on the camera"
+            )
+
+        log("Deleting downloaded pictures from the camera ...")
+        # The camera moves on to a new folder, such as 101CANON, when one fills up mid-series
+        for folder, count in folders.items():
+            run_gphoto2(["gphoto2", "--folder", folder, "--delete-file", f"1-{count}"])
+    return downloaded
 
 
 def main():
@@ -93,61 +145,20 @@ def main():
     )
     args = parser.parse_args()
     queries = [name for name in CAMERA_SETTINGS if getattr(args, name) == "help"]
-    if queries:
-        if shutil.which("gphoto2") is None:
-            raise SystemExit("gphoto2 not found")
-        for name in queries:
-            run(["gphoto2", "--get-config", name])
-        return
     options = {key: getattr(args, key) for key in DEFAULTS if getattr(args, key) is not None}
-    settings = capture_settings(parser, args.kind, options)
+    settings = None if queries else capture_settings(parser, args.kind, options)
     if shutil.which("gphoto2") is None:
         raise SystemExit("gphoto2 not found")
-    # The pictures are deleted from the card by number once downloaded
-    count = sum(files_on_card().values())
-    if count:
-        raise SystemExit(f"The camera card already holds {count} files; download or delete them before capturing")
-
-    directory = Path(f"{datetime.now():%Y%m%d-%H%M}-{args.kind}")
-    directory.mkdir(parents=True, exist_ok=True)
-    print(f"Capturing pictures in {directory} ...", flush=True)
-    run([
-        "gphoto2",
-        "--set-config", "syncdatetime=1",
-        "--set-config", "imageformat=RAW",
-        "--set-config", f"iso={settings['iso']}",
-        "--set-config", f"aperture={settings['aperture']}",
-        "--set-config", f"shutterspeed={settings['shutterspeed']}",
-        "--capture-image",
-        "--interval", "1",
-        "--frames", str(settings["frames"]),
-    ])
-
-    print(f"Downloading pictures to {directory} ...", flush=True)
-    before = set(directory.iterdir())
-    run([
-        "gphoto2", "--folder", "/", "--recurse",
-        "--filename", f"{directory}/%Y%m%d-%H%M%S.%C",
-        "--get-all-files",
-    ])
-
-    # gphoto2 exits successfully even when a picture is missing or overwritten locally
-    frames = settings["frames"]
-    downloaded = [path for path in directory.iterdir() if path not in before and path.is_file()]
-    empty = sum(1 for path in downloaded if path.stat().st_size == 0)
-    folders = files_on_card()
-    on_card = sum(folders.values())
-    if len(downloaded) != frames or empty or on_card != frames:
-        details = f", {empty} of them empty" if empty else ""
-        raise SystemExit(
-            f"Expected {frames} pictures, found {on_card} on the camera and {len(downloaded)} downloaded{details}; "
-            "left them all on the camera"
-        )
-
-    print("Deleting downloaded pictures from the camera ...", flush=True)
-    # The camera moves on to a new folder, such as 101CANON, when one fills up mid-series
-    for folder, count in folders.items():
-        run(["gphoto2", "--folder", folder, "--delete-file", f"1-{count}"])
+    try:
+        if queries:
+            for name in queries:
+                run_gphoto2(["gphoto2", "--get-config", name])
+            return
+        capture_series(series_directory(args.kind), settings, log=lambda text: print(text, flush=True))
+    except CaptureError as exc:
+        raise SystemExit(str(exc)) from exc
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(exc.returncode) from exc
 
 
 if __name__ == "__main__":

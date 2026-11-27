@@ -418,7 +418,7 @@ class ReviewFixTests(ConfiguredTests):
         self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C")
         self.assertEqual(run.call_args.kwargs["env"]["LANGUAGE"], "C")
         with patch.object(capture_command.subprocess, "run", return_value=result) as run:
-            capture_command.run(["gphoto2", "--capture-image"])
+            capture_command.files_on_card()
         self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C")
 
     def test_a_wrong_metadata_scale_falls_back_to_the_configured_width(self):
@@ -539,11 +539,95 @@ class NoFocusTests(unittest.TestCase):
         self.assertIn("C.Fn IV-1", err.getvalue())
 
     def test_capture_command_explains_the_fix_too(self):
-        result = subprocess.CompletedProcess([], 1, None, "Perhaps no focus?\n")
-        with patch.object(capture_command.subprocess, "run", return_value=result), \
-                contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
-            capture_command.run(["gphoto2", "--capture-image"])
+        def fake(command, **kwargs):
+            if "--capture-image" in command:
+                raise subprocess.CalledProcessError(1, command, stderr="Perhaps no focus?\n")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        settings = {"frames": 2, "iso": "800", "aperture": "4.0", "shutterspeed": "5"}
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(capture_command.subprocess, "run", side_effect=fake), \
+                contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(subprocess.CalledProcessError):
+            capture_command.capture_series(Path(temporary) / "light", settings, log=lambda text: None)
         self.assertIn("C.Fn IV-1", err.getvalue())
+
+
+class LibraryTests(unittest.TestCase):
+    """The commands' building blocks report through return values and exceptions, without exiting."""
+
+    def test_gphoto2_calls_hold_the_camera_lock(self):
+        import threading
+        held = []
+
+        def fake(command, **kwargs):
+            # Another thread cannot take the camera while gphoto2 runs
+            result = []
+            thread = threading.Thread(target=lambda: result.append(gphoto.camera_lock.acquire(blocking=False)))
+            thread.start()
+            thread.join()
+            held.append(not result[0])
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch.object(gphoto.subprocess, "run", side_effect=fake):
+            gphoto.run_gphoto2(["gphoto2", "--summary"])
+        self.assertEqual(held, [True])
+
+    def test_capture_series_refuses_a_card_with_files(self):
+        listing = subprocess.CompletedProcess([], 0, "/DCIM/100CANON/IMG_0001.CR2\n", "")
+        settings = {"frames": 2, "iso": "800", "aperture": "4.0", "shutterspeed": "5"}
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(gphoto.subprocess, "run", return_value=listing) as run, \
+                self.assertRaisesRegex(capture_command.CaptureError, "already holds 1 files"):
+            capture_command.capture_series(Path(temporary) / "light", settings, log=lambda text: None)
+        run.assert_called_once()
+
+    def test_series_directory_names_the_start_time_and_kind(self):
+        from datetime import datetime
+        self.assertEqual(capture_command.series_directory("dark", datetime(2026, 11, 27, 21, 5)),
+                         Path("20261127-2105-dark"))
+
+    def test_autofocus_reports_through_callbacks_and_raises_without_a_minimum(self):
+        fake = FakeCamera(best=20)
+        shown, logged = [], []
+        with patch.object(gphoto.subprocess, "run", side_effect=fake), \
+                self.assertRaisesRegex(focus.AutofocusError, "No focus minimum"):
+            focus.autofocus(4, 1, 5, 12, samples=1, show=lambda *args: shown.append(args), log=logged.append)
+        self.assertEqual(len(shown), 9)
+        self.assertEqual([position for position, _ in shown[-1][3]], list(range(-4, 5)))
+        self.assertTrue(any(text.startswith("Step +4:") for text in logged))
+        self.assertEqual(fake.position, 0)
+
+    def test_measure_frame_returns_stars_and_hfr(self):
+        from tests.test_helpers import star_field
+        with patch.object(focus, "read_image", return_value=(star_field(1.5), None, 2)):
+            data, stars, hfr, problem = focus.measure_frame(Path("frame.fit"), 12)
+        self.assertGreater(len(stars), 0)
+        self.assertGreater(hfr, 0)
+        self.assertIsNone(problem)
+
+    def test_resolve_target_from_coordinates_names_or_bodies(self):
+        self.assertEqual(center.resolve_target(ra=10.5, dec=-2), center.Target("RA 10.5, Dec -2", (10.5, -2)))
+        with patch.object(center, "resolve", return_value=None):
+            self.assertEqual(center.resolve_target("vesta"), center.Target("vesta"))
+        from types import SimpleNamespace
+        fixed = SimpleNamespace(label="M31", ra=10.68, dec=41.27, size=3.2)
+        with patch.object(center, "resolve", return_value=fixed):
+            self.assertEqual(center.resolve_target("andromeda"), center.Target("M31", (10.68, 41.27), 3.2))
+
+    def test_point_returns_the_solved_image_and_correction(self):
+        target = center.Target("M31", (10.68, 41.27), 3.2)
+        settings = {"shutterspeed": "2", "iso": "3200"}
+        with patch.object(center, "capture", return_value=Path("capture.CR2")) as capture, \
+                patch.object(center, "solve_image", return_value=Path("capture.new")) as solve, \
+                patch.object(center, "inspect_image", return_value={"center": (1.0, 2.0)}) as inspect:
+            solved, result = center.point("work", target, {}, settings, None, (3, 20), near=(1, 2, 10))
+        capture.assert_called_once_with("work", "2", "3200")
+        self.assertEqual(solve.call_args.kwargs["near"], (1, 2, 10))
+        self.assertFalse(solve.call_args.kwargs["keep_solution"])
+        self.assertEqual(inspect.call_args.args[3], (10.68, 41.27))
+        self.assertEqual(inspect.call_args.kwargs["size"], 3.2)
+        self.assertIsNotNone(inspect.call_args.kwargs["correction_time"])
+        self.assertEqual((solved, result), (Path("capture.new"), {"center": (1.0, 2.0)}))
 
 
 if __name__ == "__main__":
