@@ -434,6 +434,28 @@ class CaptureServerTests(ServerCase):
         row = self.latest("series")["frames"][0]
         self.assertEqual((row["status"], row["problem"]), ("failed", "missing exposure timestamp"))
 
+    def test_the_lens_stays_put_during_a_capture(self):
+        self.post("/api/capture/start", {"frames": 50})
+        self.captured.wait(30)
+        status, result = self.post("/api/focus/move", {"steps": 1, "size": 1})
+        self.assertEqual(status, 409)
+        self.assertIn("only be moved while idle or focusing, not during capture", result["error"])
+        self.assertFalse(any(option.startswith("manualfocusdrive") for command in self.fake.commands
+                             for option in command))
+        self.post("/api/stop")
+
+    def test_a_failed_live_stack_save_does_not_stop_frame_processing(self):
+        from astrophoto.lib import livestack
+        with patch.object(livestack.LiveStack, "write", side_effect=OSError("No space left on device")):
+            self.run_series(frames=2)
+        self.assertTrue(any("Could not save the live stack" in event["text"] and "No space left" in event["text"]
+                            for event in self.app.hub.logs))
+        self.assertEqual([row["status"] for row in self.latest("series")["frames"]], ["stacked", "stacked"])
+        # The worker is still there for the next series, and its stack is saved
+        directory = self.run_series(frames=2)
+        self.wait_for(lambda: (directory / f"{directory.name}-live-stack.fit").exists())
+        self.assertEqual([row["status"] for row in self.latest("series")["frames"]], ["stacked", "stacked"])
+
     def test_capture_requests_are_validated(self):
         for body, message in [
             ({"kind": "bias"}, "kind must be one of light, dark, flat"),
@@ -531,6 +553,35 @@ class CalibratedStackTests(ServerCase):
         header = fits.getheader(lights / "20261127-2200-light-stack.fit")
         self.assertEqual((header["NCOMBINE"], header["NDARKS"]), (3, 3))
         self.assertIn("Converting 5 RAW files to FITS", [event["text"] for event in self.app.hub.logs])
+
+    def test_an_unreadable_raw_file_is_left_out_of_the_stack(self):
+        from tests.test_calibration import raw_frame
+        lights = self.root / "20261127-2200-light"
+        raw_frame(lights, "frame0.fit", seed=0)
+        raw_frame(lights, "frame1.fit", 2, -1, seed=1)
+        (lights / "frame2.CR2").write_text("incomplete")
+        with patch.object(convert, "convert", side_effect=ValueError("frame2.CR2: missing exposure timestamp")):
+            self.stack(lights="20261127-2200-light")
+        self.assertIn("Could not convert frame2.CR2, leaving it out: frame2.CR2: missing exposure timestamp",
+                      [event["text"] for event in self.app.hub.logs])
+        self.assertEqual(fits.getheader(lights / "20261127-2200-light-stack.fit")["NCOMBINE"], 2)
+
+    def test_a_series_with_only_unreadable_raw_files_is_reported(self):
+        (self.root / "20261127-2200-light" / "frame0.CR2").write_text("incomplete")
+        with patch.object(convert, "convert", side_effect=ValueError("missing exposure timestamp")):
+            self.stack(lights="20261127-2200-light")
+        self.assertIsNone(self.latest("calibrated"))
+        self.assertEqual(self.app.hub.logs[-1]["text"], "Stacking failed: No usable frames in 20261127-2200-light")
+
+    def test_a_raw_file_converted_meanwhile_is_not_converted_again(self):
+        from tests.test_calibration import raw_frame
+        lights = self.root / "20261127-2200-light"
+        (lights / "frame0.CR2").write_text("raw")
+        # The frame processor converted it between the listing and its turn
+        raw_frame(lights, "frame0.fit", seed=0)
+        with patch.object(convert, "convert") as conversion:
+            self.assertEqual(self.app.convert_raw(lights / "frame0.CR2"), lights / "frame0.fit")
+        conversion.assert_not_called()
 
     def test_progress_is_published_while_stacking(self):
         events = []

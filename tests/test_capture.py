@@ -20,7 +20,7 @@ class CaptureCase(unittest.TestCase):
         # the listing is in French, as gphoto2 translates it. --capture-image-and-download saves one
         # frame, failing or saving an empty file for the frame numbered RAM_FAIL_AT or RAM_EMPTY_AT,
         # after SLOW seconds, logging any interrupt it receives
-        executable = self.fake_gphoto2(directory)
+        self.fake_gphoto2(directory)
         settings = directory / "config"
         if config is not None:
             (settings / "astrophoto").mkdir(parents=True)
@@ -290,8 +290,10 @@ class RamCaptureTests(CaptureCase):
                 self.assertIn("capturetarget=Internal RAM", command)
                 self.assertIn("shutterspeed=5", command)
                 self.assertIn("--capture-image-and-download", command)
-                self.assertEqual(command[command.index("--filename") + 1],
-                                 f"{folders[0].name}/%Y%m%d-%H%M%S-{index:03d}.%C")
+                # Downloaded into a staging directory inside the series, removed at the end
+                staging, name = command[command.index("--filename") + 1].rsplit("/", 1)
+                self.assertEqual(name, f"%Y%m%d-%H%M%S-{index:03d}.%C")
+                self.assertRegex(staging, rf"/{folders[0].name}/\.capture-[^/]+$")
             # Named like pictures from the card, so *.CR2 still finds them
             self.assertEqual(sorted(path.name for path in folders[0].iterdir()),
                              [f"20261127-210000-{index:03d}.CR2" for index in (1, 2, 3)])

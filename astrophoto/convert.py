@@ -139,7 +139,13 @@ def convert(path, tz, output=None):
         hdr[key] = value
 
     output = Path(output) if output is not None else path.with_suffix(".fit")
-    hdu.writeto(output, overwrite=True)
+    # Written under a temporary name, then renamed, so a stack scanning for FITS frames never reads half a file
+    temporary = output.with_name(f".{output.name}.tmp")
+    try:
+        hdu.writeto(temporary, overwrite=True)
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
 
     print(f"{path} -> {output}")
     print(f"  Start:    {start.isoformat()}")

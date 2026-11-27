@@ -69,6 +69,17 @@ class LiveStackTests(unittest.TestCase):
         self.assertEqual(len(stack), 1)
         np.testing.assert_array_equal(stack.image(), before)
 
+    def test_a_clouded_first_frame_does_not_become_the_reference(self):
+        stack = LiveStack()
+        cloud = np.random.default_rng(1).normal(500, 5, (240, 320)).astype(np.float32)
+        with self.assertRaisesRegex(ValueError, "Too few stars for a reference frame"):
+            stack.add(cloud, "cloud.fit")
+        self.assertIsNone(stack.reference)
+        # The next frames with stars still stack, the first of them as the reference
+        stack.add(sky(seed=1), "frame1.fit")
+        stack.add(sky(3, -2, seed=2), "frame2.fit")
+        self.assertEqual([path.name for path in stack.paths], ["frame1.fit", "frame2.fit"])
+
     def test_the_stack_is_saved_with_its_coverage(self):
         with tempfile.TemporaryDirectory() as temporary:
             stack = LiveStack()

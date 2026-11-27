@@ -589,6 +589,8 @@ class LibraryTests(unittest.TestCase):
             calls.append(kwargs)
             pattern = command[command.index("--filename") + 1]
             Path(pattern.replace("%Y%m%d-%H%M%S", "20261127-210000").replace("%C", "cr2")).write_text("raw")
+            # Meanwhile the server converts the previous frame into the series directory
+            (Path(temporary) / "light" / f"converted{len(calls)}.fit").write_text("fits")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         stop = threading.Event()
@@ -603,9 +605,12 @@ class LibraryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch.object(gphoto.subprocess, "run", side_effect=fake):
             paths = capture_command.capture_series(Path(temporary) / "light", settings, log=lambda text: None,
                                                    stop=stop, on_frame=on_frame)
+            left = sorted(path.name for path in (Path(temporary) / "light").iterdir())
         self.assertEqual(frames, ["20261127-210000-001.CR2", "20261127-210000-002.CR2"])
         self.assertEqual([path.name for path in paths], frames)
         self.assertTrue(all(call["start_new_session"] for call in calls))
+        # The staging directory is gone, and only the frames and the converted files are left
+        self.assertEqual(left, [*frames, "converted1.fit", "converted2.fit"])
 
     def test_series_directory_names_the_start_time_and_kind(self):
         from datetime import datetime

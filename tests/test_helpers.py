@@ -502,6 +502,38 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual(header["WBB"], 1.5)
             self.assertNotIn("CCD-TEMP", header)
 
+    def test_a_failed_conversion_leaves_no_partial_fits_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "light.CR2"
+            source.touch()
+            tags = {"EXIF DateTimeOriginal": "2026:11:26 19:43:26", "EXIF ExposureTime": "5"}
+            def full_disk(name, **kwargs):
+                # A disk that fills up leaves the header written and the pixels missing
+                Path(name).write_bytes(b"SIMPLE  =                    T")
+                raise OSError("No space left on device")
+
+            for failure in (full_disk, None):
+                with self.subTest(failure=failure), \
+                        patch.object(conversion.rawpy, "imread") as imread, \
+                        patch.object(conversion.exifread, "process_file", return_value=tags), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    raw = imread.return_value.__enter__.return_value
+                    raw.raw_image_visible = np.full((20, 20), 123, dtype=np.uint16)
+                    raw.black_level_per_channel = [100] * 4
+                    raw.white_level = 4095
+                    raw.color_desc = b"RGBG"
+                    raw.raw_colors_visible = np.tile([[0, 1], [3, 2]], (10, 10))
+                    raw.daylight_whitebalance = [2, 1, 1.5, 0]
+                    if failure is None:
+                        conversion.convert(source, ZoneInfo("UTC"))
+                    else:
+                        with patch.object(conversion.fits.PrimaryHDU, "writeto", side_effect=failure), \
+                                self.assertRaises(OSError):
+                            conversion.convert(source, ZoneInfo("UTC"))
+                # Only a complete frame ever appears under its final name, and nothing is left behind
+                names = sorted(path.name for path in Path(temporary).iterdir())
+                self.assertEqual(names, ["light.CR2"] if failure else ["light.CR2", "light.fit"])
+
     def test_conversion_records_the_sensor_temperature_from_the_maker_notes(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "light.CR2"

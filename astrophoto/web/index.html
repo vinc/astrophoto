@@ -491,7 +491,8 @@ const handlers = {
     const busy = Boolean(event.name);
     document.querySelectorAll(".starts").forEach((button) => { button.disabled = busy; });
     document.querySelectorAll(".stops").forEach((button) => { button.disabled = !busy; });
-    $("drive").querySelectorAll("button").forEach((button) => { button.disabled = event.name === "autofocus"; });
+    // The lens only moves while idle or focusing, never mid-capture
+    $("drive").querySelectorAll("button").forEach((button) => { button.disabled = busy && event.name !== "focus"; });
   },
   focus(event) {
     const title = $("focus-title");

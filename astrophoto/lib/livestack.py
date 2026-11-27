@@ -15,6 +15,8 @@ from astrophoto.stack import normalize_background, stack_header
 MIN_CLIP_FRAMES = 10
 # Smallest spread, in ADU, assumed for a pixel, so a few identical early values do not reject every later one
 MIN_SPREAD = 1.0
+# astroalign matches triangles of stars, so a reference needs at least this many
+MIN_REFERENCE_STARS = 3
 
 
 def find_stars(image):
@@ -60,6 +62,9 @@ class LiveStack:
             registered, shift, rotation = image.copy(), (0.0, 0.0), 0.0
             matrix = np.eye(3)
             stars = find_stars(image)
+            # A clouded first frame would leave every later frame with nothing to align to, so wait for one with stars
+            if stars is not image and len(stars) < MIN_REFERENCE_STARS:
+                raise ValueError(f"Too few stars for a reference frame ({len(stars)})")
         else:
             transform, _ = astroalign.find_transform(find_stars(image), self.reference_stars)
             registered, footprint = astroalign.apply_transform(transform, image, self.reference)

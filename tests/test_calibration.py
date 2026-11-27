@@ -140,6 +140,19 @@ class DarkLibraryTests(unittest.TestCase):
         np.testing.assert_allclose(fits.getdata(later / "library-stack.fit"),
                                    fits.getdata(lights / "with-darks-stack.fit"), atol=1e-3)
 
+    def test_different_darks_with_the_same_names_and_sizes_are_both_kept(self):
+        nights = []
+        for night, temperature in (("cold", 5), ("warm", 22)):
+            directory = self.root / night
+            directory.mkdir()
+            frame = raw_frame(directory, "IMG_0001.fit", seed=temperature, dark=True, temperature=temperature)
+            nights.append(frame)
+            data, metadata = stack.master_dark([frame])
+            darks.save(data, metadata, [frame])
+        self.assertEqual(nights[0].stat().st_size, nights[1].stat().st_size)
+        self.assertEqual(len(list((self.root / "library").glob("*.fit"))), 2)
+        self.assertEqual(fits.getheader(darks.find(fits.Header(HEADER), temperature=22))["CCD-TEMP"], 22)
+
     def test_the_newest_matching_master_is_chosen(self):
         for stamp in ("2026-10-01T20:00:00", "2026-11-20T20:00:00"):
             with patch.object(darks, "sources_digest", return_value=stamp):

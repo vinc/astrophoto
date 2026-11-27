@@ -40,11 +40,16 @@ def library_path():
 
 
 def sources_digest(paths):
-    """Identify a set of dark frames by their names and sizes, so the same set is not saved twice."""
-    digest = hashlib.sha256()
-    for path in sorted(paths, key=lambda path: path.name):
-        digest.update(f"{path.name}:{path.stat().st_size}\n".encode())
-    return digest.hexdigest()[:16]
+    """Identify a set of dark frames by their contents, so the same set is not saved twice.
+
+    Names and sizes are not enough: frames of one camera have the same size, and names repeat across sessions.
+    """
+    digests = []
+    for path in paths:
+        with open(path, "rb") as file:
+            digests.append(hashlib.file_digest(file, "sha256").hexdigest())
+    # The same frames, listed in any order, are the same set
+    return hashlib.sha256("\n".join(sorted(digests)).encode()).hexdigest()[:16]
 
 
 def describe(metadata):

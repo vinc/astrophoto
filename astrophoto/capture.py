@@ -6,6 +6,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 
 from astrophoto.lib.gphoto import camera_lock, run_gphoto2
@@ -120,38 +121,42 @@ def _capture_to_ram(directory, settings, log, stop, on_frame):
     directory.mkdir(parents=True, exist_ok=True)
     log(f"Capturing pictures in {directory} ...")
     paths = []
-    # One gphoto2 run per frame, so the series can stop between frames: interrupting gphoto2 during an
-    # exposure cancels it and leaves the camera unresponsive until it is reconnected
-    for index in range(1, frames + 1):
-        if stop is not None and stop.is_set():
-            log(f"Stopped after {len(paths)} of {frames} pictures")
-            break
-        before = set(directory.iterdir())
-        try:
-            run_gphoto2(
-                ["gphoto2", *_camera_settings(settings), "--capture-image-and-download",
-                 "--filename", f"{directory}/%Y%m%d-%H%M%S-{index:03d}.%C"],
-                stdout=subprocess.DEVNULL,
-                # Keep a Ctrl-C in the terminal from reaching gphoto2
-                start_new_session=True,
-            )
-        except subprocess.CalledProcessError:
-            log(f"Stopped after {len(paths)} of {frames} pictures")
-            raise
-        new = [path for path in directory.iterdir() if path not in before and path.is_file()]
-        if len(new) != 1 or new[0].stat().st_size == 0:
-            raise CaptureError(
-                f"Expected one picture for frame {index}, found {len(new)}"
-                f"{' empty' if len(new) == 1 else ''}; stopped after {len(paths)} of {frames} pictures"
-            )
-        path = new[0]
-        # Pictures taken to RAM are named capt0000.cr2, but those from the card IMG_0001.CR2
-        if path.suffix != path.suffix.upper():
-            path = path.rename(path.with_suffix(path.suffix.upper()))
-        paths.append(path)
-        log(f"Saved {path.name} ({index} of {frames})")
-        if on_frame is not None:
-            on_frame(path)
+    # Each frame lands in a staging directory of its own, so files that others write into the series directory
+    # meanwhile, such as the FITS frames the server converts, are never taken for the download
+    staging = Path(tempfile.mkdtemp(prefix=".capture-", dir=directory))
+    try:
+        # One gphoto2 run per frame, so the series can stop between frames: interrupting gphoto2 during an
+        # exposure cancels it and leaves the camera unresponsive until it is reconnected
+        for index in range(1, frames + 1):
+            if stop is not None and stop.is_set():
+                log(f"Stopped after {len(paths)} of {frames} pictures")
+                break
+            try:
+                run_gphoto2(
+                    ["gphoto2", *_camera_settings(settings), "--capture-image-and-download",
+                     "--filename", f"{staging}/%Y%m%d-%H%M%S-{index:03d}.%C"],
+                    stdout=subprocess.DEVNULL,
+                    # Keep a Ctrl-C in the terminal from reaching gphoto2
+                    start_new_session=True,
+                )
+            except subprocess.CalledProcessError:
+                log(f"Stopped after {len(paths)} of {frames} pictures")
+                raise
+            new = [path for path in staging.iterdir() if path.is_file()]
+            if len(new) != 1 or new[0].stat().st_size == 0:
+                raise CaptureError(
+                    f"Expected one picture for frame {index}, found {len(new)}"
+                    f"{' empty' if len(new) == 1 else ''}; stopped after {len(paths)} of {frames} pictures"
+                )
+            # Pictures taken to RAM are named capt0000.cr2, but those from the card IMG_0001.CR2
+            name = new[0].name
+            path = new[0].rename(directory / (name[:-len(new[0].suffix)] + new[0].suffix.upper()))
+            paths.append(path)
+            log(f"Saved {path.name} ({index} of {frames})")
+            if on_frame is not None:
+                on_frame(path)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return paths
 
 

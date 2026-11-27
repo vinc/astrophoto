@@ -309,6 +309,7 @@ class App:
         self.stack_settings = {"deband": 1.0} if stack_settings is None else stack_settings
         # Captured frames wait here to be converted, measured and stacked, so the camera never waits for them
         self.processing = queue.Queue()
+        self.convert_lock = threading.Lock()
         # Stacking only uses the computer, so it runs beside camera jobs rather than instead of them
         self.stacking = Jobs(self.hub, event="stacking")
         self.series_lock = threading.Lock()
@@ -444,8 +445,12 @@ class App:
         steps = integer(body, "steps", None)
         if steps is None or steps == 0 or abs(steps) > 20:
             raise RequestError("steps must be a non-zero whole number from -20 to 20")
-        if self.jobs.running() == "autofocus":
+        running = self.jobs.running()
+        if running == "autofocus":
             raise RequestError("Autofocus is driving the lens; stop it first", 409)
+        # A capture releases the camera between frames, where a move would change the focus mid-series
+        if running not in (None, "focus"):
+            raise RequestError(f"The lens can only be moved while idle or focusing, not during {running}", 409)
         # Between two live-view frames, the camera lock lets this move in
         try:
             move_focus(steps, size)
@@ -581,8 +586,19 @@ class App:
                 self.hub.log(f"Could not process {path.name}: {error_text(exc)}")
                 self.update_row(row, status="failed", problem=error_text(exc))
 
+    def convert_raw(self, path):
+        """Convert a RAW file to FITS unless that is already done, one file at a time.
+
+        Frames arriving from a capture and a calibrated stack of RAW files may otherwise convert the same file at once.
+        """
+        with self.convert_lock:
+            fits_path = path.with_suffix(".fit")
+            if fits_path.exists():
+                return fits_path
+            return convert.convert(path, self.timezone)
+
     def process_frame(self, path, directory, kind, row):
-        fits_path = convert.convert(path, self.timezone)
+        fits_path = self.convert_raw(path)
         data, stars, hfr, problem = focus.measure_frame(fits_path, self.radius)
         values = {"stars": len(stars), "background": float(np.nanmedian(data)), "status": "converted"}
         temperature = fits.getheader(fits_path).get("CCD-TEMP")
@@ -625,9 +641,15 @@ class App:
         directory, live, _ = self.live
         prefix = f"{directory.name}-live"
         fits_out, png_out = directory / f"{prefix}-stack.fit", directory / f"{prefix}-stack.png"
-        live.write(fits_out, png_out)
-        self.live = (directory, live, len(live))
         self.saved = time.monotonic()
+        try:
+            live.write(fits_out, png_out)
+        # A full disk must not stop the frames that follow from being converted and stacked
+        except Exception as exc:
+            self.hub.log(f"Could not save the live stack of {directory.name}: {error_text(exc)}")
+            self.publish_stack(None)
+            return
+        self.live = (directory, live, len(live))
         self.publish_stack(fits_out.name)
 
     def publish_stack(self, saved):
@@ -711,9 +733,15 @@ class App:
             self.hub.log(f"Converting {len(raw)} RAW files to FITS")
         for index, path in enumerate(raw):
             progress("Converting", index, len(raw))
-            convert.convert(path, self.timezone)
+            try:
+                self.convert_raw(path)
+            except Exception as exc:
+                self.hub.log(f"Could not convert {path.name}, leaving it out: {error_text(exc)}")
         if raw:
             progress("Converting", len(raw), len(raw))
+        for name, kind in series:
+            if not self.series_frames(name, kind):
+                raise ValueError(f"No usable frames in {name}")
         dark_files = self.series_frames(darks, "dark") if darks not in ("none", "library") else []
         flat_files = self.series_frames(flats, "flat") if flats != "none" else []
         stack.stack_directory(directory, progress=progress, dark_files=dark_files, flat_files=flat_files, **options)
