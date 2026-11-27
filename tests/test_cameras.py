@@ -439,6 +439,40 @@ class ReviewFixTests(ConfiguredTests):
                 locate.solve_image(source, temporary, None, 3, 50)
         self.assertEqual(calls, ["arcsecperpix", "degwidth"])
 
+    def test_a_solver_error_with_the_metadata_scale_still_tries_the_configured_width(self):
+        from tests.test_solver import solve
+        calls = []
+
+        def solver(command, **kwargs):
+            calls.append(command[command.index("--scale-units") + 1])
+            # A hinted scale between the installed indexes makes the solver abort
+            if len(calls) == 1:
+                raise subprocess.CalledProcessError(255, command)
+            return solve(command, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "frame.fit"
+            header = fits.Header({"DATE-AVG": "2025-01-01T00:00:00", "RAWFILE": "IMG_1.CR2",
+                                  "INSTRUME": "Canon EOS 600D", "FOCALLEN": 300.0})
+            fits.writeto(source, np.zeros((20, 30)), header)
+            with patch.object(locate.subprocess, "run", side_effect=solver):
+                locate.solve_image(source, temporary, None, 3, 50)
+            self.assertEqual(calls, ["arcsecperpix", "degwidth"])
+            # When the fallback fails as well, the solver's error is reported
+            calls.clear()
+            with patch.object(locate.subprocess, "run", side_effect=subprocess.CalledProcessError(255, "solve-field")), \
+                    self.assertRaisesRegex(locate.PlateSolveError, "exit status 255"):
+                locate.solve_image(source, temporary, None, 3, 50)
+
+    def test_unusable_fits_binning_omits_the_arcseconds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "stack.fit"
+            for binning in ["2", 0, -2, True]:
+                header = fits.Header({"INSTRUME": "Canon EOS 600D", "FOCALLEN": 300.0, "NCOMBINE": 24, "XBINNING": binning})
+                fits.writeto(path, np.zeros((4, 4)), header, overwrite=True)
+                with self.subTest(binning=binning):
+                    self.assertEqual(focus.hfr_text(2.36, path, None), "HFR 2.36 px")
+
     def test_autofocus_fails_when_the_final_position_cannot_be_measured(self):
         class Clouded(FakeCamera):
             """Shows stars during the scan, then only empty sky."""

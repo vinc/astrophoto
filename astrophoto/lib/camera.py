@@ -41,6 +41,9 @@ def image_optics(path):
         model, focal = header.get("INSTRUME"), header.get("FOCALLEN")
         # Stacks are binned 2x2, including those made before they recorded it
         binning = header.get("XBINNING", 2 if "NCOMBINE" in header or "STACKMTH" in header else 1)
+        # Other software may write binning as text or nonsense, which leaves the scale unknown
+        if isinstance(binning, bool) or not isinstance(binning, (int, float)) or not binning > 0:
+            binning = None
     else:
         with path.open("rb") as file:
             tags = exifread.process_file(file, details=False)

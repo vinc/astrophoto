@@ -116,7 +116,8 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
     width = ["--scale-units", "degwidth", "--scale-low", str(scale_low), "--scale-high", str(scale_high)]
     hinted = scale_options(header, scale_low, scale_high, camera)
     # A wrong focal length or pixel size in the metadata would exclude the right scale, so retry with the width range
-    for scale in [hinted] if hinted == width else [hinted, width]:
+    attempts = [hinted] if hinted == width else [hinted, width]
+    for attempt, scale in enumerate(attempts, 1):
         marker.unlink(missing_ok=True)
         try:
             subprocess.run([
@@ -131,7 +132,10 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
         except FileNotFoundError:
             raise SystemExit("solve-field not found")
         except subprocess.CalledProcessError as exc:
-            raise PlateSolveError(f"Plate solving failed with exit status {exc.returncode}") from exc
+            # The solver can abort when a wrong hinted scale falls between the installed indexes
+            if attempt == len(attempts):
+                raise PlateSolveError(f"Plate solving failed with exit status {exc.returncode}") from exc
+            continue
         if marker.exists() and output.exists():
             break
     if not marker.exists() or not output.exists():

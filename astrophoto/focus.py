@@ -42,7 +42,7 @@ def hfr_text(hfr, path, camera):
     except (OSError, ValueError, KeyError):
         return text
     camera = CAMERAS.get(model, camera)
-    if camera is not None and focal is not None:
+    if camera is not None and focal is not None and binning is not None:
         text += f' ({hfr * pixel_scale(camera, focal, binning):.1f}")'
     return text
 
