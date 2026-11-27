@@ -10,12 +10,12 @@ BAYER_PATTERNS = ("RGGB", "BGGR", "GRBG", "GBRG")
 WHITE_BALANCE_KEYS = ("WBR", "WBG", "WBB")
 
 def raw_color_metadata(raw):
-    colours = raw.color_desc.decode("ascii")
-    pattern = "".join(colours[int(index)] for index in raw.raw_colors_visible[:2, :2].flat)
+    colors = raw.color_desc.decode("ascii")
+    pattern = "".join(colors[int(index)] for index in raw.raw_colors_visible[:2, :2].flat)
     if pattern not in BAYER_PATTERNS:
         return {}
     metadata = {"BAYERPAT": pattern}
-    gains = np.array([raw.daylight_whitebalance[colours.index(colour)] for colour in "RGB"], dtype=float)
+    gains = np.array([raw.daylight_whitebalance[colors.index(color)] for color in "RGB"], dtype=float)
     if np.isfinite(gains).all() and np.all(gains > 0):
         metadata.update(zip(WHITE_BALANCE_KEYS, gains / gains[1]))
     return metadata
@@ -23,7 +23,7 @@ def raw_color_metadata(raw):
 def color_metadata(path, header, pattern=None):
     metadata = {key: header[key] for key in ("BAYERPAT", *WHITE_BALANCE_KEYS) if key in header}
     if "BAYERPAT" not in metadata or not all(key in metadata for key in WHITE_BALANCE_KEYS):
-        # FITS converted before colour metadata was saved can read it from the CR2
+        # FITS converted before color metadata was saved can read it from the CR2
         original = Path(path).with_name(Path(header.get("RAWFILE", "missing.CR2")).name)
         if original.is_file() and original.suffix.lower() == ".cr2":
             with rawpy.imread(str(original)) as raw:
@@ -49,9 +49,9 @@ def bin_rgb(data, pattern):
     h, w = data.shape
     data = data[:h // 2 * 2, :w // 2 * 2]
     channels = []
-    for colour in "RGB":
+    for color in "RGB":
         planes = [data[index // 2::2, index % 2::2]
-                  for index, value in enumerate(pattern) if value == colour]
+                  for index, value in enumerate(pattern) if value == color]
         channels.append(np.mean(planes, axis=0))
     return np.stack(channels, axis=-1).astype(np.float32)
 
@@ -124,7 +124,7 @@ def render_rgb(rgb, header, saturation=None):
     if noise > 0:
         light = luminance(balanced)[..., None]
         chroma = balanced - light
-        # Only valid sky-level pixels feed the colour blur, so stars and gaps don't tint the sky
+        # Only valid sky-level pixels feed the color blur, so stars and gaps don't tint the sky
         faint = np.where(valid[..., None], np.clip(1 - light / (10 * noise), 0, 1), 0)
         blurred = gaussian_filter(chroma * faint, sigma=(1.5, 1.5, 0))
         weight = gaussian_filter(faint, sigma=(1.5, 1.5, 0))
@@ -138,7 +138,7 @@ def render_rgb(rgb, header, saturation=None):
     stretched = np.arcsinh(softness * light) / np.arcsinh(softness)
     factor = np.divide(stretched, light, out=np.zeros_like(light), where=light > 0)
     result = scaled * factor[..., None]
-    # Per-channel shoulder: overexposed channels roll off towards white instead of clipping hue
+    # Per-channel shoulder: overexposed channels roll off toward white instead of clipping hue
     knee = float(header.get("RGBKNEE", 0.8))
     if not np.isfinite(knee) or not 0 <= knee < 1:
         raise ValueError("Invalid RGB highlight knee")
@@ -148,7 +148,7 @@ def render_rgb(rgb, header, saturation=None):
         if saturation.shape != rgb.shape[:2] or not np.isfinite(saturation).all() or np.any((saturation < 0) | (saturation > 1)):
             raise ValueError("Invalid RGB saturation fraction")
         saturation = feather_saturation(saturation, header.get("SATFEATH", 1.0))
-        # Clipped photosites lost their colour, so render them grey
+        # Clipped photosites lost their color, so render them gray
         neutral = result.max(axis=-1, keepdims=True)
         result += saturation[..., None] * (neutral - result)
     result[~valid] = 0

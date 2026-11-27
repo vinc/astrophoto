@@ -95,7 +95,7 @@ def inspect_image(path, query, observer, coordinates=None, correction_time=None,
     )
     report = [
         f"{target_name}: {time.utc.iso.split('.')[0]} UTC",
-        f"  Separation from centre: {angle_text(center.separation(target).deg)}",
+        f"  Separation from center: {angle_text(center.separation(target).deg)}",
         f"  {directions}",
         f"  Target is {'inside' if inside else 'outside'} the frame",
     ]

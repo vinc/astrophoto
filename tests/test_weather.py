@@ -51,7 +51,7 @@ def run(arguments, zone="UTC", **overrides):
     return output.getvalue(), get.call_args.kwargs["params"]
 
 class RequestTest(unittest.TestCase):
-    def test_parameters_use_metres_utc_hours_and_model(self):
+    def test_parameters_use_meters_utc_hours_and_model(self):
         _, params = run(["--time", "2026-12-21T21:49", "--model", "icon_seamless"])
         self.assertEqual(params["elevation"], 100)
         self.assertEqual(params["start_hour"], "2026-12-21T21:00")

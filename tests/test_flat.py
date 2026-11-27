@@ -30,9 +30,9 @@ def frame_header():
 
 def write_flats(directory, response):
     paths = []
-    colours = np.tile([[400, 800], [600, 300]], (8, 10))
+    colors = np.tile([[400, 800], [600, 300]], (8, 10))
     for i, brightness in enumerate([0.7, 1.0, 1.3]):
-        data = 128 + brightness * colours * response
+        data = 128 + brightness * colors * response
         if i == 0:
             data[0, 0] += 1000
         path = directory / f"flat-{i}.fit"

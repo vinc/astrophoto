@@ -74,7 +74,7 @@ def black_level(path, header):
     return level
 
 def normalize_flat(data):
-    # Keep the flat illumination's colour out of the four Bayer pixel positions
+    # Keep the flat illumination's color out of the four Bayer pixel positions
     for y in range(2):
         for x in range(2):
             plane = data[y::2, x::2]
@@ -225,7 +225,7 @@ def stack_header(reference, files):
     header["NCOMBINE"] = (len(files), "Number of frames stacked")
     # Plate solving reads the image scale from the binned pixel size
     if "XPIXSZ" in header:
-        header["XPIXSZ"] = (2 * float(header["XPIXSZ"]), "Pixel width in micrometres, including binning")
+        header["XPIXSZ"] = (2 * float(header["XPIXSZ"]), "Pixel width in micrometers, including binning")
     header["XBINNING"] = (2, "Pixels combined horizontally")
 
     times = []
@@ -398,11 +398,11 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         print(f"Combined {len(flat_files)} flat frames")
     saved_alignment = None if realign else alignment.load(directory)
     reused = 0
-    colour = color_metadata(middle, fits.getheader(middle), bayer_pattern) if rgb else None
-    colour_options = {"rgb": True, "bayer_pattern": bayer_pattern, "return_saturation": True} if rgb else {}
+    color = color_metadata(middle, fits.getheader(middle), bayer_pattern) if rgb else None
+    color_options = {"rgb": True, "bayer_pattern": bayer_pattern, "return_saturation": True} if rgb else {}
     progress("Aligning lights", 0, len(files))
     reference = load(middle, dark, dark_metadata, deband=deband,
-                     flat=flat, flat_metadata=flat_metadata, **colour_options)
+                     flat=flat, flat_metadata=flat_metadata, **color_options)
     if rgb:
         reference, reference_saturation = reference
         saturation = [reference_saturation]
@@ -421,7 +421,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         done += 1
 
         image = load(path, dark, dark_metadata, deband=deband,
-                     flat=flat, flat_metadata=flat_metadata, **colour_options)
+                     flat=flat, flat_metadata=flat_metadata, **color_options)
         if rgb:
             image, image_saturation = image
 
@@ -524,8 +524,8 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
 
     primary = luminance(stack) if rgb else stack
     if rgb:
-        header["RGB"] = (True, "Linear colour data in RGB extension")
-        header["RAWPATT"] = (colour["BAYERPAT"], "Reference RAW Bayer layout")
+        header["RGB"] = (True, "Linear color data in RGB extension")
+        header["RAWPATT"] = (color["BAYERPAT"], "Reference RAW Bayer layout")
     lo, hi = stack_display_limits(primary)
     header["DISPLO"] = (lo, "Black point for the rendered PNG")
     header["DISPHI"] = (hi, "White point for the rendered PNG")
@@ -540,17 +540,17 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         fits.ImageHDU(np.moveaxis(accepted, -1, 0) if rgb else accepted, accepted_header, name="ACCEPTED"),
     ]
     if rgb:
-        colour_header = rgb_display_header(stack, colour)
-        colour_header["BUNIT"] = "ADU"
-        colour_header["SATEXT"] = ("SATURATED", "Accepted sensor clipping fractions")
-        hdus.append(fits.ImageHDU(np.moveaxis(stack, -1, 0), colour_header, name="RGB"))
+        color_header = rgb_display_header(stack, color)
+        color_header["BUNIT"] = "ADU"
+        color_header["SATEXT"] = ("SATURATED", "Accepted sensor clipping fractions")
+        hdus.append(fits.ImageHDU(np.moveaxis(stack, -1, 0), color_header, name="RGB"))
         saturation_header = fits.Header({"BUNIT": "fraction", "SATTHR": 0.98})
         saturation_header.add_comment("Maximum accepted clipping fraction across R, G and B")
         hdus.append(fits.ImageHDU(saturation, saturation_header, name="SATURATED"))
     fits.HDUList(hdus).writeto(fits_path, overwrite=True)
 
     if rgb:
-        plt.imsave(png_path, render_rgb(stack, colour_header, saturation))
+        plt.imsave(png_path, render_rgb(stack, color_header, saturation))
     else:
         plt.imsave(png_path, stack, cmap="gray", vmin=lo, vmax=hi)
     plt.imsave(coverage_path, coverage, cmap="gray", vmin=0, vmax=len(aligned))
@@ -592,7 +592,7 @@ def main():
     parser.add_argument("--deband", type=float, metavar="AMOUNT",
                         help="Horizontal row correction strength, 0 to 1, where 0 disables it (default: 1, or deband in [stack])")
     parser.add_argument("--rgb", action="store_true",
-                        help="Keep RGB colour at the usual 2x2-binned size; save with an -rgb prefix")
+                        help="Keep RGB color at the usual 2x2-binned size; save with an -rgb prefix")
     parser.add_argument("--bayer-pattern", choices=BAYER_PATTERNS,
                         help="Bayer layout override for older FITS files; requires --rgb")
     parser.add_argument("--realign", action="store_true",

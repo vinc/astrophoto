@@ -22,7 +22,7 @@ def exif_float(tags, key):
 
 
 def exif_pixel_size(tags):
-    """Return the sensor pixel width in micrometres from the EXIF focal plane resolution, or None."""
+    """Return the sensor pixel width in micrometers from the EXIF focal plane resolution, or None."""
     resolution = exif_float(tags, "EXIF FocalPlaneXResolution")
     unit = tags.get("EXIF FocalPlaneResolutionUnit")
     if not resolution or unit is None:
@@ -68,7 +68,7 @@ def convert(path, tz, output=None):
         data = raw.raw_image_visible.copy()
         black_levels = list(raw.black_level_per_channel)
         white_level = int(raw.white_level)
-        colour = raw_color_metadata(raw)
+        color = raw_color_metadata(raw)
 
     tags = read_tags(path)
 
@@ -118,7 +118,7 @@ def convert(path, tz, output=None):
 
     pixel = exif_pixel_size(tags)
     if pixel is not None:
-        hdr["XPIXSZ"] = (round(pixel, 3), "Pixel width in micrometres, including binning")
+        hdr["XPIXSZ"] = (round(pixel, 3), "Pixel width in micrometers, including binning")
         hdr["XBINNING"] = (1, "Pixels combined horizontally")
 
     temperature = camera_temperature(tags)
@@ -135,7 +135,7 @@ def convert(path, tz, output=None):
         "Mean raw sensor black level",
     )
     hdr["WHITELEV"] = (white_level, "Raw sensor white level")
-    for key, value in colour.items():
+    for key, value in color.items():
         hdr[key] = value
 
     output = Path(output) if output is not None else path.with_suffix(".fit")

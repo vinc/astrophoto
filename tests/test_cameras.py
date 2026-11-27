@@ -272,7 +272,7 @@ class AutofocusTests(ConfiguredTests):
                     focus.main()
                 self.assertEqual(fake.position, best * step)
                 self.assertIn(f"Focused at step {best:+d}", output.getvalue())
-                # The lens arrives at the minimum moving towards infinity, as it did for every measurement
+                # The lens arrives at the minimum moving toward infinity, as it did for every measurement
                 self.assertEqual(fake.direction, 1)
                 drives = {option for command in fake.commands for option in command if option.startswith("manualfocusdrive=")}
                 self.assertEqual(drives, {f"manualfocusdrive=Near {step}", f"manualfocusdrive=Far {step}"})
@@ -505,7 +505,7 @@ class ReviewFixTests(ConfiguredTests):
             for extra in [{"NCOMBINE": 24}, {"NCOMBINE": 24, "XBINNING": 2}]:
                 fits.writeto(path, np.zeros((4, 4)), fits.Header({"INSTRUME": "Canon EOS 600D", "FOCALLEN": 300.0, **extra}),
                              overwrite=True)
-                # 2.36 binned pixels of 8.6 micrometres at 300 mm
+                # 2.36 binned pixels of 8.6 micrometers at 300 mm
                 self.assertEqual(focus.hfr_text(2.36, path, None), 'HFR 2.36 px (14.0")')
 
     def test_normalized_fits_keeps_its_stars(self):

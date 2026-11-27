@@ -35,7 +35,7 @@ def run_gphoto2(command, **kwargs):
 FOCUS_STEPS = (1, 2, 3)
 
 def drive_options(steps, size):
-    """Return gphoto2 options that move the focus by a signed number of steps, positive towards infinity."""
+    """Return gphoto2 options that move the focus by a signed number of steps, positive toward infinity."""
     direction = "Far" if steps > 0 else "Near"
     return [option for _ in range(abs(steps)) for option in ("--set-config", f"manualfocusdrive={direction} {size}")]
 

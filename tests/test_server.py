@@ -223,7 +223,7 @@ class ServerTests(ServerCase):
 
 class CenterServerTests(ServerCase):
     def solved_frame(self, directory):
-        """Write a plate-solved frame centred on RA 10, Dec 20, one hundredth of a degree per pixel."""
+        """Write a plate-solved frame centered on RA 10, Dec 20, one hundredth of a degree per pixel."""
         path = Path(directory) / "capture.new"
         header = fits.Header({
             "DATE-AVG": "2026-11-27T21:00:00", "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
@@ -254,7 +254,7 @@ class CenterServerTests(ServerCase):
         event = self.latest("center")
         self.assertRegex(event["title"], "^Pan (left|right) .* and (raise|lower) ")
         self.assertTrue(event["inside"])
-        self.assertTrue(any("Separation from centre" in line for line in event["report"]))
+        self.assertTrue(any("Separation from center" in line for line in event["report"]))
         _, kind, image = self.get(event["image"])
         self.assertTrue(image.startswith(b"\x89PNG"))
         self.assertIsNone(self.app.jobs.running())
@@ -528,7 +528,7 @@ class CalibratedStackTests(ServerCase):
                 self.assertEqual(status, 400)
                 self.assertIn("deband", result["error"])
 
-    def test_colour_stacks_are_saved_with_an_rgb_prefix(self):
+    def test_color_stacks_are_saved_with_an_rgb_prefix(self):
         self.stack(rgb=True)
         event = self.latest("calibrated")
         self.assertEqual((event["file"], event["rgb"]), ("20261127-2100-light-rgb-stack.fit", True))

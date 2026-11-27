@@ -25,10 +25,10 @@ class AutofocusError(RuntimeError):
     pass
 
 DEFAULTS = {"shutterspeed": "1/4", "iso": None}
-# The aperture radius was tuned on the 6.4 micrometre pixels of the EOS 20D
+# The aperture radius was tuned on the 6.4 micrometer pixels of the EOS 20D
 RADIUS, RADIUS_PIXEL_SIZE = 12, 6.4
 
-# Steps driven past a position and back, so the lens always arrives moving towards infinity
+# Steps driven past a position and back, so the lens always arrives moving toward infinity
 BACKLASH = 3
 
 def default_radius(camera):
@@ -157,23 +157,23 @@ def fit_minimum(positions, hfrs):
 
     # Defocused stars grow along a hyperbola whose asymptotes form the V
     def residuals(parameters):
-        best, slope, centre = parameters
-        return np.sqrt(best**2 + (slope * (positions - centre)) ** 2) - hfrs
+        best, slope, center = parameters
+        return np.sqrt(best**2 + (slope * (positions - center)) ** 2) - hfrs
 
     # A heavy-tailed loss keeps a stray reading, such as noise taken for a star, from dragging the fit
     scale = 0.1 * float(np.median(hfrs))
     span = float(np.ptp(positions)) or 1.0
     fits = [
-        least_squares(residuals, [hfrs.min(), np.ptp(hfrs) / span, centre], loss="cauchy", f_scale=scale)
-        for centre in positions
+        least_squares(residuals, [hfrs.min(), np.ptp(hfrs) / span, center], loss="cauchy", f_scale=scale)
+        for center in positions
     ]
-    centre = float(min(fits, key=lambda fit: fit.cost).x[2])
+    center = float(min(fits, key=lambda fit: fit.cost).x[2])
     # The scan must have passed through the minimum, with a reading on each side of it
-    if not positions.min() < centre < positions.max():
+    if not positions.min() < center < positions.max():
         return None
-    if not (positions < centre).any() or not (positions > centre).any():
+    if not (positions < center).any() or not (positions > center).any():
         return None
-    return centre
+    return center
 
 def show_focus(figure, data, stars, title, interactive=True, history=None, xlabel="Frame"):
     figure.clear()
@@ -208,7 +208,7 @@ def show_focus(figure, data, stars, title, interactive=True, history=None, xlabe
     detail.set_facecolor("0.15")
     detail.imshow(patch, cmap="gray", origin="lower", vmin=low, vmax=high, interpolation="nearest")
     field.set_title("Measured stars")
-    detail.set_title("Star detail" if stars else "Centre detail")
+    detail.set_title("Star detail" if stars else "Center detail")
     figure.suptitle(title)
     figure.tight_layout()
     figure.canvas.draw_idle()
@@ -233,7 +233,7 @@ def _autofocus(span, step, zoom, radius, iso, samples, show, log):
     else:
         if model:
             log(f"Moved autofocus off the shutter button of the {model} so captures keep this focus")
-    # Every measured position is reached moving towards infinity, so the lens backlash is always taken up
+    # Every measured position is reached moving toward infinity, so the lens backlash is always taken up
     move_focus(-(span + BACKLASH), step)
     move_focus(BACKLASH, step)
     positions, hfrs = [], []

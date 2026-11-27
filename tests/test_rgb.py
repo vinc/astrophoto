@@ -24,8 +24,8 @@ from astrophoto import stack
 def mosaic(rgb, pattern="RGGB"):
     height, width = rgb.shape[:2]
     raw = np.empty((2 * height, 2 * width), dtype=np.float32)
-    for index, colour in enumerate(pattern):
-        raw[index // 2::2, index % 2::2] = rgb[..., "RGB".index(colour)]
+    for index, channel in enumerate(pattern):
+        raw[index // 2::2, index % 2::2] = rgb[..., "RGB".index(channel)]
     return raw
 
 def header():
@@ -189,7 +189,7 @@ class RGBStackTests(unittest.TestCase):
                 np.testing.assert_allclose(actual, expected, atol=1 / 255)
                 np.testing.assert_array_equal(color.read_saturation(output), saturation)
 
-    def test_real_registration_coloured_stars_coverage_and_linear_fits(self):
+    def test_real_registration_colored_stars_coverage_and_linear_fits(self):
         truth = star_field()
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -303,7 +303,7 @@ class RGBPreviewTests(unittest.TestCase):
         np.testing.assert_array_equal(saturation, original)
         np.testing.assert_array_equal(color.feather_saturation(np.zeros((4, 6))), 0)
 
-    def test_saturated_highlights_are_neutral_while_unsaturated_colours_and_linear_data_remain(self):
+    def test_saturated_highlights_are_neutral_while_unsaturated_colors_and_linear_data_remain(self):
         rgb = np.zeros((20, 30, 3), dtype=np.float32)
         rgb[8, 10] = [3000, 3000, 3000]
         rgb[8, 20] = [1500, 400, 200]
@@ -349,7 +349,7 @@ class RGBPreviewTests(unittest.TestCase):
         spread = preview.std(axis=0)
         self.assertLess(spread[0] / spread[1], 1.6)
 
-    def test_colour_smoothing_keeps_star_colours_without_leaking_them_into_the_sky(self):
+    def test_color_smoothing_keeps_star_colors_without_leaking_them_into_the_sky(self):
         rng = np.random.default_rng(8)
         sky = rng.normal([60, 90, 50], [4, 2.8, 4], (100, 100, 3)).astype(np.float32)
         rgb = sky.copy()
@@ -373,22 +373,22 @@ class RGBPreviewTests(unittest.TestCase):
         difference = color.render_rgb(gapped, display)[:, 40:, :3] - color.render_rgb(sky, display)[:, 40:, :3]
         self.assertLess(float(np.abs(difference.mean(axis=0)).max()), 0.05)
 
-    def test_faint_coloured_stars_keep_their_colour(self):
+    def test_faint_colored_stars_keep_their_color(self):
         rng = np.random.default_rng(10)
         gains = np.array([2.256, 1, 1.269])
         sky = lambda: rng.normal([60, 90, 50], [4, 2.8, 4], (60, 60, 3)).astype(np.float32)
         display = color.rgb_display_header(sky(), dict(zip(color.WHITE_BALANCE_KEYS, gains)))
-        # Keep stars below the highlight shoulder so only the colour blur is measured
+        # Keep stars below the highlight shoulder so only the color blur is measured
         display["RGBHIGH"] = 400 * display["RGBNOISE"]
         y, x = np.mgrid[-6:7, -6:7]
         psf = np.exp(-(x ** 2 + y ** 2) / 2)[..., None]
-        colour = np.array([1, 0.6, 0.3]) / gains
+        tint = np.array([1, 0.6, 0.3]) / gains
         for snr in (10, 20, 50):
             with self.subTest(snr=snr):
                 ratios = []
                 for _ in range(40):
                     rgb = sky()
-                    rgb[24:37, 24:37] += psf * colour * snr * display["RGBNOISE"] / color.luminance(colour * gains)
+                    rgb[24:37, 24:37] += psf * tint * snr * display["RGBNOISE"] / color.luminance(tint * gains)
                     preview = color.render_rgb(rgb, display)[..., :3]
                     flux = (preview[27:34, 27:34] - np.median(preview[:15, :15].reshape(-1, 3), axis=0)).sum(axis=(0, 1))
                     ratios.append(flux[0] / flux[1])
@@ -401,7 +401,7 @@ class RGBPreviewTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sky noise"):
             color.render_rgb(rgb, display)
 
-    def test_shared_stretch_preserves_faint_colours_rolls_off_highlights_and_masks_missing_pixels(self):
+    def test_shared_stretch_preserves_faint_colors_rolls_off_highlights_and_masks_missing_pixels(self):
         rgb = np.zeros((20, 30, 3), dtype=np.float32)
         rgb[10, 10] = [50, 100, 200]
         rgb[10, 11] = [10000, 20000, 40000]
@@ -416,7 +416,7 @@ class RGBPreviewTests(unittest.TestCase):
         self.assertAlmostEqual(result[10, 10, 2] / result[10, 10, 1], 2)
         np.testing.assert_allclose(result[10, 11, :3], 1, atol=0.001)
 
-    def test_locate_and_crop_reuse_the_full_stacks_colour_rendering(self):
+    def test_locate_and_crop_reuse_the_full_stacks_color_rendering(self):
         rgb = star_field()
         rgb[48, 64] = 3967
         saturation = np.zeros(rgb.shape[:2], dtype=np.float32)

@@ -16,7 +16,7 @@ from astrophoto.lib.gphoto import custom_function, drive_options, get_config, ru
 @dataclass(frozen=True)
 class Camera:
     name: str
-    pixel_size: float  # micrometres
+    pixel_size: float  # micrometers
     live_view: bool
     # Custom function that sets what the shutter button does, and the values that move autofocus off it
     back_button_focus: tuple | None = None

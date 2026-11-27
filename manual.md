@@ -174,7 +174,7 @@ astrophoto center (--query NAME | --ra DEG --dec DEG) [options] [FILE]
 ```
 
 Captures an image, plate-solves it, and prints how far to pan and tilt the
-camera to bring the target to the centre of the frame. It also warns when the
+camera to bring the target to the center of the frame. It also warns when the
 target is too large for the frame.
 
 `FILE`
@@ -287,7 +287,7 @@ warning.
   or `deband` in `[stack]`).
 
 `--rgb`
-: Keep colour; output files get an `-rgb` prefix.
+: Keep color; output files get an `-rgb` prefix.
 
 `--bayer-pattern {RGGB,BGGR,GRBG,GBRG}`
 : Bayer layout for older FITS files, with `--rgb`.
@@ -321,7 +321,7 @@ Configuration: `[solve]`, `timezone`.
 astrophoto crop --query NAME [--radius PIXELS] FILE ...
 ```
 
-Plate-solves each image and saves a crop around the Solar System body, labelled
+Plate-solves each image and saves a crop around the Solar System body, labeled
 with its name and the time, as `<image>-crop-<name>.png`.
 
 `--query NAME`
@@ -399,7 +399,7 @@ series.
 
 Below it, Stack makes the full stack of a light series, like `stack`, with
 the darks of a dark series or from the dark library, the flats of a flat
-series, debanding, and colour if chosen. It runs while the camera keeps
+series, debanding, and color if chosen. It runs while the camera keeps
 working.
 
 `--host ADDRESS`

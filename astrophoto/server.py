@@ -250,7 +250,7 @@ def render_pointing(path, query, result):
 
 
 def shrink(data):
-    """Bin an image, grey or colour, down to at most PREVIEW_WIDTH pixels wide."""
+    """Bin an image, gray or color, down to at most PREVIEW_WIDTH pixels wide."""
     factor = -(-data.shape[1] // PREVIEW_WIDTH)
     if factor == 1:
         return data
@@ -263,14 +263,14 @@ def shrink(data):
 
 
 def preview_png(data, low, high):
-    """Return an image as a grey PNG between two levels, small enough for a browser."""
+    """Return an image as a gray PNG between two levels, small enough for a browser."""
     output = io.BytesIO()
     mpimage.imsave(output, np.nan_to_num(shrink(data), nan=low), cmap="gray", vmin=low, vmax=high, format="png")
     return output.getvalue()
 
 
 def preview_file(path):
-    """Return a saved PNG, grey or colour, small enough for a browser."""
+    """Return a saved PNG, gray or color, small enough for a browser."""
     output = io.BytesIO()
     mpimage.imsave(output, np.clip(shrink(mpimage.imread(path)), 0, 1), format="png")
     return output.getvalue()

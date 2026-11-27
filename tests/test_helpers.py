@@ -418,7 +418,7 @@ class CenterTests(unittest.TestCase):
         inspect.assert_called_once()
         self.assertIn("retrying with the next capture", output.getvalue())
 
-    def test_catalog_objects_are_centred_at_fixed_coordinates(self):
+    def test_catalog_objects_are_centered_at_fixed_coordinates(self):
         m31 = SkyObject("M31 (Andromeda Galaxy)", "M31", 10.68, 41.27, 3.17)
         argv = ["center.py", "saved.fit", "--query", "m-31", "--latitude", "0", "--longitude", "0", "--elevation", "0"]
         with patch.object(sys, "argv", argv), \
