@@ -15,9 +15,24 @@ from skimage.transform import warp
 
 from astrophoto.lib import alignment, darks
 from astrophoto.lib.camera import stack_display_limits
+from astrophoto.lib.config import command_settings
 from astrophoto.lib.color import BAYER_PATTERNS, bin_rgb, color_metadata, luminance, rgb_display_header, render_rgb, saturation_flags
 
 DEBAND_WINDOW = 65
+# Settings of the [stack] table in config.toml
+DEFAULTS = {"deband": "0"}
+
+
+def stack_settings(parser):
+    """Return the [stack] table's settings, checked, with deband as a number."""
+    settings = command_settings(parser, "stack", DEFAULTS)
+    try:
+        deband = float(settings["deband"])
+    except ValueError:
+        deband = float("nan")
+    if not np.isfinite(deband) or not 0 <= deband <= 1:
+        parser.error("deband in [stack] must be between 0 and 1")
+    return {"deband": deband}
 
 def read_frame(path):
     data, header = fits.getdata(path, header=True)
@@ -550,8 +565,8 @@ def main():
                                   "and exposure time")
     parser.add_argument("--flat", nargs="+", type=Path,
                         help="Unstacked flat FITS files; normalize and divide before binning")
-    parser.add_argument("--deband", type=float, default=0, metavar="AMOUNT",
-                        help="Horizontal row correction strength, 0 to 1 (default: 0, disabled)")
+    parser.add_argument("--deband", type=float, metavar="AMOUNT",
+                        help="Horizontal row correction strength, 0 to 1 (default: 0, disabled, or deband in [stack])")
     parser.add_argument("--rgb", action="store_true",
                         help="Keep RGB colour at the usual 2x2-binned size; save with an -rgb prefix")
     parser.add_argument("--bayer-pattern", choices=BAYER_PATTERNS,
@@ -559,6 +574,8 @@ def main():
     parser.add_argument("--realign", action="store_true",
                         help="Match the stars of every frame, ignoring the alignment saved by the server's live stack")
     args = parser.parse_args()
+    if args.deband is None:
+        args.deband = stack_settings(parser)["deband"]
     if not np.isfinite(args.sigma) or args.sigma <= 0:
         parser.error("--sigma must be finite and positive")
     if args.bayer_pattern is not None and not args.rgb:

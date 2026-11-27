@@ -215,6 +215,7 @@
         <label>Lights <select id="stack-lights"></select></label>
         <label>Darks <select id="stack-darks"></select></label>
         <label>Flats <select id="stack-flats"></select></label>
+        <label>Deband <input id="stack-deband" type="number" min="0" max="1" step="0.1"></label>
         <label class="check"><input type="checkbox" id="stack-rgb"> Colour</label>
         <button class="action primary" id="stack-start">Stack</button>
       </fieldset>
@@ -398,11 +399,13 @@ function updateStackButton() {
 }
 
 function setupStack() {
+  $("stack-deband").value = config.stack.deband;
   $("stack-start").onclick = () => post("/api/stack/start", {
     lights: $("stack-lights").value,
     darks: $("stack-darks").value,
     flats: $("stack-flats").value,
     rgb: $("stack-rgb").checked,
+    deband: Number($("stack-deband").value || 0),
   });
   loadDirectories();
 }
@@ -522,6 +525,7 @@ const handlers = {
     if (event.darks === "library") parts.push("the library's dark");
     else if (event.darks !== "none") parts.push(`darks from ${event.darks}`);
     if (event.flats !== "none") parts.push(`flats from ${event.flats}`);
+    if (event.deband) parts.push(`deband ${event.deband}`);
     $("calibrated").hidden = false;
     $("calibrated-title").textContent = `${event.directory}${parts.length ? ` with ${parts.join(" and ")}` : ""}, saved as ${event.file}`;
     showImage($("calibrated-view"), event.image);

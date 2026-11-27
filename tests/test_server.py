@@ -495,6 +495,22 @@ class CalibratedStackTests(ServerCase):
         self.stack(darks="library")
         self.assertEqual(self.latest("calibrated")["darks"], "library")
 
+    def test_deband_defaults_to_the_stack_table_and_can_be_changed(self):
+        _, _, body = self.get("/api/config")
+        self.assertEqual(json.loads(body)["stack"], {"deband": 0.0})
+        self.app.stack_settings = {"deband": 0.5}
+        self.stack()
+        header = fits.getheader(self.root / "20261127-2100-light" / "20261127-2100-light-stack.fit")
+        self.assertEqual(header["DEBAND"], 0.5)
+        self.stack(deband=0.8)
+        self.assertEqual(self.latest("calibrated")["deband"], 0.8)
+        self.assertIn("with deband 0.8", self.app.hub.logs[-2]["text"])
+        for value in (1.5, -0.1, "high"):
+            with self.subTest(deband=value):
+                status, result = self.post("/api/stack/start", {"lights": "20261127-2100-light", "deband": value})
+                self.assertEqual(status, 400)
+                self.assertIn("deband", result["error"])
+
     def test_colour_stacks_are_saved_with_an_rgb_prefix(self):
         self.stack(rgb=True)
         event = self.latest("calibrated")

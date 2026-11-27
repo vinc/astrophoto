@@ -96,6 +96,31 @@ class DebandingTests(unittest.TestCase):
             stack.main()
         self.assertEqual(run.call_args.kwargs["deband"], 0.5)
 
+    def test_deband_defaults_to_the_stack_table(self):
+        import os
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "astrophoto" / "config.toml"
+            config.parent.mkdir()
+            for text, argv, expected in [
+                ("", [], 0),
+                ("[stack]\ndeband = 0.6\n", [], 0.6),
+                ("[stack]\ndeband = 0.6\n", ["--deband", "0"], 0),
+            ]:
+                config.write_text(text)
+                with self.subTest(text=text, argv=argv), patch.dict(os.environ, {"XDG_CONFIG_HOME": temporary}), \
+                        patch.object(sys, "argv", ["stack.py", ".", *argv]), \
+                        patch.object(stack, "stack_directory") as run:
+                    stack.main()
+                self.assertEqual(run.call_args.kwargs["deband"], expected)
+            for text in ("[stack]\ndeband = 2\n", "[stack]\ndeband = \"lots\"\n", "[stack]\nsigma = 2\n"):
+                config.write_text(text)
+                with self.subTest(text=text), patch.dict(os.environ, {"XDG_CONFIG_HOME": temporary}), \
+                        patch.object(sys, "argv", ["stack.py", "."]), patch.object(stack, "stack_directory") as run, \
+                        contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                    stack.main()
+                self.assertEqual(raised.exception.code, 2)
+                run.assert_not_called()
+
 class DarkTests(unittest.TestCase):
     def test_master_dark_preserves_detector_pattern_and_rejects_a_transient(self):
         y, x = np.mgrid[:8, :10]

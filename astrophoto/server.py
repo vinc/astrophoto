@@ -245,7 +245,8 @@ def preview_file(path):
 
 class App:
     def __init__(self, focus_settings, camera=None, radius=None, status_interval=STATUS_INTERVAL,
-                 center_settings=None, observer=None, timezone=None, scale=None, capture_settings=None, root=None):
+                 center_settings=None, observer=None, timezone=None, scale=None, capture_settings=None, root=None,
+                 stack_settings=None):
         self.hub = Hub()
         self.images = Images()
         self.jobs = Jobs(self.hub)
@@ -265,6 +266,7 @@ class App:
             for kind in KINDS
         }
         self.root = Path.cwd() if root is None else Path(root)
+        self.stack_settings = {"deband": 0.0} if stack_settings is None else stack_settings
         # Captured frames wait here to be converted, measured and stacked, so the camera never waits for them
         self.processing = queue.Queue()
         # Stacking only uses the computer, so it runs beside camera jobs rather than instead of them
@@ -291,6 +293,7 @@ class App:
                 "observer": self.observer is not None,
             },
             "capture": self.capture_settings,
+            "stack": self.stack_settings,
             "kinds": KINDS,
             "targets": list(TARGETS),
             "zooms": ZOOMS,
@@ -624,7 +627,11 @@ class App:
         dark_files = [] if darks in ("none", "library") else self.series_frames(darks, "dark")
         flat_files = [] if flats == "none" else self.series_frames(flats, "flat")
         rgb = bool(body.get("rgb", False))
-        options = {"dark_files": dark_files, "flat_files": flat_files, "dark_library": darks == "library", "rgb": rgb}
+        deband = number(body, "deband", self.stack_settings["deband"], minimum=0)
+        if deband > 1:
+            raise RequestError("deband must be from 0 to 1")
+        options = {"dark_files": dark_files, "flat_files": flat_files, "dark_library": darks == "library", "rgb": rgb,
+                   "deband": deband}
         self.stacking.start("stacking", lambda stop: self.calibrated_stack(lights, darks, flats, options))
         return {"ok": True}
 
@@ -633,6 +640,7 @@ class App:
         calibration = [text for text in (
             "the library's dark" if darks == "library" else None if darks == "none" else f"darks from {darks}",
             None if flats == "none" else f"flats from {flats}",
+            f"deband {options['deband']:g}" if options["deband"] else None,
         ) if text]
         self.hub.log(f"Stacking {lights}" + (f" with {' and '.join(calibration)}" if calibration else ""))
         stack.stack_directory(directory, **options)
@@ -641,7 +649,7 @@ class App:
         image = self.images.put("calibrated", preview_file(png))
         self.hub.log(f"Saved {prefix}-stack.fit and .png in {lights}")
         self.hub.publish("calibrated", directory=lights, file=f"{prefix}-stack.fit", image=image,
-                         darks=darks, flats=flats, rgb=options["rgb"])
+                         darks=darks, flats=flats, rgb=options["rgb"], deband=options["deband"])
 
     def stop(self, body):
         name = self.jobs.stop()
@@ -848,7 +856,8 @@ def main():
     capture_defaults = {kind: capture_command.capture_settings(parser, kind, {}, camera) for kind in KINDS}
 
     app = App(focus_settings, camera, center_settings=center_settings, observer=observer,
-              timezone=camera_timezone(parser), scale=solve_scale(parser), capture_settings=capture_defaults)
+              timezone=camera_timezone(parser), scale=solve_scale(parser), capture_settings=capture_defaults,
+              stack_settings=stack.stack_settings(parser))
     try:
         server = Server((host, port), app)
     except OSError as exc:

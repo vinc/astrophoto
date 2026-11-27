@@ -44,6 +44,7 @@ A table named after a command holds that command's settings:
 | `[capture.light]`, `[capture.dark]`, `[capture.flat]` | The same keys, for one kind of frame |
 | `[focus]` | `shutterspeed`, `iso` |
 | `[center]` | `shutterspeed`, `iso` |
+| `[stack]` | `deband`: default for `--deband` and the server's calibrated stack |
 | `[server]` | `host`, `port` |
 | `[solve]` | `scale_low`, `scale_high`: image width range in degrees for plate solving, used only for images that do not record their focal length and pixel size (default: 3 to 50) |
 
@@ -282,8 +283,8 @@ warning.
   field (default: 0).
 
 `--deband AMOUNT`
-: Remove horizontal banding, from 0 to 1 (default: 0). Useful on older Canon
-  cameras.
+: Remove horizontal banding, from 0 to 1 (default: 0, or `deband` in
+  `[stack]`). Useful on older Canon cameras.
 
 `--rgb`
 : Keep colour; output files get an `-rgb` prefix.
@@ -297,6 +298,8 @@ warning.
 `--realign`
 : Match the stars of every frame again, instead of reusing the alignment
   saved by the server's live stack.
+
+Configuration: `[stack]`.
 
 ## locate
 
@@ -396,7 +399,8 @@ series.
 
 Below it, Stack makes the full stack of a light series, like `stack`, with
 the darks of a dark series or from the dark library, the flats of a flat
-series, and colour if chosen. It runs while the camera keeps working.
+series, debanding, and colour if chosen. It runs while the camera keeps
+working.
 
 `--host ADDRESS`
 : Address to listen on (default: `0.0.0.0`, every network interface).
@@ -404,8 +408,8 @@ series, and colour if chosen. It runs while the camera keeps working.
 `--port PORT`
 : Port to listen on (default: 8000).
 
-Configuration: `[server]`, `[focus]`, `[center]`, `[capture]`, `[solve]`,
-`camera`, `timezone`.
+Configuration: `[server]`, `[focus]`, `[center]`, `[capture]`, `[stack]`,
+`[solve]`, `camera`, `timezone`.
 
 ## Files
 
