@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import unittest
@@ -11,7 +13,7 @@ from urllib.request import Request, urlopen
 import numpy as np
 from astropy.io import fits
 
-from astrophoto import center, server
+from astrophoto import center, convert, server
 from astrophoto.lib import camera, gphoto
 from astrophoto.locate import PlateSolveError
 from tests.test_cameras import FakeCamera
@@ -37,8 +39,7 @@ class ServerCase(unittest.TestCase):
         self.addCleanup(self.stop_server, self.app, self.server)
 
     def stop_server(self, app, instance):
-        app.close()
-        app.jobs.join(timeout=30)
+        app.close(timeout=60)
         instance.shutdown()
         instance.server_close()
 
@@ -297,6 +298,135 @@ class CenterServerTests(ServerCase):
         self.assertIn("Set latitude, longitude and elevation", result["error"])
         _, _, body = self.get("/api/config")
         self.assertFalse(json.loads(body)["center"]["observer"])
+
+
+class CaptureServerTests(ServerCase):
+    def setUp(self):
+        super().setUp()
+        self.directory = Path(tempfile.mkdtemp(prefix="astrophoto-server-"))
+        self.addCleanup(shutil.rmtree, self.directory, ignore_errors=True)
+        self.start(camera.CAMERAS["Canon EOS 600D"])
+        self.app.root = self.directory
+        self.captured = threading.Event()
+        self.blank = set()
+        for target, fake in [(server, "capture_series"), (convert, "convert")]:
+            patcher = patch.object(target, fake, side_effect=getattr(self, f"fake_{fake}"))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def fake_capture_series(self, directory, settings, log, stop, on_frame):
+        """Save a placeholder RAW file per frame, stopping between frames like a RAM series."""
+        self.settings = settings
+        directory.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for index in range(1, settings["frames"] + 1):
+            if stop.is_set():
+                break
+            path = directory / f"20261127-210000-{index:03d}.CR2"
+            path.write_text("raw")
+            paths.append(path)
+            on_frame(path)
+            if index == 2:
+                self.captured.set()
+            time.sleep(0.05)
+        return paths
+
+    def fake_convert(self, path, tz):
+        """Write a star field drifting a few pixels per frame, or empty sky for frames listed in self.blank."""
+        from tests.test_livestack import sky
+        index = int(path.stem.rsplit("-", 1)[1])
+        if index in self.blank:
+            image = np.random.default_rng(index).normal(500, 5, (480, 640)).astype(np.float32)
+        else:
+            image = sky(2 * index, -index, seed=index, shape=(480, 640), stars=60)
+        output = path.with_suffix(".fit")
+        header = fits.Header({"DATE-OBS": "2026-11-27T21:00:00.000", "DATE-AVG": "2026-11-27T21:00:02.500",
+                              "RAWFILE": path.name, "EXPTIME": 5.0})
+        fits.writeto(output, image, header, overwrite=True)
+        return output
+
+    def run_series(self, **body):
+        status, result = self.post("/api/capture/start", body)
+        self.assertEqual(status, 200, result)
+        self.app.jobs.join(timeout=60)
+        self.wait_for(lambda: self.app.processing.unfinished_tasks == 0 or self.app.processing.empty())
+        self.wait_for(lambda: all(row["status"] not in ("captured",) for row in self.latest("series")["frames"]))
+        return self.app.root / result["directory"]
+
+    def test_config_reports_capture_settings_for_each_kind(self):
+        _, _, body = self.get("/api/config")
+        config = json.loads(body)
+        self.assertEqual(config["kinds"], ["light", "dark", "flat"])
+        self.assertEqual(config["capture"]["light"]["target"], "ram")
+        self.assertEqual(config["capture"]["flat"]["shutterspeed"], "50")
+
+    def test_light_frames_are_measured_and_stacked_as_they_arrive(self):
+        directory = self.run_series(frames=4, iso="1600", target="ram")
+        self.assertEqual(self.settings["iso"], "1600")
+        self.assertEqual(self.settings["shutterspeed"], "5")
+        series = self.latest("series")
+        self.assertEqual((series["kind"], series["planned"]), ("light", 4))
+        self.assertEqual([row["status"] for row in series["frames"]], ["stacked"] * 4)
+        self.assertTrue(all(row["stars"] > 10 and row["hfr"] > 0 for row in series["frames"]))
+        # The field drifts 2 pixels right and 1 down per frame, half that once binned
+        self.assertEqual(series["frames"][0]["shift"], [0.0, 0.0])
+        self.assertAlmostEqual(series["frames"][3]["shift"][0], -3, delta=0.3)
+        stacked = self.wait_for(lambda: (self.latest("stack") or {}).get("saved_frames") == 4 and self.latest("stack"))
+        self.assertEqual(stacked["frames"], 4)
+        self.assertEqual(stacked["saved"], f"{directory.name}-live-stack.fit")
+        with fits.open(directory / stacked["saved"]) as hdus:
+            self.assertEqual(hdus[0].header["NCOMBINE"], 4)
+        self.assertTrue((directory / f"{directory.name}-live-stack.fit").exists())
+        self.assertTrue((directory / f"{directory.name}-live-stack.png").exists())
+        for kind in ("stack", "frame"):
+            _, content_type, image = self.get(self.latest(kind)["image"])
+            self.assertTrue(image.startswith(b"\x89PNG"))
+
+    def test_stop_ends_the_series_after_the_current_frame(self):
+        self.post("/api/capture/start", {"frames": 50})
+        self.captured.wait(30)
+        status, body = self.post("/api/stop")
+        self.assertEqual(body["stopped"], "capture")
+        self.app.jobs.join(timeout=30)
+        self.assertLess(len(self.latest("series")["frames"]), 50)
+
+    def test_a_frame_that_cannot_be_aligned_is_left_out(self):
+        self.blank = {2}
+        self.run_series(frames=3)
+        rows = self.latest("series")["frames"]
+        self.assertEqual([row["status"] for row in rows], ["stacked", "not stacked", "stacked"])
+        self.assertIn("Could not align", rows[1]["problem"])
+        self.assertEqual(self.latest("stack")["frames"], 2)
+
+    def test_dark_frames_are_converted_but_not_stacked(self):
+        self.run_series(kind="dark", frames=2)
+        self.assertEqual([row["status"] for row in self.latest("series")["frames"]], ["converted"] * 2)
+        self.assertIsNone(self.latest("stack"))
+
+    def test_a_new_series_starts_a_new_stack(self):
+        # Both start within the same minute
+        with patch.object(server, "series_directory", return_value=Path("20261127-2100-light")):
+            first = self.run_series(frames=2)
+            second = self.run_series(frames=3)
+        self.assertEqual((first.name, second.name), ("20261127-2100-light", "20261127-2100-light-2"))
+        self.assertEqual((self.latest("stack")["frames"], len(self.latest("series")["frames"])), (3, 3))
+
+    def test_a_frame_that_cannot_be_converted_is_marked_failed(self):
+        with patch.object(convert, "convert", side_effect=ValueError("missing exposure timestamp")):
+            self.run_series(frames=1)
+        row = self.latest("series")["frames"][0]
+        self.assertEqual((row["status"], row["problem"]), ("failed", "missing exposure timestamp"))
+
+    def test_capture_requests_are_validated(self):
+        for body, message in [
+            ({"kind": "bias"}, "kind must be one of light, dark, flat"),
+            ({"frames": 0}, "frames must be a whole number of at least 1"),
+            ({"target": "sd"}, "target must be one of ram, card"),
+        ]:
+            with self.subTest(body=body):
+                status, result = self.post("/api/capture/start", body)
+                self.assertEqual(status, 400)
+                self.assertIn(message, result["error"])
 
 
 class AddressTests(unittest.TestCase):

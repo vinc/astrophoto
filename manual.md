@@ -368,6 +368,19 @@ far to pan and tilt the camera, with the target marked on the frame. With
 Repeat, it keeps capturing so you can follow the camera as you move it. It
 needs the observer position.
 
+The Capture tab captures a series of light, dark or flat frames like
+`capture`, into the same directories. Each frame is converted to FITS as it
+arrives, and listed with its HFR, star count and sky level. Stop ends the
+series once the current frame is saved; a series taken onto the card cannot
+be stopped.
+
+The Stack tab shows the light frames of the series stacked as they arrive,
+aligned to the first frame, without calibration. Frames that cannot be aligned
+are left out. The stack is saved in the series directory as
+`<directory>-live-stack.fit` and `.png` every minute and at the end of the
+series; run `stack` on the directory afterwards for the full stack with darks
+and flats.
+
 There is no password: anyone who can reach the address can use the camera.
 
 `--host ADDRESS`
@@ -376,8 +389,8 @@ There is no password: anyone who can reach the address can use the camera.
 `--port PORT`
 : Port to listen on (default: 8000).
 
-Configuration: `[server]`, `[focus]`, `[center]`, `[solve]`, `camera`,
-`timezone`.
+Configuration: `[server]`, `[focus]`, `[center]`, `[capture]`, `[solve]`,
+`camera`, `timezone`.
 
 ## Files
 

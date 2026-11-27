@@ -75,6 +75,19 @@
   input.wide { width: 13em; }
   label.check { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text); padding-bottom: 7px; }
   label.check input { width: auto; }
+  .split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; align-items: start; }
+  @media (max-width: 800px) { .split { grid-template-columns: minmax(0, 1fr); } }
+  .table-wrap {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    max-height: 70vh; overflow: auto;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 5px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; }
+  td.number, th.number { text-align: right; }
+  td.stacked { color: var(--good); }
+  td.problem { color: var(--bad); }
+  td.waiting { color: var(--muted); }
   .view {
     background: #000; color: var(--text); border: 1px solid var(--line); border-radius: 8px; min-height: 120px;
     display: flex; align-items: center; justify-content: center; overflow: hidden;
@@ -108,8 +121,8 @@
 <nav>
   <button class="active" data-tab="focus">Focus</button>
   <button data-tab="center">Center</button>
-  <button disabled title="Coming later">Capture</button>
-  <button disabled title="Coming later">Stack</button>
+  <button data-tab="capture">Capture</button>
+  <button data-tab="stack">Stack</button>
 </nav>
 <main>
   <section id="focus" class="active">
@@ -165,6 +178,35 @@
     <div class="correction" id="correction"></div>
     <div class="report" id="report"></div>
     <div class="view" id="center-view"><div class="empty">Capture and plate-solve a frame to see how far to move the camera.</div></div>
+  </section>
+  <section id="capture">
+    <div class="controls">
+      <fieldset>
+        <legend>Series</legend>
+        <label>Kind <select id="kind"></select></label>
+        <label>Frames <input id="frames" type="number" min="1"></label>
+        <label>ISO <input id="capture-iso"></label>
+        <label>Aperture <input id="aperture"></label>
+        <label>Shutter <input id="capture-shutterspeed"></label>
+        <label>Download <select id="target"></select></label>
+        <button class="action primary starts" id="capture-start">Start</button>
+        <button class="action danger stops">Stop</button>
+      </fieldset>
+    </div>
+    <div class="title" id="series-title"></div>
+    <div class="split">
+      <div class="view" id="frame-view"><div class="empty">The latest frame shows here as it is downloaded.</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="number">#</th><th>Frame</th><th>HFR</th><th class="number">Stars</th><th class="number">Sky</th><th>Status</th></tr></thead>
+          <tbody id="frame-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  <section id="stack">
+    <div class="title" id="stack-title"></div>
+    <div class="view" id="stack-view"><div class="empty">Capture light frames to see them stacked as they arrive.</div></div>
   </section>
   <div id="log"></div>
 </main>
@@ -285,6 +327,38 @@ function setupCenter() {
   $("query").onkeydown = (event) => { if (event.key === "Enter") point(); };
 }
 
+const TARGET_LABELS = {ram: "Each frame", card: "At the end"};
+
+function setupCapture() {
+  fill($("kind"), config.kinds, "light");
+  $("target").replaceChildren(...config.targets.map((value) => new Option(TARGET_LABELS[value] || value, value)));
+  const showDefaults = () => {
+    const defaults = config.capture[$("kind").value];
+    $("frames").value = defaults.frames;
+    $("capture-iso").value = defaults.iso;
+    $("aperture").value = defaults.aperture;
+    $("capture-shutterspeed").value = defaults.shutterspeed;
+    $("target").value = defaults.target;
+  };
+  $("kind").onchange = showDefaults;
+  showDefaults();
+  $("capture-start").onclick = () => post("/api/capture/start", {
+    kind: $("kind").value,
+    frames: Number($("frames").value),
+    iso: $("capture-iso").value.trim(),
+    aperture: $("aperture").value.trim(),
+    shutterspeed: $("capture-shutterspeed").value.trim(),
+    target: $("target").value,
+  });
+}
+
+function cell(text, className = "") {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (className) td.className = className;
+  return td;
+}
+
 function setupTabs() {
   const buttons = document.querySelectorAll("nav button[data-tab]");
   const show = (name) => {
@@ -335,6 +409,42 @@ const handlers = {
     title.textContent = event.frame ? `Frame ${event.frame}: ${event.title}` : event.title;
     if (event.image) showImage($("focus-view"), event.image);
   },
+  series(event) {
+    const stacked = event.frames.filter((row) => row.status === "stacked").length;
+    const kind = event.kind[0].toUpperCase() + event.kind.slice(1);
+    let title = `${kind} series ${event.directory}: ${event.frames.length} of ${event.planned} frames`;
+    if (event.kind === "light") title += `, ${stacked} stacked`;
+    $("series-title").textContent = title;
+    const rows = event.frames.map((row, index) => {
+      const tr = document.createElement("tr");
+      const statusClass = row.status === "stacked" ? "stacked"
+        : row.status === "captured" ? "waiting" : row.problem ? "problem" : "";
+      const status = cell(row.status, statusClass);
+      if (row.problem) status.title = row.problem;
+      tr.append(
+        cell(index + 1, "number"),
+        cell(row.name),
+        cell(row.hfr_text ? row.hfr_text.replace(/^HFR /, "") : (row.problem && row.status === "converted" ? "–" : "")),
+        cell(row.stars ?? "", "number"),
+        cell(row.background === undefined ? "" : Math.round(row.background), "number"),
+        status,
+      );
+      return tr;
+    });
+    // Newest first, where the eye lands
+    $("frame-rows").replaceChildren(...rows.reverse());
+  },
+  frame(event) {
+    showImage($("frame-view"), event.image);
+  },
+  stack(event) {
+    let title = `${event.frames} frame${event.frames === 1 ? "" : "s"} stacked from ${event.directory}`;
+    if (event.saved) title += `, saved as ${event.saved}`;
+    else if (event.saved_frames) title += `, saved with ${event.saved_frames} so far`;
+    else title += ", saved at the end of the series";
+    $("stack-title").textContent = title;
+    showImage($("stack-view"), event.image);
+  },
   center(event) {
     const correction = $("correction");
     correction.textContent = event.title;
@@ -374,6 +484,7 @@ fetch("/api/config").then((response) => response.json()).then((value) => {
   config = value;
   setupFocus();
   setupCenter();
+  setupCapture();
   setupTabs();
   document.querySelectorAll(".stops").forEach((button) => { button.onclick = () => post("/api/stop"); });
   handlers.job({name: null});

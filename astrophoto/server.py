@@ -13,18 +13,22 @@ import tempfile
 import threading
 import time
 from urllib.parse import urlsplit
+import warnings
 
-from matplotlib import style
+from matplotlib import image as mpimage, style
 from matplotlib.figure import Figure
+import numpy as np
 
-from astrophoto import center, focus
-from astrophoto.lib.camera import capture, live_preview, move_focus
+from astrophoto import capture as capture_command, center, convert, focus, stack
+from astrophoto.capture import DEFAULTS as CAPTURE_DEFAULTS, KINDS, TARGETS, capture_series, series_directory
+from astrophoto.lib.camera import capture, display_limits, live_preview, move_focus, stack_display_limits
 from astrophoto.lib.catalog import AmbiguousObject
 from astrophoto.lib.config import (
     SOLVE, add_observer_arguments, camera_profile, camera_timezone, command_settings, observer_location, solve_scale,
 )
 from astrophoto.locate import PlateSolveError
 from astrophoto.lib.gphoto import ENGLISH, FOCUS_STEPS, camera_lock
+from astrophoto.lib.livestack import LiveStack
 
 DEFAULTS = {"host": "0.0.0.0", "port": "8000"}
 ZOOMS = (1, 5, 10)
@@ -34,6 +38,10 @@ STATUS_INTERVAL = 30
 KEEPALIVE = 15
 # Events about something that just happened, which a browser connecting later has no use for
 TRANSIENT = {"error", "autofocus"}
+# Widest image sent to browsers; larger frames are binned down
+PREVIEW_WIDTH = 1600
+# Seconds between saves of the live stack during a series, as writing a full frame takes a few seconds
+SAVE_INTERVAL = 60
 
 
 class RequestError(ValueError):
@@ -57,7 +65,7 @@ class Hub:
         self.latest = {}
         self.logs = deque(maxlen=100)
 
-    def publish(self, kind, **data):
+    def publish(self, kind, /, **data):
         event = {"type": kind, "time": time.time(), **data}
         with self.lock:
             if kind == "log":
@@ -200,9 +208,24 @@ def render_pointing(path, query, result):
     return render(lambda figure: center.show_pointing(figure, path, query, result, interactive=False), (10, 7))
 
 
+def preview_png(data, low, high):
+    """Return an image as a grey PNG between two levels, binned down to at most PREVIEW_WIDTH pixels wide."""
+    factor = -(-data.shape[1] // PREVIEW_WIDTH)
+    if factor > 1:
+        height, width = data.shape[0] // factor * factor, data.shape[1] // factor * factor
+        blocks = data[:height, :width].reshape(height // factor, factor, width // factor, factor)
+        # Uncovered stack edges are NaN; a block with any data keeps it
+        with np.errstate(invalid="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            data = np.nanmean(blocks, axis=(1, 3))
+    output = io.BytesIO()
+    mpimage.imsave(output, np.nan_to_num(data, nan=low), cmap="gray", vmin=low, vmax=high, format="png")
+    return output.getvalue()
+
+
 class App:
     def __init__(self, focus_settings, camera=None, radius=None, status_interval=STATUS_INTERVAL,
-                 center_settings=None, observer=None, timezone=None, scale=None):
+                 center_settings=None, observer=None, timezone=None, scale=None, capture_settings=None, root=None):
         self.hub = Hub()
         self.images = Images()
         self.jobs = Jobs(self.hub)
@@ -216,6 +239,20 @@ class App:
         self.status_interval = status_interval
         self.closing = threading.Event()
         self.status_wanted = threading.Event()
+        default_target = "card" if camera is None else camera.capture_target
+        self.capture_settings = capture_settings or {
+            kind: {**CAPTURE_DEFAULTS, **capture_command.KIND_DEFAULTS.get(kind, {}), "target": default_target}
+            for kind in KINDS
+        }
+        self.root = Path.cwd() if root is None else Path(root)
+        # Captured frames wait here to be converted, measured and stacked, so the camera never waits for them
+        self.processing = queue.Queue()
+        self.series_lock = threading.Lock()
+        self.series = None
+        self.live = None
+        self.saved = 0.0
+        self.processor = threading.Thread(target=self.process_frames, daemon=True)
+        self.processor.start()
 
     def config(self):
         return {
@@ -231,6 +268,9 @@ class App:
                 "iso": self.center_settings["iso"],
                 "observer": self.observer is not None,
             },
+            "capture": self.capture_settings,
+            "kinds": KINDS,
+            "targets": list(TARGETS),
             "zooms": ZOOMS,
             "steps": FOCUS_STEPS,
         }
@@ -399,14 +439,138 @@ class App:
                 break
             stop.wait(1)
 
+    # Capture
+
+    def capture_start(self, body):
+        kind = choice(body, "kind", KINDS, "light")
+        defaults = self.capture_settings[kind]
+        settings = {
+            "frames": integer(body, "frames", defaults["frames"], minimum=1),
+            # The camera needs every setting for a series, so an empty field falls back to the configured one
+            **{key: text(body, key, defaults[key]) or defaults[key] for key in ("iso", "aperture", "shutterspeed")},
+            "target": choice(body, "target", tuple(TARGETS), defaults["target"]),
+        }
+        directory = self.root / series_directory(kind)
+        # Series started within the same minute would otherwise share a directory and a live stack
+        base, number = directory, 1
+        while directory.exists():
+            number += 1
+            directory = base.with_name(f"{base.name}-{number}")
+        self.jobs.start("capture", lambda stop: self.capture(stop, directory, kind, settings))
+        return {"ok": True, "directory": directory.name}
+
+    def capture(self, stop, directory, kind, settings):
+        with self.series_lock:
+            self.series = {
+                "directory": directory.name, "kind": kind, "planned": settings["frames"],
+                "target": settings["target"], "frames": [],
+            }
+        self.publish_series()
+        if settings["target"] == "card":
+            self.hub.log("The series is downloaded once every frame is taken, and cannot be stopped before")
+        try:
+            capture_series(directory, settings, log=self.hub.log, stop=stop,
+                           on_frame=lambda path: self.frame_captured(path, directory, kind))
+        finally:
+            # Once its frames are processed, the series' stack is saved
+            self.processing.put((directory,))
+
+    def frame_captured(self, path, directory, kind):
+        with self.series_lock:
+            rows = self.series["frames"]
+            rows.append({"name": path.name, "status": "captured"})
+            row = rows[-1]
+        self.publish_series()
+        self.processing.put((path, directory, kind, row))
+
+    def publish_series(self):
+        with self.series_lock:
+            series = json.loads(json.dumps(self.series))
+        self.hub.publish("series", **series)
+
+    def update_row(self, row, **values):
+        with self.series_lock:
+            row.update(values)
+        self.publish_series()
+
+    def process_frames(self):
+        while True:
+            item = self.processing.get()
+            if item is None:
+                return
+            if len(item) == 1:
+                self.save_stack(item[0])
+                continue
+            path, directory, kind, row = item
+            try:
+                self.process_frame(path, directory, kind, row)
+            except Exception as exc:
+                self.hub.log(f"Could not process {path.name}: {error_text(exc)}")
+                self.update_row(row, status="failed", problem=error_text(exc))
+
+    def process_frame(self, path, directory, kind, row):
+        fits_path = convert.convert(path, self.timezone)
+        data, stars, hfr, problem = focus.measure_frame(fits_path, self.radius)
+        values = {"stars": len(stars), "background": float(np.nanmedian(data)), "status": "converted"}
+        if hfr is not None:
+            values.update(hfr=hfr, hfr_text=focus.hfr_text(hfr, fits_path, self.camera))
+        else:
+            values["problem"] = problem
+        low, high = display_limits(data)
+        image = self.images.put("frame", preview_png(data, low, high))
+        self.hub.publish("frame", name=fits_path.name, image=image)
+        if kind == "light":
+            values.update(self.stack_frame(fits_path, directory))
+        self.update_row(row, **values)
+
+    def stack_frame(self, fits_path, directory):
+        """Add a light frame to the live stack of its series, returning how it went."""
+        if self.live is None or self.live[0] != directory:
+            # The directory, its stack, and how many frames the saved copy holds
+            self.live = (directory, LiveStack(), 0)
+        live = self.live[1]
+        try:
+            result = live.add(stack.load(fits_path), fits_path)
+        except Exception as exc:
+            return {"status": "not stacked", "problem": f"Could not align: {error_text(exc)}"}
+        image = live.image()
+        low, high = stack_display_limits(image)
+        self.stack_image = self.images.put("stack", preview_png(image, low, high))
+        if time.monotonic() - self.saved >= SAVE_INTERVAL:
+            self.save_stack(directory)
+        else:
+            self.publish_stack(None)
+        return {"status": "stacked", "shift": [round(value, 1) for value in result["shift"]]}
+
+    def save_stack(self, directory):
+        """Write the live stack of a series into its directory, unless it is already saved."""
+        if self.live is None or self.live[0] != directory or self.live[2] == len(self.live[1]):
+            return
+        directory, live, _ = self.live
+        prefix = f"{directory.name}-live"
+        fits_out, png_out = directory / f"{prefix}-stack.fit", directory / f"{prefix}-stack.png"
+        live.write(fits_out, png_out)
+        self.live = (directory, live, len(live))
+        self.saved = time.monotonic()
+        self.publish_stack(fits_out.name)
+
+    def publish_stack(self, saved):
+        directory, live, count = self.live
+        self.hub.publish("stack", directory=directory.name, frames=len(live), image=self.stack_image,
+                         saved=saved, saved_frames=count)
+
     def stop(self, body):
         name = self.jobs.stop()
         return {"ok": True, "stopped": name}
 
-    def close(self):
+    def close(self, timeout=None):
+        """Stop the running job after its current step, then finish processing the frames it captured."""
         self.closing.set()
         self.status_wanted.set()
         self.jobs.stop()
+        self.jobs.join(timeout)
+        self.processing.put(None)
+        self.processor.join(timeout)
 
 
 # Request validation
@@ -493,6 +657,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/focus/auto": self.app.focus_auto,
             "/api/focus/move": self.app.focus_move,
             "/api/center/start": self.app.center_start,
+            "/api/capture/start": self.app.capture_start,
             "/api/stop": self.app.stop,
         }
         route = routes.get(urlsplit(self.path).path)
@@ -595,8 +760,10 @@ def main():
         if shutil.which(tool) is None:
             print(f"{tool} not found: the page will load, but commands that need it will fail", flush=True)
 
+    capture_defaults = {kind: capture_command.capture_settings(parser, kind, {}, camera) for kind in KINDS}
+
     app = App(focus_settings, camera, center_settings=center_settings, observer=observer,
-              timezone=camera_timezone(parser), scale=solve_scale(parser))
+              timezone=camera_timezone(parser), scale=solve_scale(parser), capture_settings=capture_defaults)
     try:
         server = Server((host, port), app)
     except OSError as exc:
@@ -610,9 +777,9 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        app.close()
+        print("Finishing the current frame and processing captured frames ...", flush=True)
+        app.close(timeout=120)
         server.server_close()
-        app.jobs.join(timeout=30)
 
 
 if __name__ == "__main__":
