@@ -10,6 +10,29 @@ from astrophoto.lib.config import data_path
 
 # A dark matches lights from the same camera, at the same ISO and exposure time
 KEYS = ("INSTRUME", "ISO", "EXPTIME")
+# Dark current roughly doubles every 5 to 6 degrees, so darks further from the lights than this subtract poorly
+TOLERANCE = 5
+
+
+def median_temperature(paths):
+    """Return the median sensor temperature recorded in FITS frames, or None when none records one."""
+    temperatures = []
+    for path in paths:
+        try:
+            value = fits.getheader(path).get("CCD-TEMP")
+        except OSError:
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            temperatures.append(float(value))
+    return float(np.median(temperatures)) if temperatures else None
+
+
+def temperature_warning(dark, lights):
+    """Return a warning when darks were taken much warmer or colder than the lights, or None."""
+    if dark is None or lights is None or abs(dark - lights) <= TOLERANCE:
+        return None
+    return (f"Warning: the darks were taken at {dark:g} °C and the lights at {lights:g} °C; "
+            "darks within a few degrees of the lights subtract better")
 
 
 def library_path():
@@ -61,6 +84,9 @@ def save(dark, metadata, paths):
         header[key] = metadata[key]
     header["DATE-OBS"] = (taken, "First dark exposure start (UTC)")
     header["NDARKS"] = (len(paths), "Number of median-combined dark frames")
+    temperature = median_temperature(paths)
+    if temperature is not None:
+        header["CCD-TEMP"] = (temperature, "Median sensor temperature (C) of the darks")
     header["DARKSRC"] = (digest, "Digest of the dark frame names and sizes")
     for path in paths:
         header.add_history(f"Dark {path.parent.name}/{path.name}")
@@ -72,8 +98,12 @@ def save(dark, metadata, paths):
     return path
 
 
-def find(header):
-    """Return the newest library dark matching an image header, or None."""
+def find(header, temperature=None):
+    """Return the library dark matching an image header, or None.
+
+    Among matches, the one closest to the given sensor temperature wins when temperatures are known, then the
+    newest.
+    """
     directory = library_path()
     if not directory.is_dir() or any(key not in header for key in KEYS):
         return None
@@ -84,8 +114,12 @@ def find(header):
         except OSError:
             continue
         if all(dark.get(key) == header[key] for key in KEYS):
-            matches.append((str(dark.get("DATE-OBS", "")), path))
-    return max(matches)[1] if matches else None
+            recorded = dark.get("CCD-TEMP")
+            known = temperature is not None and isinstance(recorded, (int, float))
+            distance = abs(recorded - temperature) if known else float("inf")
+            # Smallest distance first, then latest date
+            matches.append((-distance, str(dark.get("DATE-OBS", "")), path))
+    return max(matches)[2] if matches else None
 
 
 def load(path):

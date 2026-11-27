@@ -2,6 +2,7 @@ import argparse
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 from pathlib import Path
+import re
 
 import exifread
 import rawpy
@@ -39,6 +40,28 @@ def exif_pixel_size(tags):
     return size if 1 <= size <= 20 else None
 
 
+def camera_temperature(tags):
+    """Return the sensor temperature in Celsius from Canon maker notes, or None when they do not record one."""
+    # exifread shows it as "26 C", having removed Canon's offset of 128
+    match = re.fullmatch(r"(-?\d+) C", exif_value(tags, "MakerNote CameraTemperature") or "")
+    if match is None:
+        return None
+    temperature = int(match.group(1))
+    # Other makers' notes, or a misread one, can hold anything
+    return temperature if -40 <= temperature <= 80 else None
+
+
+def read_tags(path):
+    """Return the EXIF tags of a RAW file, with its maker notes when they can be read."""
+    with path.open("rb") as f:
+        try:
+            return exifread.process_file(f, details=True)
+        # Maker notes are proprietary, and a camera exifread does not know could trip it up
+        except Exception:
+            f.seek(0)
+            return exifread.process_file(f, details=False)
+
+
 def convert(path, tz, output=None):
     with rawpy.imread(str(path)) as raw:
         # Preserve the original Bayer mosaic without demosaicing
@@ -47,8 +70,7 @@ def convert(path, tz, output=None):
         white_level = int(raw.white_level)
         colour = raw_color_metadata(raw)
 
-    with path.open("rb") as f:
-        tags = exifread.process_file(f, details=False)
+    tags = read_tags(path)
 
     date = exif_value(tags, "EXIF DateTimeOriginal")
     exposure = exif_float(tags, "EXIF ExposureTime")
@@ -99,6 +121,10 @@ def convert(path, tz, output=None):
         hdr["XPIXSZ"] = (round(pixel, 3), "Pixel width in micrometres, including binning")
         hdr["XBINNING"] = (1, "Pixels combined horizontally")
 
+    temperature = camera_temperature(tags)
+    if temperature is not None:
+        hdr["CCD-TEMP"] = (temperature, "Sensor temperature (C) from the maker notes")
+
     if camera:
         hdr["INSTRUME"] = camera
     if lens:
@@ -119,6 +145,8 @@ def convert(path, tz, output=None):
     print(f"  Start:    {start.isoformat()}")
     print(f"  Midpoint: {midpoint.isoformat()}")
     print(f"  Exposure: {exposure} s")
+    if temperature is not None:
+        print(f"  Sensor:   {temperature} °C")
     return output
 
 

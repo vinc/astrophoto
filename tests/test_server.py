@@ -341,7 +341,7 @@ class CaptureServerTests(ServerCase):
             image = sky(2 * index, -index, seed=index, shape=(480, 640), stars=60)
         output = path.with_suffix(".fit")
         header = fits.Header({"DATE-OBS": "2026-11-27T21:00:00.000", "DATE-AVG": "2026-11-27T21:00:02.500",
-                              "RAWFILE": path.name, "EXPTIME": 5.0})
+                              "RAWFILE": path.name, "EXPTIME": 5.0, "CCD-TEMP": 20 + index})
         fits.writeto(output, image, header, overwrite=True)
         return output
 
@@ -368,6 +368,7 @@ class CaptureServerTests(ServerCase):
         self.assertEqual((series["kind"], series["planned"]), ("light", 4))
         self.assertEqual([row["status"] for row in series["frames"]], ["stacked"] * 4)
         self.assertTrue(all(row["stars"] > 10 and row["hfr"] > 0 for row in series["frames"]))
+        self.assertEqual([row["temperature"] for row in series["frames"]], [21, 22, 23, 24])
         # The field drifts 2 pixels right and 1 down per frame, half that once binned
         self.assertEqual(series["frames"][0]["shift"], [0.0, 0.0])
         self.assertAlmostEqual(series["frames"][3]["shift"][0], -3, delta=0.3)

@@ -238,7 +238,8 @@ astrophoto convert FILE ...
 ```
 
 Converts Canon CR2 files to FITS files next to them, keeping the raw Bayer
-data and recording the exposure time, camera and lens settings.
+data and recording the exposure time, camera and lens settings, and the sensor
+temperature when the camera records it.
 
 Configuration: `timezone`.
 
@@ -256,8 +257,13 @@ Aligns and stacks the FITS files in a directory into
 : Dark frames to subtract. Their master dark is kept in the dark library.
 
 `--dark-library`
-: Subtract the newest master dark in the library taken with the same camera,
-  ISO and exposure time, for a session without its own dark frames.
+: Subtract a master dark from the library taken with the same camera, ISO and
+  exposure time, for a session without its own dark frames: the one closest
+  to the lights' sensor temperature, or the newest when temperatures are not
+  recorded.
+
+Darks taken more than 5 °C warmer or colder than the lights produce a
+warning.
 
 `--flat FILE ...`
 : Flat frames to divide by.

@@ -343,19 +343,27 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         raise ValueError("Use either dark frames or the dark library, not both")
     dark, dark_metadata = master_dark(dark_files) if dark_files else (None, None)
     library_dark = None
+    light_temperature = darks.median_temperature(files) if dark_files or dark_library else None
     if dark_files:
         print(f"Combined {len(dark_files)} dark frames")
+        dark_temperature = darks.median_temperature(dark_files)
         saved = darks.save(dark, dark_metadata, dark_files)
         if saved is not None:
             print(f"Master dark kept in the library as {saved.name}")
     elif dark_library:
         light = fits.getheader(middle)
-        library_dark = darks.find(light)
+        library_dark = darks.find(light, light_temperature)
         if library_dark is None:
             raise ValueError(f"No master dark for {darks.describe(light)} in the library; "
                              "stack once with --dark to add one")
         dark, dark_metadata, library_header = darks.load(library_dark)
-        print(f"Using the library's master dark {library_dark.name}")
+        dark_temperature = library_header.get("CCD-TEMP")
+        taken = "" if dark_temperature is None else f", taken at {dark_temperature:g} °C"
+        print(f"Using the library's master dark {library_dark.name}{taken}")
+    if dark is not None:
+        warning = darks.temperature_warning(dark_temperature, light_temperature)
+        if warning:
+            print(warning, file=sys.stderr)
     flat, flat_metadata = master_flat(flat_files) if flat_files else (None, None)
     if flat_files:
         print(f"Combined {len(flat_files)} flat frames")
@@ -446,6 +454,8 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
             header.add_history(f"Dark {path.name}")
         if library_dark is not None:
             header.add_history(f"Library dark {library_dark.name}")
+        if dark_temperature is not None:
+            header["DARKTEMP"] = (dark_temperature, "Median sensor temperature (C) of the darks")
     if flat_files:
         header["FLATCOR"] = (True, "Master flat applied before binning")
         header["NFLATS"] = (len(flat_files), "Number of normalized flat frames")

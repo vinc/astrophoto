@@ -16,6 +16,7 @@ import time
 from urllib.parse import urlsplit
 import warnings
 
+from astropy.io import fits
 from matplotlib import image as mpimage, style
 from matplotlib.figure import Figure
 import numpy as np
@@ -530,6 +531,9 @@ class App:
         fits_path = convert.convert(path, self.timezone)
         data, stars, hfr, problem = focus.measure_frame(fits_path, self.radius)
         values = {"stars": len(stars), "background": float(np.nanmedian(data)), "status": "converted"}
+        temperature = fits.getheader(fits_path).get("CCD-TEMP")
+        if isinstance(temperature, (int, float)):
+            values["temperature"] = temperature
         if hfr is not None:
             values.update(hfr=hfr, hfr_text=focus.hfr_text(hfr, fits_path, self.camera))
         else:

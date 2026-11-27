@@ -199,7 +199,7 @@
       <div class="view" id="frame-view"><div class="empty">The latest frame shows here as it is downloaded.</div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th class="number">#</th><th>Frame</th><th>HFR</th><th class="number">Stars</th><th class="number">Sky</th><th>Status</th></tr></thead>
+          <thead><tr><th class="number">#</th><th>Frame</th><th>HFR</th><th class="number">Stars</th><th class="number">Sky</th><th class="number">Temp</th><th>Status</th></tr></thead>
           <tbody id="frame-rows"></tbody>
         </table>
       </div>
@@ -485,6 +485,7 @@ const handlers = {
         cell(row.hfr_text ? row.hfr_text.replace(/^HFR /, "") : (row.problem && row.status === "converted" ? "–" : "")),
         cell(row.stars ?? "", "number"),
         cell(row.background === undefined ? "" : Math.round(row.background), "number"),
+        cell(row.temperature === undefined ? "" : `${row.temperature} °C`, "number"),
         status,
       );
       return tr;

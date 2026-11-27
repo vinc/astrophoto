@@ -17,7 +17,7 @@ HEADER = {"INSTRUME": "Canon EOS 600D", "ISO": 800, "EXPTIME": 5.0, "BLACKLVL": 
           "BAYERPAT": "RGGB"}
 
 
-def raw_frame(directory, name, dx=0.0, dy=0.0, seed=0, iso=800, dark=False):
+def raw_frame(directory, name, dx=0.0, dy=0.0, seed=0, iso=800, dark=False, temperature=None):
     """Write a RAW-like FITS frame: a star field at twice the binned size, or a dark frame."""
     if dark:
         image = np.random.default_rng(seed).normal(150, 3, (240, 320))
@@ -26,14 +26,16 @@ def raw_frame(directory, name, dx=0.0, dy=0.0, seed=0, iso=800, dark=False):
         image = np.kron(binned, np.ones((2, 2)))
     header = fits.Header({**HEADER, "ISO": iso, "RAWFILE": name.replace(".fit", ".CR2"),
                           "DATE-OBS": f"2026-11-27T21:00:{seed:02d}.000", "DATE-AVG": f"2026-11-27T21:00:{seed:02d}.500"})
+    if temperature is not None:
+        header["CCD-TEMP"] = temperature
     path = Path(directory) / name
     fits.writeto(path, image.astype(np.float32), header)
     return path
 
 
-def series(directory, count=5, iso=800):
+def series(directory, count=5, iso=800, temperature=None):
     shifts = [(0, 0), (2, -1), (-3, 2), (4, 3), (1, -4), (-2, -2)][:count]
-    return [raw_frame(directory, f"frame{index}.fit", dx, dy, seed=index, iso=iso)
+    return [raw_frame(directory, f"frame{index}.fit", dx, dy, seed=index, iso=iso, temperature=temperature)
             for index, (dx, dy) in enumerate(shifts)]
 
 
@@ -102,13 +104,14 @@ class DarkLibraryTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def session(self, name, iso=800, with_darks=True):
+    def session(self, name, iso=800, temperature=None, dark_temperature=None):
         directory = self.root / name
         directory.mkdir()
-        series(directory, count=3, iso=iso)
+        series(directory, count=3, iso=iso, temperature=temperature)
         dark_directory = self.root / f"{name}-dark"
         dark_directory.mkdir()
-        dark_frames = [raw_frame(dark_directory, f"dark{index}.fit", seed=index, dark=True) for index in range(3)]
+        dark_frames = [raw_frame(dark_directory, f"dark{index}.fit", seed=index, dark=True,
+                                 temperature=dark_temperature) for index in range(3)]
         return directory, dark_frames
 
     def test_stacking_with_darks_keeps_one_master_per_set_of_frames(self):
@@ -153,6 +156,31 @@ class DarkLibraryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "No master dark for Canon EOS 600D at ISO 1600 and 5 s in the library; "
                                                 "stack once with --dark"):
             quietly(stack.stack_directory, later, dark_library=True)
+
+    def test_the_master_closest_in_temperature_beats_a_newer_one(self):
+        for stamp, temperature in [("2026-10-01T20:00:00", 12), ("2026-11-20T20:00:00", 25), ("2026-11-25T20:00:00", None)]:
+            with patch.object(darks, "sources_digest", return_value=stamp):
+                frame = self.root / f"{stamp[:10]}.fit"
+                extra = {} if temperature is None else {"CCD-TEMP": temperature}
+                fits.writeto(frame, np.zeros((4, 4)), fits.Header({**HEADER, "DATE-OBS": stamp, **extra}))
+                saved = darks.save(np.zeros((4, 4)), {key: HEADER[key] for key in darks.KEYS}, [frame])
+                self.assertEqual(fits.getheader(saved).get("CCD-TEMP"), temperature)
+        self.assertIn("20261001", darks.find(fits.Header(HEADER), temperature=10).name)
+        self.assertIn("20261120", darks.find(fits.Header(HEADER), temperature=22).name)
+        # Without a temperature to match, the newest wins
+        self.assertIn("20261125", darks.find(fits.Header(HEADER)).name)
+
+    def test_darks_far_from_the_lights_temperature_are_flagged(self):
+        lights, dark_frames = self.session("first", temperature=8, dark_temperature=21)
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            quietly(stack.stack_directory, lights, dark_files=dark_frames, output_prefix="warm")
+        self.assertIn("the darks were taken at 21 °C and the lights at 8 °C", errors.getvalue())
+        self.assertEqual(fits.getheader(lights / "warm-stack.fit")["DARKTEMP"], 21)
+        later, _ = self.session("later", temperature=19)
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            output = quietly(stack.stack_directory, later, dark_library=True)
+        self.assertIn("taken at 21 °C", output)
+        self.assertEqual(errors.getvalue(), "")
 
     def test_darks_and_the_library_cannot_be_combined(self):
         lights, dark_frames = self.session("first")

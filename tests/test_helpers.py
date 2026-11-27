@@ -500,6 +500,35 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual(header["WBR"], 2)
             self.assertEqual(header["WBG"], 1)
             self.assertEqual(header["WBB"], 1.5)
+            self.assertNotIn("CCD-TEMP", header)
+
+    def test_conversion_records_the_sensor_temperature_from_the_maker_notes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "light.CR2"
+            source.touch()
+            tags = {"EXIF DateTimeOriginal": "2026:11:26 19:43:26", "EXIF ExposureTime": "5",
+                    "MakerNote CameraTemperature": "26 C"}
+            for side_effect, expected in [
+                ([tags], 26),
+                # Unreadable maker notes fall back to the plain EXIF tags
+                ([ValueError("bad maker note"), {key: tags[key] for key in list(tags)[:2]}], None),
+                ([{**tags, "MakerNote CameraTemperature": "250 C"}], None),
+            ]:
+                with self.subTest(expected=expected), \
+                        patch.object(conversion.rawpy, "imread") as imread, \
+                        patch.object(conversion.exifread, "process_file", side_effect=side_effect) as process, \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    raw = imread.return_value.__enter__.return_value
+                    raw.raw_image_visible = np.full((20, 20), 123, dtype=np.uint16)
+                    raw.black_level_per_channel = [100] * 4
+                    raw.white_level = 4095
+                    raw.color_desc = b"RGBG"
+                    raw.raw_colors_visible = np.tile([[0, 1], [3, 2]], (10, 10))
+                    raw.daylight_whitebalance = [2, 1, 1.5, 0]
+                    result = conversion.convert(source, ZoneInfo("UTC"))
+                self.assertTrue(process.call_args_list[0].kwargs["details"])
+                self.assertEqual(fits.getheader(result).get("CCD-TEMP"), expected)
+                self.assertEqual("Sensor:   26 °C" in output.getvalue(), expected == 26)
 
 if __name__ == "__main__":
     unittest.main()
