@@ -35,9 +35,9 @@ from astrophoto.lib.system import CpuUsage, acpi_temperature, memory_percent
 
 DEFAULTS = {"host": "0.0.0.0", "port": "8000"}
 ZOOMS = (1, 5, 10)
-# Seconds between camera and disk status checks
-STATUS_INTERVAL = 30
-# Seconds between readings of the computer's CPU, memory and temperature, which cost nothing to read
+# Seconds between checks of the camera model and battery, which only matter on battery power
+STATUS_INTERVAL = 600
+# Seconds between readings of the computer's CPU, memory, temperature and free disk space, which cost nothing
 SYSTEM_INTERVAL = 5
 # Seconds between keep-alive comments on an idle event stream
 KEEPALIVE = 15
@@ -311,7 +311,8 @@ class App:
             self.check_system(cpu, root)
 
     def check_system(self, cpu, root="/"):
-        self.hub.publish("system", cpu=cpu.percent(), memory=memory_percent(root), temperature=acpi_temperature(root))
+        self.hub.publish("system", cpu=cpu.percent(), memory=memory_percent(root), temperature=acpi_temperature(root),
+                         disk_free=shutil.disk_usage(self.root).free)
 
     def check_status(self):
         model = battery = None
@@ -325,8 +326,7 @@ class App:
         if busy:
             # The camera is in use, so keep what was last known of it
             model, battery = previous.get("camera"), previous.get("battery")
-        free = shutil.disk_usage(Path.cwd()).free
-        self.hub.publish("status", camera=model, battery=battery, disk_free=free, busy=busy)
+        self.hub.publish("status", camera=model, battery=battery, busy=busy)
 
     # Focus
 

@@ -451,9 +451,9 @@ const handlers = {
     $("camera").textContent = event.camera || (config && config.camera ? `${config.camera} not found` : "No camera");
     $("link").classList.toggle("on", Boolean(event.camera));
     $("battery").textContent = event.battery || "–";
-    $("disk").textContent = bytes(event.disk_free);
   },
   system(event) {
+    $("disk").textContent = bytes(event.disk_free);
     $("cpu").textContent = event.cpu === null ? "–" : `${event.cpu}%`;
     $("memory").textContent = event.memory === null ? "–" : `${event.memory}%`;
     // Not every computer has an ACPI temperature sensor

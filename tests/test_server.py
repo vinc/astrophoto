@@ -152,7 +152,7 @@ class ServerTests(ServerCase):
         self.assertEqual(self.app.hub.logs[-1]["text"], "Autofocus failed: Error: No camera found.")
 
     def test_events_stream_replays_the_latest_state(self):
-        self.app.hub.publish("status", camera="Canon EOS 600D", battery="75%", disk_free=10**10, busy=False)
+        self.app.hub.publish("status", camera="Canon EOS 600D", battery="75%", busy=False)
         self.app.hub.publish("error", message="old")
         self.app.hub.log("hello")
         with urlopen(self.base + "/api/events", timeout=10) as response:
@@ -174,7 +174,6 @@ class ServerTests(ServerCase):
             self.app.check_status()
         status = self.latest("status")
         self.assertEqual((status["camera"], status["battery"], status["busy"]), ("Canon EOS 600D", "75%", False))
-        self.assertGreater(status["disk_free"], 0)
         held = threading.Event()
         release = threading.Event()
 
@@ -209,6 +208,7 @@ class ServerTests(ServerCase):
         self.app.check_system(cpu, root)
         event = self.latest("system")
         self.assertEqual((event["cpu"], event["memory"], event["temperature"]), (50, 40, 36))
+        self.assertGreater(event["disk_free"], 0)
 
     def test_live_view_requests_are_refused_without_live_view(self):
         self.start(camera.CAMERAS["Canon EOS 20D"])
