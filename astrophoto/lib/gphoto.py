@@ -1,5 +1,9 @@
+import os
 import subprocess
 import sys
+
+# Setting choices such as "Near 1" are translated, so gphoto2 always runs untranslated
+ENGLISH = dict(os.environ, LC_ALL="C", LANG="C", LANGUAGE="C")
 
 # gphoto2 half-presses the shutter first, so a lens on AF refocuses and fails to lock on a dark sky
 NO_FOCUS_HINT = (
@@ -10,7 +14,7 @@ NO_FOCUS_HINT = (
 def run_gphoto2(command, **kwargs):
     """Run gphoto2, passing its errors through and explaining a failed autofocus."""
     try:
-        result = subprocess.run(command, check=True, stderr=subprocess.PIPE, text=True, **kwargs)
+        result = subprocess.run(command, check=True, stderr=subprocess.PIPE, text=True, env=ENGLISH, **kwargs)
     except FileNotFoundError:
         raise SystemExit("gphoto2 not found")
     except subprocess.CalledProcessError as exc:

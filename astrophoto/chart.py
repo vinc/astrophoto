@@ -9,7 +9,7 @@ from matplotlib import patheffects
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy import units as u
-from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_body, get_constellation
+from astropy.coordinates import AltAz, EarthLocation, SkyCoord, UnitSphericalRepresentation, get_body, get_constellation
 from astropy.io import fits
 from astropy.time import Time
 from astropy.utils import iers
@@ -226,7 +226,9 @@ def horizon_and_moon(observer, time):
     # Bundled Earth rotation data is accurate enough for a chart
     with iers.conf.set_temp("auto_download", False), iers.conf.set_temp("auto_max_age", None):
         horizon = SkyCoord(az=np.linspace(0, 360, 361) * u.deg, alt=np.zeros(361) * u.deg, frame=frame).icrs
-        moon = get_body("moon", time, location).icrs
+        moon = get_body("moon", time, location)
+        # With its distance, the conversion would move the viewpoint to the barycentre, far off for the Moon
+        moon = SkyCoord(moon.frame.realize_frame(moon.represent_as(UnitSphericalRepresentation))).icrs
     return (horizon.ra.deg, horizon.dec.deg), (float(moon.ra.deg), float(moon.dec.deg))
 
 def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=None, title=None, images=None,

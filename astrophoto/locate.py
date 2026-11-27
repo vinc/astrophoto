@@ -113,20 +113,27 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
     marker.unlink(missing_ok=True)
     config = directory / "astrometry.cfg"
     config.write_text(f"add_path {DATA}\nautoindex\n")
-    try:
-        subprocess.run([
-            "solve-field", "--backend-config", str(config),
-            *scale_options(header, scale_low, scale_high, camera),
-            *([] if near is None else ["--ra", str(near[0]), "--dec", str(near[1]), "--radius", str(near[2])]),
-            "--downsample", "2",
-            "--no-plots", "--overwrite", "--cpulimit", str(cpu_limit),
-            "--dir", str(directory), "--new-fits", str(output),
-            "--solved", str(marker), str(path),
-        ], check=True)
-    except FileNotFoundError:
-        raise SystemExit("solve-field not found")
-    except subprocess.CalledProcessError as exc:
-        raise PlateSolveError(f"Plate solving failed with exit status {exc.returncode}") from exc
+    width = ["--scale-units", "degwidth", "--scale-low", str(scale_low), "--scale-high", str(scale_high)]
+    hinted = scale_options(header, scale_low, scale_high, camera)
+    # A wrong focal length or pixel size in the metadata would exclude the right scale, so retry with the width range
+    for scale in [hinted] if hinted == width else [hinted, width]:
+        marker.unlink(missing_ok=True)
+        try:
+            subprocess.run([
+                "solve-field", "--backend-config", str(config),
+                *scale,
+                *([] if near is None else ["--ra", str(near[0]), "--dec", str(near[1]), "--radius", str(near[2])]),
+                "--downsample", "2",
+                "--no-plots", "--overwrite", "--cpulimit", str(cpu_limit),
+                "--dir", str(directory), "--new-fits", str(output),
+                "--solved", str(marker), str(path),
+            ], check=True)
+        except FileNotFoundError:
+            raise SystemExit("solve-field not found")
+        except subprocess.CalledProcessError as exc:
+            raise PlateSolveError(f"Plate solving failed with exit status {exc.returncode}") from exc
+        if marker.exists() and output.exists():
+            break
     if not marker.exists() or not output.exists():
         if not any(DATA.glob("index-*.fits")):
             raise PlateSolveError(f"Plate solving failed; no astrometry.net index files in {DATA}, run 'astrophoto download'")

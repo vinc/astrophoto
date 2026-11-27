@@ -38,18 +38,21 @@ def hfr_text(hfr, path, camera):
     if Path(path).suffix.lower() in {".jpg", ".jpeg"}:
         return text
     try:
-        model, focal = image_optics(path)
+        model, focal, binning = image_optics(path)
     except (OSError, ValueError, KeyError):
         return text
     camera = CAMERAS.get(model, camera)
     if camera is not None and focal is not None:
-        text += f' ({hfr * pixel_scale(camera, focal):.1f}")'
+        text += f' ({hfr * pixel_scale(camera, focal, binning):.1f}")'
     return text
 
-def measure_stars(data, saturated=None, radius=12, max_stars=20):
+def noise_floor(path):
+    """Return the smallest noise to assume for an image: a dark 8-bit live-view frame can show none at all."""
+    return 0.5 if Path(path).suffix.lower() in {".jpg", ".jpeg"} else 0.0
+
+def measure_stars(data, saturated=None, radius=12, max_stars=20, min_noise=0.0):
     background, _, noise = sigma_clipped_stats(data)
-    # A dark 8-bit live-view frame can have no measurable noise at all
-    noise = max(float(noise), 0.5)
+    noise = max(float(noise), min_noise)
     inner = data[1:-1, 1:-1]
     peaks = np.isfinite(inner) & (inner > background + 8 * noise)
     for dy in range(3):
@@ -126,10 +129,10 @@ def measure_stars(data, saturated=None, radius=12, max_stars=20):
         raise FocusRangeError("HFR out of range: improve rough focus or increase --radius")
     return stars
 
-def frame_hfr(data, saturated, scale, radius):
+def frame_hfr(data, saturated, scale, radius, min_noise=0.0):
     """Return the stars and median HFR of a frame, with a title describing the measurement."""
     try:
-        stars = measure_stars(data, saturated, radius=radius)
+        stars = measure_stars(data, saturated, radius=radius, min_noise=min_noise)
     except FocusRangeError as exc:
         return [], None, str(exc)
     if not stars:
@@ -224,7 +227,7 @@ def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False
             with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
                 path = live_preview(temporary, zoom, drive=drive if sample == 0 else 0, step=step, iso=iso)
                 data, saturated, scale = read_image(path)
-            stars, hfr, problem = frame_hfr(data, saturated, scale, radius)
+            stars, hfr, problem = frame_hfr(data, saturated, scale, radius, noise_floor(path))
             if hfr is not None:
                 readings.append((hfr, data, stars))
         if not readings:
@@ -255,7 +258,13 @@ def autofocus(span, step, zoom, radius, iso=None, figure=None, interactive=False
     target = int(round(target))
     move_focus(-(span - target + BACKLASH), step)
     move_focus(BACKLASH, step)
-    data, stars, hfr, title = measure(target, 0)
+    # The lens is at the minimum; a frame or two may still miss the stars, so check a few times before giving up
+    for _ in range(3):
+        data, stars, hfr, title = measure(target, 0)
+        if hfr is not None:
+            break
+    else:
+        raise SystemExit(f"Moved to step {target:+d} of the scan, but could not measure the focus there")
     print(f"Focused at step {target:+d} of the scan", flush=True)
     if figure is not None:
         history = list(zip(positions, hfrs))
@@ -292,6 +301,8 @@ def main():
     settings = command_settings(parser, "focus", DEFAULTS)
     settings.update({key: getattr(args, key) for key in DEFAULTS if getattr(args, key) is not None})
     camera = camera_profile(parser)
+    if (args.live or args.auto) and camera is not None and not camera.live_view:
+        parser.error(f"--live and --auto need live view, which the {camera.name} does not have")
     if args.radius is None:
         args.radius = default_radius(camera)
     if args.interval < 0 or args.frames < 0:
@@ -355,7 +366,7 @@ def main():
                         time.sleep(max(args.interval, 0.1))
                     continue
                 data, saturated, scale = read_image(path)
-                stars, hfr, title = frame_hfr(data, saturated, scale, args.radius)
+                stars, hfr, title = frame_hfr(data, saturated, scale, args.radius, noise_floor(path))
                 if stars:
                     best = min(best, hfr)
                     title = f"{hfr_text(hfr, path, camera)} | {len(stars)} stars"

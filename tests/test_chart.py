@@ -403,6 +403,18 @@ class OverlayTests(unittest.TestCase):
         # Only the chart pixels within three image pixels of the centre are really there, not the whole chart
         self.assertLess((canvas[..., 3] > 0).sum(), 100)
 
+    def test_the_moon_is_plotted_where_the_observer_sees_it(self):
+        from astropy import units as u
+        from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_body
+        time = Time("2026-12-17T22:00:00")
+        observer = {"lon": -1.83, "lat": 51.18, "elevation": 0.1}
+        _, (ra, dec) = chart.horizon_and_moon(observer, time)
+        location = EarthLocation.from_geodetic(-1.83 * u.deg, 51.18 * u.deg, 0.1 * u.km)
+        frame = AltAz(obstime=time, location=location)
+        seen = get_body("moon", time, location).transform_to(frame)
+        plotted = SkyCoord(ra * u.deg, dec * u.deg).transform_to(frame)
+        self.assertLess(seen.separation(plotted).deg, 0.1)
+
     def test_the_horizon_and_moon_are_placed_in_the_sky(self):
         time = Time("2026-11-26T18:50:00")
         (ra, dec), moon = chart.horizon_and_moon({"lon": 2.3, "lat": 48.8, "elevation": 0.1}, time)

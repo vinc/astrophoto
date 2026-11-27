@@ -33,11 +33,14 @@ def pixel_scale(camera, focal_length, binning=1):
     return 206.265 * camera.pixel_size * binning / focal_length
 
 def image_optics(path):
-    """Return the camera model and focal length in mm recorded in a RAW or FITS image."""
+    """Return the camera model, focal length in mm, and pixel binning recorded in a RAW or FITS image."""
     path = Path(path)
+    binning = 1
     if path.suffix.lower() in {".fit", ".fits", ".new"}:
         header = fits.getheader(path)
         model, focal = header.get("INSTRUME"), header.get("FOCALLEN")
+        # Stacks are binned 2x2, including those made before they recorded it
+        binning = header.get("XBINNING", 2 if "NCOMBINE" in header or "STACKMTH" in header else 1)
     else:
         with path.open("rb") as file:
             tags = exifread.process_file(file, details=False)
@@ -45,7 +48,7 @@ def image_optics(path):
         model = None if model is None else str(model).strip()
         focal = None if focal is None else float(Fraction(str(focal)))
     focal = float(focal) if isinstance(focal, (int, float)) and focal > 0 else None
-    return model, focal
+    return model, focal, binning
 
 def preview_figure(**kwargs):
     help_text = (

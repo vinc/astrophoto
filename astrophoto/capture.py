@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 
-from astrophoto.lib.gphoto import NO_FOCUS_HINT
+from astrophoto.lib.gphoto import ENGLISH, NO_FOCUS_HINT
 from astrophoto.lib.config import read_config
 
 KINDS = ("light", "dark", "flat")
@@ -56,7 +56,7 @@ def capture_settings(parser, kind, options):
 def files_on_card():
     """Return the number of files in each camera folder that holds any."""
     # Quiet mode lists one path per file, without the translated folder headers
-    result = subprocess.run(["gphoto2", "--quiet", "--list-files"], stdout=subprocess.PIPE, text=True)
+    result = subprocess.run(["gphoto2", "--quiet", "--list-files"], stdout=subprocess.PIPE, text=True, env=ENGLISH)
     if result.returncode:
         raise SystemExit(result.returncode)
     folders = {}
@@ -69,7 +69,7 @@ def files_on_card():
 
 
 def run(command):
-    result = subprocess.run(command, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(command, stderr=subprocess.PIPE, text=True, env=ENGLISH)
     sys.stderr.write(result.stderr or "")
     if result.returncode:
         if "no focus" in (result.stderr or "").lower():

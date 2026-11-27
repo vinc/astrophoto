@@ -410,6 +410,80 @@ class PreviewWindowTests(unittest.TestCase):
             camera.preview_figure()
 
 
+class ReviewFixTests(ConfiguredTests):
+    def test_gphoto2_always_runs_untranslated(self):
+        result = subprocess.CompletedProcess([], 0, "", "")
+        with patch.object(gphoto.subprocess, "run", return_value=result) as run:
+            gphoto.run_gphoto2(["gphoto2", "--set-config", "manualfocusdrive=Near 1"])
+        self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C")
+        self.assertEqual(run.call_args.kwargs["env"]["LANGUAGE"], "C")
+        with patch.object(capture_command.subprocess, "run", return_value=result) as run:
+            capture_command.run(["gphoto2", "--capture-image"])
+        self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C")
+
+    def test_a_wrong_metadata_scale_falls_back_to_the_configured_width(self):
+        from tests.test_solver import solve
+        calls = []
+
+        def solver(command, **kwargs):
+            calls.append(command[command.index("--scale-units") + 1])
+            # The first, metadata-based attempt finds nothing
+            return None if len(calls) == 1 else solve(command, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "frame.fit"
+            header = fits.Header({"DATE-AVG": "2025-01-01T00:00:00", "RAWFILE": "IMG_1.CR2",
+                                  "INSTRUME": "Canon EOS 600D", "FOCALLEN": 300.0})
+            fits.writeto(source, np.zeros((20, 30)), header)
+            with patch.object(locate.subprocess, "run", side_effect=solver):
+                locate.solve_image(source, temporary, None, 3, 50)
+        self.assertEqual(calls, ["arcsecperpix", "degwidth"])
+
+    def test_autofocus_fails_when_the_final_position_cannot_be_measured(self):
+        class Clouded(FakeCamera):
+            """Shows stars during the scan, then only empty sky."""
+
+            def frame(self):
+                previews = sum("--capture-preview" in command for command in self.commands)
+                return super().frame() if previews <= 9 else np.full((400, 600), 20, dtype=np.uint8)
+
+        fake = Clouded(best=1)
+        argv = ["focus.py", "--auto", "--no-plot", "--step", "1", "--span", "4", "--samples", "1"]
+        with patch.object(sys, "argv", argv), patch.object(gphoto.subprocess, "run", side_effect=fake), \
+                contextlib.redirect_stdout(io.StringIO()) as output, \
+                self.assertRaisesRegex(SystemExit, "could not measure the focus there"):
+            focus.main()
+        self.assertNotIn("Focused at", output.getvalue())
+
+    def test_stack_hfr_in_arcseconds_uses_the_binned_pixels(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "stack.fit"
+            for extra in [{"NCOMBINE": 24}, {"NCOMBINE": 24, "XBINNING": 2}]:
+                fits.writeto(path, np.zeros((4, 4)), fits.Header({"INSTRUME": "Canon EOS 600D", "FOCALLEN": 300.0, **extra}),
+                             overwrite=True)
+                # 2.36 binned pixels of 8.6 micrometres at 300 mm
+                self.assertEqual(focus.hfr_text(2.36, path, None), 'HFR 2.36 px (14.0")')
+
+    def test_normalized_fits_keeps_its_stars(self):
+        from tests.test_helpers import star_field
+        image = (star_field(1.5) - 100) / 1000
+        self.assertEqual(focus.noise_floor(Path("frame.fit")), 0.0)
+        self.assertEqual(focus.noise_floor(Path("thumb_preview.jpg")), 0.5)
+        self.assertGreater(len(focus.measure_stars(image)), 0)
+        self.assertEqual(focus.measure_stars(image, min_noise=0.5), [])
+
+    def test_live_view_is_refused_on_a_camera_without_it(self):
+        self.path.write_text('camera = "Canon EOS 20D"\n')
+        for option in ["--live", "--auto"]:
+            with self.subTest(option=option), patch.object(sys, "argv", ["focus.py", option, "--no-plot"]), \
+                    patch.object(gphoto.subprocess, "run") as run, \
+                    contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as raised:
+                focus.main()
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("Canon EOS 20D does not have", err.getvalue())
+            run.assert_not_called()
+
+
 class NoFocusTests(unittest.TestCase):
     def test_failed_autofocus_explains_the_fix(self):
         error = subprocess.CalledProcessError(1, "gphoto2", stderr="Canon EOS Capture failed to release: Perhaps no focus?\n")
