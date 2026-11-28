@@ -15,6 +15,7 @@
     --good: #5fbf7f;
     --bad: #e06c6c;
     --warn: #e0b45a;
+    --stripe: #1b2026;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
@@ -92,6 +93,8 @@
   th, td { padding: 5px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
   th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; }
   td.number, th.number { text-align: right; }
+  /* Alternate rows, sticky label cells included, so the eye keeps to a row across the table */
+  table.striped tbody tr:nth-child(even) td { background: var(--stripe); }
   td.stacked { color: var(--good); }
   td.problem { color: var(--bad); }
   td.waiting { color: var(--muted); }
@@ -159,7 +162,7 @@
     </div>
     <div class="title" id="weather-title"></div>
     <div class="table-wrap" id="weather-wrap" hidden>
-      <table class="forecast"><tbody id="weather-rows"></tbody></table>
+      <table class="forecast striped"><tbody id="weather-rows"></tbody></table>
     </div>
   </section>
   <section id="visible">
@@ -177,7 +180,7 @@
     <div class="title" id="visible-title"></div>
     <div class="report" id="visible-report"></div>
     <div class="table-wrap" id="visible-wrap" hidden>
-      <table>
+      <table class="striped">
         <thead><tr><th>Name</th><th class="number">Mag</th><th class="number">Alt</th><th class="number">Az</th><th class="number">RA</th><th class="number">Dec</th><th class="number">Elong</th><th>Type</th></tr></thead>
         <tbody id="visible-rows"></tbody>
       </table>
