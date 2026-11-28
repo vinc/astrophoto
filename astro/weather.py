@@ -33,6 +33,7 @@ WINDY = 6  # Gusts in m/s that shake a tripod at long focal lengths
 DEW_SPREAD = 2  # The lens cools below the air on clear nights, so dew forms early
 COLORS = {"red": "\033[31m", "yellow": "\033[33m", "green": "\033[32m"}
 RESET = "\033[0m"
+DEFAULT_MODEL = "meteofrance_seamless"  # AROME then ARPEGE
 
 
 def parse_time(text, now=None):
@@ -146,11 +147,9 @@ def row(label, cells):
     return (f"{label:<{LABEL}}" + "".join(f"{cell} " for cell in cells)).rstrip()
 
 
-def table(times, values, color=False):
-    hours = [f"{time.hour:>{CELL - 1}}" for time in times]
-    if color:
-        hours = [f"{COLORS[name]}{hour}{RESET}" if name else hour for hour, name in zip(hours, ratings(values))]
-    groups = [
+def rows(values):
+    """Groups of labelled rows of cell texts, in the order the table shows them"""
+    return [
         [
             ("Cloud (%)", [integer(value) for value in values["cloud_cover"]]),
             ("High (%)", [integer(value) for value in values["cloud_cover_high"]]),
@@ -167,12 +166,33 @@ def table(times, values, color=False):
         ],
         [("Rain (mm)", [rain(value) for value in values["precipitation"]])],
     ]
+
+
+def table(times, values, color=False):
+    hours = [f"{time.hour:>{CELL - 1}}" for time in times]
+    if color:
+        hours = [f"{COLORS[name]}{hour}{RESET}" if name else hour for hour, name in zip(hours, ratings(values))]
     separator = "-" * (LABEL + CELL * len(times) - 1)
     lines = [date_line(times), row("Time (h)", hours)]
-    for group in groups:
+    for group in rows(values):
         lines.append(separator)
         lines += [row(label, (f"{cell:>{CELL - 1}}" for cell in cells)) for label, cells in group]
     return lines
+
+
+def night_forecast(latitude, longitude, elevation, start, model=DEFAULT_MODEL, update=False):
+    """Hourly forecast for the first night from a UTC start hour, as times and values"""
+    location = EarthLocation.from_geodetic(longitude * u.deg, latitude * u.deg, elevation * u.m)
+    hours = [start + timedelta(hours=hour) for hour in range(MAX_HOURS)]
+    night = first_night(sun_altitude(hours, location))
+    if night.start == night.stop:
+        raise SystemExit(f"The Sun stays above {NIGHT}° in the next {MAX_HOURS} hours")
+    times, values = fetch_forecast(
+        latitude, longitude, elevation, hours[night.start], night.stop - night.start, model, update,
+    )
+    if not times:
+        raise SystemExit(f"No forecast for this night from the {model} model")
+    return times, values
 
 
 def main():
@@ -183,24 +203,12 @@ def main():
     parser.add_argument("--time", help='Local time in ISO format or words like "tomorrow night" (default: now)')
     parser.add_argument("--update", action="store_true",
                         help=f"Download a fresh forecast even if one less than {MAX_AGE.total_seconds() / 60:.0f} minutes old is cached")
-    parser.add_argument("--model", default="meteofrance_seamless",
+    parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Open-Meteo weather model (default: meteofrance_seamless, AROME then ARPEGE)")
     args = parser.parse_args()
 
     start = parse_time(args.time)
-    location = EarthLocation.from_geodetic(
-        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.m,
-    )
-    hours = [start + timedelta(hours=hour) for hour in range(MAX_HOURS)]
-    night = first_night(sun_altitude(hours, location))
-    if night.start == night.stop:
-        raise SystemExit(f"The Sun stays above {NIGHT}° in the next {MAX_HOURS} hours")
-    times, values = fetch_forecast(
-        args.latitude, args.longitude, args.elevation, hours[night.start], night.stop - night.start,
-        args.model, args.update,
-    )
-    if not times:
-        raise SystemExit(f"No forecast for this night from the {args.model} model")
+    times, values = night_forecast(args.latitude, args.longitude, args.elevation, start, args.model, args.update)
 
     try:
         locale.setlocale(locale.LC_TIME, "")

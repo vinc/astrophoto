@@ -101,7 +101,8 @@ astro convert 2026*/*.CR2
 ```
 
 Or run `astro server` and open the address it prints from a phone or
-laptop to focus from a browser.
+laptop to check the weather and the sky, then focus, center, capture and stack
+from a browser.
 
 ### After a session
 

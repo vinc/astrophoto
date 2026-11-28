@@ -1,7 +1,7 @@
 import argparse
 from collections import deque
 import contextlib
-from datetime import datetime
+from datetime import datetime, timezone
 import io
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,7 +16,7 @@ import sys
 import tempfile
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 import warnings
 
 from astropy.io import fits
@@ -24,7 +24,7 @@ from matplotlib import image as mpimage, style
 from matplotlib.figure import Figure
 import numpy as np
 
-from astro import capture as capture_command, center, convert, focus, stack
+from astro import capture as capture_command, center, convert, focus, stack, visible, weather
 from astro.capture import DEFAULTS as CAPTURE_DEFAULTS, KINDS, TARGETS, capture_series, series_directory
 from astro.lib.camera import capture, display_limits, live_preview, move_focus, stack_display_limits
 from astro.lib.catalog import AmbiguousObject
@@ -34,6 +34,7 @@ from astro.lib.config import (
 from astro.locate import PlateSolveError
 from astro.lib.gphoto import ENGLISH, FOCUS_STEPS, camera_lock
 from astro.lib.livestack import LiveStack
+from astro.lib.localtime import parse_local_time
 from astro.lib.system import CpuUsage, acpi_temperature, memory_percent
 
 DEFAULTS = {"host": "0.0.0.0", "port": "8000"}
@@ -52,6 +53,8 @@ PREVIEW_WIDTH = 1600
 SAVE_INTERVAL = 60
 # Series directories as capture names them, with a number added for a second series in the same minute
 SERIES = re.compile(r"\d{8}-\d{4}-(light|dark|flat)(-\d+)?")
+# What the Visible tab lists unless asked otherwise, as the visible command does
+VISIBLE_DEFAULTS = {"limit": 10.0, "min_altitude": 10.0}
 
 
 class RequestError(ValueError):
@@ -323,6 +326,9 @@ class App:
         self.series = None
         self.live = None
         self.saved = 0.0
+        # Forecasts and orbital elements are cached in files, which one request at a time keeps whole
+        self.weather_lock = threading.Lock()
+        self.visible_lock = threading.Lock()
         self.processor = threading.Thread(target=self.process_frames, daemon=True)
         self.processor.start()
 
@@ -342,6 +348,9 @@ class App:
             },
             "capture": self.capture_settings,
             "stack": self.stack_settings,
+            "observer": self.observer is not None,
+            "weather": {"model": weather.DEFAULT_MODEL},
+            "visible": VISIBLE_DEFAULTS,
             "kinds": KINDS,
             "targets": list(TARGETS),
             "zooms": ZOOMS,
@@ -760,6 +769,52 @@ class App:
         self.hub.publish("calibrated", directory=lights, file=f"{prefix}-stack.fit", image=image,
                          darks=darks, flats=flats, rgb=options["rgb"], deband=options["deband"])
 
+    # Weather and visible bodies
+
+    def observer_position(self):
+        """Latitude and longitude in degrees and elevation in meters, as the weather and visible commands take"""
+        if self.observer is None:
+            raise RequestError("Set latitude, longitude and elevation in config.toml to see the weather and the sky")
+        return self.observer["lat"], self.observer["lon"], self.observer["elevation"] * 1000
+
+    def weather(self, query):
+        position = self.observer_position()
+        text_time = query_time(query)
+        start = parse_time_text(text_time) if text_time else datetime.now().astimezone()
+        start = start.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        model = query.get("model", "").strip() or weather.DEFAULT_MODEL
+        with self.weather_lock:
+            times, values = run_command(weather.night_forecast, *position, start, model, flag(query, "update"))
+        times = [time.astimezone() for time in times]
+        return {
+            "model": model,
+            "hours": [
+                {"time": time.isoformat(), "hour": time.hour, "date": f"{time:%a %d}", "rating": rating}
+                for time, rating in zip(times, weather.ratings(values))
+            ],
+            "groups": [[{"label": label, "cells": cells} for label, cells in group] for group in weather.rows(values)],
+        }
+
+    def visible(self, query):
+        position = self.observer_position()
+        text_time = query_time(query)
+        start = parse_time_text(text_time) if text_time else datetime.now().astimezone()
+        limit = query_number(query, "limit", VISIBLE_DEFAULTS["limit"])
+        min_altitude = query_number(query, "min_altitude", VISIBLE_DEFAULTS["min_altitude"])
+        if not -90 <= min_altitude <= 90:
+            raise RequestError("min_altitude must be from -90 to 90 degrees")
+        with self.visible_lock:
+            report = run_command(visible.sky_report, *position, start, limit, min_altitude, flag(query, "update"))
+        local = report["time"].astimezone()
+        return {
+            **report,
+            "time": local.isoformat(),
+            "label": f"{local:%Y-%m-%d %H:%M %Z}",
+            "limit": limit,
+            "min_altitude": min_altitude,
+            "bodies": [{**body, "compass": visible.compass(body["az"])} for body in report["bodies"]],
+        }
+
     def stop(self, body):
         name = self.jobs.stop()
         return {"ok": True, "stopped": name}
@@ -810,6 +865,43 @@ def text(body, key, default):
     return str(value)
 
 
+def query_time(query):
+    value = query.get("time", "").strip()
+    return value or None
+
+
+def parse_time_text(value):
+    try:
+        return parse_local_time(value)
+    except SystemExit as exc:
+        raise RequestError(str(exc)) from exc
+
+
+def query_number(query, key, default):
+    value = query.get(key, "").strip()
+    if not value:
+        return default
+    try:
+        number = float(value)
+    except ValueError:
+        number = float("nan")
+    if not np.isfinite(number):
+        raise RequestError(f"{key} must be a number")
+    return number
+
+
+def flag(query, key):
+    return query.get(key, "").lower() in ("1", "true", "yes", "on")
+
+
+def run_command(function, *args):
+    """Run what a command does, turning its exit with a message, such as a failed download, into a refusal"""
+    try:
+        return function(*args)
+    except SystemExit as exc:
+        raise RequestError(str(exc), 502) from exc
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "astro"
     protocol_version = "HTTP/1.1"
@@ -835,8 +927,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send(status, json.dumps(value).encode(), "application/json")
 
     def do_GET(self):
-        path = urlsplit(self.path).path
-        if path == "/":
+        url = urlsplit(self.path)
+        path = url.path
+        queries = {"/api/weather": self.app.weather, "/api/visible": self.app.visible}
+        if path in queries:
+            query = {key: values[-1] for key, values in parse_qs(url.query).items()}
+            try:
+                self.send_json(200, queries[path](query))
+            except RequestError as exc:
+                self.send_json(exc.status, {"error": str(exc)})
+        elif path == "/":
             page = resources.files("astro").joinpath("web/index.html").read_bytes()
             self.send(200, page, "text/html; charset=utf-8")
         elif path == "/api/config":

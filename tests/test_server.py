@@ -13,10 +13,12 @@ from urllib.request import Request, urlopen
 import numpy as np
 from astropy.io import fits
 
-from astro import center, convert, server
+from astro import center, convert, server, visible, weather
 from astro.lib import camera, gphoto
 from astro.locate import PlateSolveError
 from tests.test_cameras import FakeCamera
+from tests.test_localtime import local_time_zone
+from tests.test_weather import forecast
 
 
 class ServerCase(unittest.TestCase):
@@ -735,6 +737,92 @@ class LogTests(unittest.TestCase):
             hub.log("Saved frame 1")
         self.assertEqual(hub.logs[-1]["text"], "Saved frame 1")
         self.assertAlmostEqual(hub.logs[-1]["time"], time.time(), delta=5)
+
+
+class SkyTests(ServerCase):
+    """The Weather and Visible tabs, with Open-Meteo and JPL replaced by canned answers."""
+
+    def get_json(self, path):
+        try:
+            with urlopen(self.base + path, timeout=60) as response:
+                return response.status, json.loads(response.read())
+        except HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def test_weather_lists_the_hours_of_the_night_with_ratings(self):
+        cache = tempfile.TemporaryDirectory()
+        self.addCleanup(cache.cleanup)
+        answer = lambda *_, params, **__: forecast(params, cloud_cover=[0, 80], wind_gusts_10m=[3, 3])
+        with local_time_zone("UTC"), patch.object(weather, "CACHE", Path(cache.name)), \
+                patch.object(weather.requests, "get", side_effect=answer) as get:
+            status, result = self.get_json("/api/weather?time=2026-12-21T19:00")
+        self.assertEqual(status, 200)
+        self.assertEqual(get.call_args.kwargs["params"]["elevation"], 100)
+        self.assertEqual(get.call_args.kwargs["params"]["start_hour"], "2026-12-21T19:00")
+        self.assertEqual(result["model"], weather.DEFAULT_MODEL)
+        hours = result["hours"]
+        self.assertEqual([hours[0]["hour"], hours[-1]["hour"]], [19, 6])
+        self.assertEqual([hour["rating"] for hour in hours[:2]], ["green", "red"])
+        self.assertEqual(hours[0]["date"], "Mon 21")
+        labels = [[row["label"] for row in group] for group in result["groups"]]
+        self.assertEqual(labels[0], ["Cloud (%)", "High (%)", "Mid (%)", "Low (%)"])
+        self.assertEqual(result["groups"][0][0]["cells"][:2], ["0", "80"])
+
+    def test_weather_errors_are_reported(self):
+        with patch.object(weather, "night_forecast", side_effect=SystemExit("Open-Meteo request failed: Bad model")):
+            status, result = self.get_json("/api/weather")
+        self.assertEqual(status, 502)
+        self.assertEqual(result["error"], "Open-Meteo request failed: Bad model")
+        status, result = self.get_json("/api/weather?time=not%20a%20time%20at%20all")
+        self.assertEqual(status, 400)
+        self.assertIn("Could not understand the time", result["error"])
+
+    def test_visible_lists_bright_planets_brightest_first(self):
+        data = {"downloaded": "2026-11-07T00:00:00", "asteroids": [], "comets": []}
+        with local_time_zone("Europe/Paris"), patch.object(visible, "load_minor_bodies", return_value=data):
+            status, result = self.get_json("/api/visible?time=2026-11-07T21:11&limit=8")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["label"], "2026-11-07 21:11 CET")
+        self.assertEqual(result["sky"], "dark sky")
+        self.assertEqual((result["limit"], result["min_altitude"]), (8, 10))
+        names = [body["name"] for body in result["bodies"]]
+        self.assertEqual([name for name in names if name in ("Saturn", "Uranus", "Neptune")],
+                         ["Saturn", "Uranus", "Neptune"])
+        magnitudes = [body["mag"] for body in result["bodies"]]
+        self.assertEqual(magnitudes, sorted(magnitudes))
+        saturn = result["bodies"][names.index("Saturn")]
+        self.assertEqual(saturn["compass"], visible.compass(saturn["az"]))
+        self.assertIsNone(result["warning"])
+
+    def test_a_failed_orbit_update_is_reported_with_the_cached_report(self):
+        cache = tempfile.TemporaryDirectory()
+        self.addCleanup(cache.cleanup)
+        path = Path(cache.name) / "minor-bodies.json"
+        path.write_text(json.dumps({"downloaded": "2026-11-07T00:00:00", "asteroids": [], "comets": []}))
+        error = visible.requests.ConnectionError("offline")
+        with patch.object(visible, "CACHE", path), patch.object(visible, "download_minor_bodies", side_effect=error):
+            status, result = self.get_json("/api/visible?time=2026-11-07T21:11&update=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["downloaded"], "2026-11-07T00:00:00")
+        self.assertEqual(result["warning"], "Could not update orbital elements: offline")
+
+    def test_visible_requests_are_validated(self):
+        for query, message in [("limit=bright", "limit must be a number"),
+                               ("min_altitude=95", "min_altitude must be from -90 to 90")]:
+            with self.subTest(query=query):
+                status, result = self.get_json(f"/api/visible?{query}")
+                self.assertEqual(status, 400)
+                self.assertIn(message, result["error"])
+
+    def test_weather_and_visible_need_the_observer_position(self):
+        self.start(camera.CAMERAS["Canon EOS 600D"], observer=None)
+        for path in ("/api/weather", "/api/visible"):
+            with self.subTest(path=path):
+                status, result = self.get_json(path)
+                self.assertEqual(status, 400)
+                self.assertIn("Set latitude, longitude and elevation", result["error"])
+        _, _, body = self.get("/api/config")
+        self.assertFalse(json.loads(body)["observer"])
 
 
 class AddressTests(unittest.TestCase):

@@ -185,6 +185,9 @@ class ChartTests(unittest.TestCase):
             self.assertTrue(np.all(chart.inside(np.asarray(x), np.asarray(y))))
         with warnings.catch_warnings():
             warnings.simplefilter("error")
+            # On some CI machines, astropy's tick label formatter raises numpy's invalid value warning for plain
+            # angles like -30 degrees, from the same packages that pass elsewhere; it says nothing of the chart
+            warnings.filterwarnings("ignore", "invalid value encountered in do_format", RuntimeWarning)
             self.render(outlines, labels=["a", "b"])
 
     def test_images_all_over_the_sky_fail_clearly(self):

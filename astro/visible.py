@@ -74,7 +74,10 @@ def load_minor_bodies(update):
         except requests.RequestException as exc:
             if cached is None:
                 raise SystemExit(f"No cached orbital elements and download failed: {exc}")
-            print(f"Could not update orbital elements: {exc}", file=sys.stderr)
+            warning = f"Could not update orbital elements: {exc}"
+            print(warning, file=sys.stderr)
+            # Kept with the cached elements, so a report made from them can say they are not fresh
+            return {**cached, "warning": warning}
         else:
             CACHE.parent.mkdir(parents=True, exist_ok=True)
             tmp = CACHE.with_suffix(".tmp")
@@ -271,23 +274,27 @@ def moon_phase(sun, moon):
     return phase_name(angle), fraction
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="List Solar System bodies above the horizon, brightest first"
+def sky_name(altitude):
+    return (
+        "daylight" if altitude > -0.8 else
+        "civil twilight" if altitude > -6 else
+        "nautical twilight" if altitude > -12 else
+        "astronomical twilight" if altitude > -18 else "dark sky"
     )
-    add_observer_arguments(parser)
-    parser.add_argument("--time", help='Local time in ISO format or words like "tonight" (default: now)')
-    parser.add_argument("--limit", type=float, default=10, help="Faintest magnitude to list (default: 10)")
-    parser.add_argument("--min-altitude", type=float, default=10, help="Lowest altitude in degrees (default: 10)")
-    parser.add_argument("--update", action="store_true", help="Download fresh orbital elements from JPL")
-    args = parser.parse_args()
 
-    location = EarthLocation.from_geodetic(
-        args.longitude * u.deg, args.latitude * u.deg, args.elevation * u.m,
-    )
-    start = parse_local_time(args.time) if args.time else datetime.now(timezone.utc)
+
+def compass(azimuth):
+    return COMPASS[int((azimuth + 11.25) // 22.5) % 16]
+
+
+def sky_report(latitude, longitude, elevation, start, limit=10, min_altitude=10, update=False):
+    """The Sun, the Moon and the bodies brighter than a limit above an altitude, brightest first
+
+    The time is the start itself when it is dark, or else the start of the next night.
+    """
+    location = EarthLocation.from_geodetic(longitude * u.deg, latitude * u.deg, elevation * u.m)
     time = Time(night_start(start.replace(second=0, microsecond=0), location))
-    data = load_minor_bodies(args.update)
+    data = load_minor_bodies(update)
 
     # Bundled Earth rotation data is plenty for this, even when slightly out of date
     with iers.conf.set_temp("auto_download", False), \
@@ -299,30 +306,53 @@ def main():
         phase, illuminated = moon_phase(sun_sky, moon_sky)
         bodies = [
             body for body in major_bodies(time, location, frame) + minor_bodies(data, time, frame)
-            if body["mag"] <= args.limit and body["alt"] >= args.min_altitude
+            if body["mag"] <= limit and body["alt"] >= min_altitude
         ]
+    return {
+        "time": time.to_datetime(timezone.utc),
+        "sun": float(sun.alt.deg),
+        "sky": sky_name(sun.alt.deg),
+        "moon": float(moon.alt.deg),
+        "phase": phase,
+        "illuminated": float(illuminated),
+        "downloaded": data["downloaded"],
+        "age": (Time.now() - Time(data["downloaded"])).jd,
+        "warning": data.get("warning"),
+        "bodies": [
+            {key: float(value) if key not in ("name", "kind") else value for key, value in body.items()}
+            for body in sorted(bodies, key=lambda body: body["mag"])
+        ],
+    }
 
-    sky = (
-        "daylight" if sun.alt.deg > -0.8 else
-        "civil twilight" if sun.alt.deg > -6 else
-        "nautical twilight" if sun.alt.deg > -12 else
-        "astronomical twilight" if sun.alt.deg > -18 else "dark sky"
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="List Solar System bodies above the horizon, brightest first"
     )
-    age = (Time.now() - Time(data["downloaded"])).jd
-    print(f"{time.to_datetime(timezone.utc).astimezone():%Y-%m-%d %H:%M %Z}")
-    print(f"Sun at {sun.alt.deg:.0f} degrees ({sky})")
-    print(f"Moon at {moon.alt.deg:.0f} degrees ({phase}, {illuminated:.0%} illuminated)")
-    days = round(age)
-    print(f"Orbital elements downloaded {data['downloaded'][:10]} ({days} day{'' if days == 1 else 's'} ago)")
+    add_observer_arguments(parser)
+    parser.add_argument("--time", help='Local time in ISO format or words like "tonight" (default: now)')
+    parser.add_argument("--limit", type=float, default=10, help="Faintest magnitude to list (default: 10)")
+    parser.add_argument("--min-altitude", type=float, default=10, help="Lowest altitude in degrees (default: 10)")
+    parser.add_argument("--update", action="store_true", help="Download fresh orbital elements from JPL")
+    args = parser.parse_args()
+
+    start = parse_local_time(args.time) if args.time else datetime.now(timezone.utc)
+    report = sky_report(args.latitude, args.longitude, args.elevation, start, args.limit, args.min_altitude, args.update)
+    bodies = report["bodies"]
+
+    print(f"{report['time'].astimezone():%Y-%m-%d %H:%M %Z}")
+    print(f"Sun at {report['sun']:.0f} degrees ({report['sky']})")
+    print(f"Moon at {report['moon']:.0f} degrees ({report['phase']}, {report['illuminated']:.0%} illuminated)")
+    days = round(report["age"])
+    print(f"Orbital elements downloaded {report['downloaded'][:10]} ({days} day{'' if days == 1 else 's'} ago)")
     if args.limit > ASTEROID_H_LIMIT + 2:
         print(f"Warning: asteroids with H > {ASTEROID_H_LIMIT} are not included", file=sys.stderr)
     print(f"Bodies above {args.min_altitude:g} degrees and brighter than magnitude {args.limit:g}:\n")
     print(f"{'Mag':>5}  {'Alt':>4}  {'Az':>7}  {'RA':>6}  {'Dec':>6}  {'Elong':>5}  {'Type':<8}  Name")
-    for body in sorted(bodies, key=lambda body: body["mag"]):
-        compass = COMPASS[int((body["az"] + 11.25) // 22.5) % 16]
+    for body in bodies:
         ra = body["ra"]
         print(
-            f"{body['mag']:5.1f}  {body['alt']:4.0f}  {body['az']:3.0f} {compass:<3}  "
+            f"{body['mag']:5.1f}  {body['alt']:4.0f}  {body['az']:3.0f} {compass(body['az']):<3}  "
             f"{int(ra):02d}h{int((ra % 1) * 60):02d}m  {body['dec']:+6.1f}  "
             f"{body['elong']:5.0f}  {body['kind']:<8}  {body['name']}"
         )

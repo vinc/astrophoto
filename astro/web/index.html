@@ -14,6 +14,7 @@
     --accent: #5aa9e6;
     --good: #5fbf7f;
     --bad: #e06c6c;
+    --warn: #e0b45a;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
@@ -73,6 +74,7 @@
   .correction { font-size: 22px; font-weight: 600; margin: 4px 0; min-height: 1.4em; }
   .correction.inside { color: var(--good); }
   .report { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: pre-line; }
+  .report.warning { color: var(--warn); }
   .note { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
   .progress { margin: 0 0 10px; }
   .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
@@ -91,9 +93,21 @@
   th, td { padding: 5px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
   th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; }
   td.number, th.number { text-align: right; }
+  /* Alternate rows, sticky label cells included, so the eye keeps to a row across the table */
+  table.striped tbody tr:nth-child(even) td { background: #1b2026; }
   td.stacked { color: var(--good); }
   td.problem { color: var(--bad); }
   td.waiting { color: var(--muted); }
+  .forecast td, .forecast th { text-align: right; padding: 4px 6px; }
+  .forecast th { position: static; }
+  .forecast th:first-child, .forecast td:first-child {
+    text-align: left; position: sticky; left: 0; background: var(--panel); color: var(--muted); font-weight: 500;
+  }
+  .forecast tr.group td { border-top: 2px solid var(--line); }
+  .forecast th.date { text-align: left; color: var(--text); }
+  .forecast .green { color: var(--good); }
+  .forecast .yellow { color: var(--warn); }
+  .forecast .red { color: var(--bad); }
   .view {
     background: #000; color: var(--text); border: 1px solid var(--line); border-radius: 8px; min-height: 120px;
     display: flex; align-items: center; justify-content: center; overflow: hidden;
@@ -128,13 +142,52 @@
   <button class="action" id="night" title="Red light only">Night</button>
 </header>
 <nav>
-  <button class="active" data-tab="focus">Focus</button>
+  <button class="active" data-tab="weather">Weather</button>
+  <button data-tab="visible">Visible</button>
+  <button data-tab="focus">Focus</button>
   <button data-tab="center">Center</button>
   <button data-tab="capture">Capture</button>
   <button data-tab="stack">Stack</button>
 </nav>
 <main>
-  <section id="focus" class="active">
+  <section id="weather" class="active">
+    <p class="note observer-off" hidden>Set latitude, longitude and elevation in config.toml, then restart the server, to see the forecast.</p>
+    <div class="controls">
+      <fieldset>
+        <legend>Forecast</legend>
+        <label>Time <input id="weather-time" class="wide" placeholder="now, tomorrow night" autocapitalize="off"></label>
+        <label class="check"><input type="checkbox" id="weather-update"> Download again</label>
+        <button class="action primary needs-observer" id="weather-show">Show</button>
+      </fieldset>
+    </div>
+    <div class="title" id="weather-title"></div>
+    <div class="table-wrap" id="weather-wrap" hidden>
+      <table class="forecast striped"><tbody id="weather-rows"></tbody></table>
+    </div>
+  </section>
+  <section id="visible">
+    <p class="note observer-off" hidden>Set latitude, longitude and elevation in config.toml, then restart the server, to see what is in the sky.</p>
+    <div class="controls">
+      <fieldset>
+        <legend>Sky</legend>
+        <label>Time <input id="visible-time" class="wide" placeholder="now, tonight 23:00" autocapitalize="off"></label>
+        <label>Faintest mag <input id="visible-limit" type="number" step="0.5"></label>
+        <label>Lowest alt (deg) <input id="visible-altitude" type="number" min="-90" max="90" step="5"></label>
+        <label class="check"><input type="checkbox" id="visible-update"> Update orbits</label>
+        <button class="action primary needs-observer" id="visible-show">Show</button>
+      </fieldset>
+    </div>
+    <div class="title" id="visible-title"></div>
+    <div class="report" id="visible-report"></div>
+    <div class="report warning" id="visible-warning" hidden></div>
+    <div class="table-wrap" id="visible-wrap" hidden>
+      <table class="striped">
+        <thead><tr><th>Name</th><th class="number">Mag</th><th class="number">Alt</th><th class="number">Az</th><th class="number">RA</th><th class="number">Dec</th><th class="number">Elong</th><th>Type</th></tr></thead>
+        <tbody id="visible-rows"></tbody>
+      </table>
+    </div>
+  </section>
+  <section id="focus">
     <div class="controls">
       <fieldset>
         <legend>Measure</legend>
@@ -286,6 +339,167 @@ function log(text, error = false) {
 
 function fill(select, values, selected) {
   select.replaceChildren(...values.map((value) => new Option(value, value, false, value === selected)));
+}
+
+async function get(path, params) {
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== "" && value !== false));
+  try {
+    const response = await fetch(`${path}?${query}`);
+    const result = await response.json();
+    if (!response.ok) {
+      toast(result.error || response.statusText);
+      return null;
+    }
+    return result;
+  } catch (error) {
+    toast(`Cannot reach the server: ${error.message}`);
+    return null;
+  }
+}
+
+// Weather and Visible ask the server once a tab is first shown, then on Show
+const loaded = new Set();
+
+function setupObserver() {
+  const off = !config.observer;
+  document.querySelectorAll(".observer-off").forEach((element) => { element.hidden = !off; });
+  document.querySelectorAll(".needs-observer").forEach((button) => { button.disabled = off; });
+}
+
+const RATING_TITLES = {green: "Clear", yellow: "Haze, rain, gusts or dew", red: "Cloudy"};
+
+async function loadWeather() {
+  const button = $("weather-show");
+  // Enter in a field and the button share this guard, so one request runs at a time
+  if (!config.observer || button.disabled) return;
+  loaded.add("weather");
+  button.disabled = true;
+  $("weather-title").textContent = "Loading the forecast…";
+  const update = $("weather-update").checked;
+  const result = await get("/api/weather", {time: $("weather-time").value.trim(), update: update ? "1" : ""});
+  button.disabled = false;
+  $("weather-update").checked = false;
+  if (!result) {
+    // A table left from an earlier request would read as the answer to this one
+    $("weather-title").textContent = "";
+    $("weather-wrap").hidden = true;
+    return;
+  }
+  const hours = result.hours;
+  const first = hours[0], last = hours[hours.length - 1];
+  $("weather-title").textContent = hours.length
+    ? `Night of ${first.date}, ${first.hour} h to ${(last.hour + 1) % 24} h, from the ${result.model} model`
+    : "No forecast";
+  const row = (label, cells, className = "") => {
+    const tr = document.createElement("tr");
+    if (className) tr.className = className;
+    tr.append(cell(label), ...cells);
+    return tr;
+  };
+  // A date over the hours it covers, starting a new one at midnight
+  const dates = [];
+  hours.forEach((hour, index) => {
+    if (index === 0 || hour.hour === 0) dates.push({date: hour.date, span: 0});
+    dates[dates.length - 1].span += 1;
+  });
+  const dateCells = dates.map(({date, span}) => {
+    const th = document.createElement("th");
+    th.className = "date";
+    th.colSpan = span;
+    th.textContent = date;
+    return th;
+  });
+  const dateRow = document.createElement("tr");
+  const corner = document.createElement("th");
+  corner.textContent = "Date";
+  dateRow.append(corner, ...dateCells);
+  const hourCells = hours.map((hour) => {
+    const td = cell(hour.hour, hour.rating || "");
+    if (hour.rating) td.title = RATING_TITLES[hour.rating];
+    return td;
+  });
+  const rows = [dateRow, row("Time (h)", hourCells)];
+  for (const group of result.groups) {
+    group.forEach(({label, cells}, index) => {
+      rows.push(row(label, cells.map((value) => cell(value)), index === 0 ? "group" : ""));
+    });
+  }
+  $("weather-rows").replaceChildren(...rows);
+  $("weather-wrap").hidden = !hours.length;
+}
+
+async function loadVisible() {
+  const button = $("visible-show");
+  // Enter in a field and the button share this guard, so one request runs at a time
+  if (!config.observer || button.disabled) return;
+  loaded.add("visible");
+  button.disabled = true;
+  $("visible-title").textContent = "Working out where everything is…";
+  const update = $("visible-update").checked;
+  const result = await get("/api/visible", {
+    time: $("visible-time").value.trim(),
+    limit: $("visible-limit").value.trim(),
+    min_altitude: $("visible-altitude").value.trim(),
+    update: update ? "1" : "",
+  });
+  button.disabled = false;
+  $("visible-update").checked = false;
+  if (!result) {
+    $("visible-title").textContent = "";
+    $("visible-report").textContent = "";
+    $("visible-warning").hidden = true;
+    $("visible-wrap").hidden = true;
+    return;
+  }
+  $("visible-warning").textContent = result.warning || "";
+  $("visible-warning").hidden = !result.warning;
+  const days = Math.round(result.age);
+  const percent = Math.round(100 * result.illuminated);
+  $("visible-title").textContent = result.label;
+  $("visible-report").textContent = [
+    `Sun at ${Math.round(result.sun)}° (${result.sky})`,
+    `Moon at ${Math.round(result.moon)}° (${result.phase}, ${percent}% illuminated)`,
+    `Orbital elements downloaded ${result.downloaded.slice(0, 10)} (${days} day${days === 1 ? "" : "s"} ago)`,
+    `Bodies above ${result.min_altitude}° and brighter than magnitude ${result.limit}:`,
+  ].join("\n");
+  const rows = result.bodies.map((body) => {
+    const tr = document.createElement("tr");
+    const ra = `${String(Math.floor(body.ra)).padStart(2, "0")}h${String(Math.floor((body.ra % 1) * 60)).padStart(2, "0")}m`;
+    const dec = `${body.dec >= 0 ? "+" : ""}${body.dec.toFixed(1)}°`;
+    tr.append(
+      cell(body.name),
+      cell(body.mag.toFixed(1), "number"),
+      cell(`${Math.round(body.alt)}°`, "number"),
+      cell(`${Math.round(body.az)}° ${body.compass}`, "number"),
+      cell(ra, "number"),
+      cell(dec, "number"),
+      cell(`${Math.round(body.elong)}°`, "number"),
+      cell(body.kind),
+    );
+    return tr;
+  });
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    const td = cell("None");
+    td.colSpan = 8;
+    td.className = "waiting";
+    tr.append(td);
+    rows.push(tr);
+  }
+  $("visible-rows").replaceChildren(...rows);
+  $("visible-wrap").hidden = false;
+}
+
+function setupSky() {
+  setupObserver();
+  $("visible-limit").value = config.visible.limit;
+  $("visible-altitude").value = config.visible.min_altitude;
+  $("weather-show").onclick = loadWeather;
+  $("visible-show").onclick = loadVisible;
+  for (const id of ["weather-time"]) $(id).onkeydown = (event) => { if (event.key === "Enter") loadWeather(); };
+  for (const id of ["visible-time", "visible-limit", "visible-altitude"]) {
+    $(id).onkeydown = (event) => { if (event.key === "Enter") loadVisible(); };
+  }
 }
 
 function setupFocus() {
@@ -447,11 +661,13 @@ function setupTabs() {
     document.querySelectorAll("main section").forEach((section) => section.classList.toggle("active", section.id === name));
     try { localStorage.setItem("tab", name); } catch (error) { /* ignore */ }
     if (name === "stack") loadDirectories();
+    if (name === "weather" && !loaded.has("weather")) loadWeather();
+    if (name === "visible" && !loaded.has("visible")) loadVisible();
   };
   buttons.forEach((button) => { button.onclick = () => show(button.dataset.tab); });
   let saved = null;
   try { saved = localStorage.getItem("tab"); } catch (error) { /* ignore */ }
-  if (saved && $(saved)) show(saved);
+  show(saved && $(saved) ? saved : "weather");
 }
 
 function showImage(view, url) {
@@ -624,6 +840,7 @@ $("night").onclick = () => {
 
 fetch("/api/config").then((response) => response.json()).then((value) => {
   config = value;
+  setupSky();
   setupFocus();
   setupCenter();
   setupCapture();

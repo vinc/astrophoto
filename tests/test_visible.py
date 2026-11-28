@@ -94,6 +94,9 @@ class CacheTest(unittest.TestCase):
             data = visible.load_minor_bodies(update=False)
         self.assertEqual(data["downloaded"], old)
         self.assertIn("Could not update", stderr.getvalue())
+        self.assertEqual(data["warning"], "Could not update orbital elements: offline")
+        # The warning goes with the report, not into the cache
+        self.assertNotIn("warning", json.loads(self.cache.read_text()))
 
     def test_missing_cache_and_offline_exits(self):
         error = requests.ConnectionError("offline")
@@ -106,8 +109,9 @@ class CacheTest(unittest.TestCase):
         fresh = cache_data(Time.now().isot)
         with patch.object(visible, "download_minor_bodies", return_value=fresh), \
                 contextlib.redirect_stderr(io.StringIO()):
-            visible.load_minor_bodies(update=True)
+            data = visible.load_minor_bodies(update=True)
         self.assertEqual(json.loads(self.cache.read_text()), fresh)
+        self.assertNotIn("warning", data)
 
 class MainTest(unittest.TestCase):
     def test_lists_bright_planets_sorted_by_magnitude(self):
