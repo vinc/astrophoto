@@ -234,6 +234,8 @@ class DefaultOutputTests(unittest.TestCase):
 class ChartCommandTests(unittest.TestCase):
     def run_main(self, argv, **patches):
         patches.setdefault("resolve", {"return_value": None})
+        # Labels are in the camera's timezone, which would otherwise be the computer's own
+        patches.setdefault("camera_timezone", {"return_value": ZoneInfo("Europe/Paris")})
         with patch.object(sys, "argv", ["chart.py", *argv]), \
                 contextlib.redirect_stdout(io.StringIO()) as stdout, \
                 contextlib.ExitStack() as stack:
