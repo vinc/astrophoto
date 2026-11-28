@@ -50,6 +50,46 @@ def get_config(*names):
         raise ValueError(f"Unexpected gphoto2 output for {', '.join(names)}")
     return values
 
+def parse_config(output):
+    """Each setting in gphoto2 --get-config output, in order, as its current value and its (index, label) choices"""
+    settings, current, choices = [], None, []
+    for line in output.splitlines():
+        if line.startswith("Current:"):
+            current = line.split(":", 1)[1].strip()
+        elif line.startswith("Choice:"):
+            index, _, label = line.split(":", 1)[1].strip().partition(" ")
+            choices.append((int(index), label))
+        elif line.strip() == "END":
+            if current is not None:
+                settings.append((current, choices))
+            current, choices = None, []
+    return settings
+
+
+def choice_label(value, choices):
+    """The label of a setting given by its label or by its gphoto2 index, as gphoto2 reads it, or None for neither"""
+    value = str(value)
+    if any(label == value for _, label in choices):
+        return value
+    # A number names the choice of the same value, so an aperture of 4.0 is the camera's 4
+    number = _number(value)
+    if number is not None:
+        match = next((label for _, label in choices if _number(label) == number), None)
+        if match is not None:
+            return match
+    # gphoto2 takes a value that is no label for an index into the choices
+    if value.isdigit():
+        return next((label for index, label in choices if index == int(value)), None)
+    return None
+
+
+def _number(text):
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _custom_function_entries(text):
     """Yield the token index of each Canon custom function as (function id, index of its first value)."""
     tokens = [token for token in text.split(",") if token]

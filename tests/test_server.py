@@ -482,6 +482,59 @@ class CaptureServerTests(ServerCase):
         self.wait_for(lambda: (directory / f"{directory.name}-live-stack.fit").exists())
         self.assertEqual([row["status"] for row in self.latest("series")["frames"]], ["stacked", "stacked"])
 
+    # Index 50 is the flat frames' default shutter speed, which gphoto2 takes as an index for want of a label
+    SHUTTER_SPEEDS = ["bulb", "30", "15", "8", "5"] + [f"1/{1000 + n}" for n in range(55)]
+    SHUTTER_SPEEDS[50] = "1/2000"
+    CHOICES = {
+        "iso": ["Auto", "100", "400", "800", "1600", "3200"],
+        "aperture": ["4", "4.5", "5", "5.6"],
+        "shutterspeed": SHUTTER_SPEEDS,
+    }
+
+    def answer_with_choices(self, command, **kwargs):
+        names = [command[i + 1] for i, option in enumerate(command) if option == "--get-config"]
+        output = ""
+        for name in names:
+            current = {"cameramodel": "Canon EOS 600D", "batterylevel": "75%"}.get(name, "")
+            choices = "".join(f"Choice: {index} {label}\n" for index, label in enumerate(self.CHOICES.get(name, [])))
+            output += f"Label: {name}\nType: RADIO\nCurrent: {current}\n{choices}END\n"
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    def read_choices(self):
+        with patch.object(gphoto.subprocess, "run", side_effect=self.answer_with_choices):
+            self.app.check_status()
+        return self.latest("choices")
+
+    def test_the_camera_choices_and_defaults_are_published_as_labels(self):
+        choices = self.read_choices()
+        self.assertEqual(choices["settings"], self.CHOICES)
+        self.assertEqual({key: choices["capture"]["light"][key] for key in ("iso", "aperture", "shutterspeed")},
+                         {"iso": "800", "aperture": "4", "shutterspeed": "5"})
+        self.assertEqual(choices["capture"]["flat"]["shutterspeed"], "1/2000")
+        self.assertEqual(choices["capture"]["light"]["frames"], 20)
+
+    def test_a_series_is_taken_with_the_labels_of_the_camera_choices(self):
+        self.read_choices()
+        self.run_series(frames=1, kind="flat", aperture="5.6")
+        self.assertEqual((self.settings["iso"], self.settings["aperture"], self.settings["shutterspeed"]),
+                         ("800", "5.6", "1/2000"))
+        status, result = self.post("/api/capture/start", {"iso": "12800"})
+        self.assertEqual(status, 400)
+        self.assertIn("iso 12800 is not one of the camera's choices: Auto, 100, 400", result["error"])
+
+    def test_without_a_camera_settings_are_passed_as_configured(self):
+        with patch.object(server, "camera_status", return_value=(None, None)):
+            self.app.check_status()
+        self.assertEqual(self.latest("choices")["settings"], None)
+        self.assertEqual(self.latest("choices")["capture"]["flat"]["shutterspeed"], "50")
+        self.run_series(frames=1, kind="flat")
+        self.assertEqual(self.settings["shutterspeed"], "50")
+
+    def test_a_refresh_reads_the_camera_again(self):
+        self.app.status_wanted.clear()
+        self.assertEqual(self.post("/api/camera/refresh"), (200, {"ok": True}))
+        self.assertTrue(self.app.status_wanted.is_set())
+
     def test_capture_requests_are_validated(self):
         for body, message in [
             ({"kind": "bias"}, "kind must be one of light, dark, flat"),

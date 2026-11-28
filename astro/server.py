@@ -25,14 +25,16 @@ from matplotlib.figure import Figure
 import numpy as np
 
 from astro import capture as capture_command, center, convert, focus, stack, visible, weather
-from astro.capture import DEFAULTS as CAPTURE_DEFAULTS, KINDS, TARGETS, capture_series, series_directory
+from astro.capture import (
+    CAMERA_SETTINGS, DEFAULTS as CAPTURE_DEFAULTS, KINDS, TARGETS, capture_series, series_directory,
+)
 from astro.lib.camera import capture, display_limits, live_preview, move_focus, stack_display_limits
 from astro.lib.catalog import AmbiguousObject
 from astro.lib.config import (
     SOLVE, add_observer_arguments, camera_profile, camera_timezone, command_settings, observer_location, solve_scale,
 )
 from astro.locate import PlateSolveError
-from astro.lib.gphoto import ENGLISH, FOCUS_STEPS, camera_lock
+from astro.lib.gphoto import ENGLISH, FOCUS_STEPS, camera_lock, choice_label, parse_config
 from astro.lib.livestack import LiveStack
 from astro.lib.localtime import parse_local_time
 from astro.lib.system import CpuUsage, acpi_temperature, memory_percent
@@ -244,6 +246,23 @@ def camera_status():
     return (values + [None, None])[:2]
 
 
+def camera_choices():
+    """Return the connected camera's (index, label) choices for each capture setting, or None when unknown."""
+    command = ["gphoto2"]
+    for name in CAMERA_SETTINGS:
+        command += ["--get-config", name]
+    # A camera that lacks one setting fails the whole command, so these are read apart from the status
+    try:
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=ENGLISH,
+                                timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    settings = parse_config(result.stdout)
+    if result.returncode or len(settings) != len(CAMERA_SETTINGS):
+        return None
+    return {name: choices for name, (_, choices) in zip(CAMERA_SETTINGS, settings)}
+
+
 def render(draw, size):
     """Draw a figure with draw(figure) and return it as PNG bytes."""
     # A dark figure keeps the page from lighting up the field at night
@@ -310,6 +329,8 @@ class App:
         self.status_interval = status_interval
         self.closing = threading.Event()
         self.status_wanted = threading.Event()
+        # The camera's choices for each capture setting, read with its status, or None while no camera answers
+        self.choices = None
         default_target = "card" if camera is None else camera.capture_target
         self.capture_settings = capture_settings or {
             kind: {**CAPTURE_DEFAULTS, **capture_command.KIND_DEFAULTS.get(kind, {}), "target": default_target}
@@ -387,6 +408,36 @@ class App:
             # The camera is in use, so keep what was last known of it
             model, battery = previous.get("camera"), previous.get("battery")
         self.hub.publish("status", camera=model, battery=battery, busy=busy)
+        if not busy:
+            # The aperture choices change with the lens, so they are read again with every status
+            choices = None
+            if model is not None and camera_lock.acquire(blocking=False):
+                try:
+                    choices = camera_choices()
+                finally:
+                    camera_lock.release()
+            if choices != self.choices or "choices" not in self.hub.latest:
+                self.choices = choices
+                self.publish_choices()
+
+    def publish_choices(self):
+        """Send the camera's labels for each capture setting, and each kind's defaults as labels, without indexes."""
+        choices = self.choices
+        settings = None if choices is None else {name: [label for _, label in choices[name]] for name in choices}
+        defaults = {
+            kind: {
+                **values,
+                **{key: choice_label(values[key], choices[key]) or values[key] for key in CAMERA_SETTINGS
+                   if choices is not None},
+            }
+            for kind, values in self.capture_settings.items()
+        }
+        self.hub.publish("choices", settings=settings, capture=defaults)
+
+    def refresh_camera(self, body):
+        """Read the camera's status and choices again soon, as after changing the lens."""
+        self.status_wanted.set()
+        return {"ok": True}
 
     # Focus
 
@@ -542,7 +593,8 @@ class App:
         settings = {
             "frames": integer(body, "frames", defaults["frames"], minimum=1),
             # The camera needs every setting for a series, so an empty field falls back to the configured one
-            **{key: text(body, key, defaults[key]) or defaults[key] for key in ("iso", "aperture", "shutterspeed")},
+            **{key: self.camera_setting(key, text(body, key, defaults[key]) or defaults[key])
+               for key in CAMERA_SETTINGS},
             "target": choice(body, "target", tuple(TARGETS), defaults["target"]),
         }
         directory = self.root / series_directory(kind)
@@ -553,6 +605,16 @@ class App:
             directory = base.with_name(f"{base.name}-{number}")
         self.jobs.start("capture", lambda stop: self.capture(stop, directory, kind, settings))
         return {"ok": True, "directory": directory.name}
+
+    def camera_setting(self, key, value):
+        """Return a capture setting by its label, from a label or a gphoto2 index, when the camera's choices are known."""
+        choices = (self.choices or {}).get(key)
+        if not choices:
+            return value
+        label = choice_label(value, choices)
+        if label is None:
+            raise RequestError(f"{key} {value} is not one of the camera's choices: {', '.join(l for _, l in choices)}")
+        return label
 
     def capture(self, stop, directory, kind, settings):
         with self.series_lock:
@@ -964,6 +1026,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/capture/start": self.app.capture_start,
             "/api/stack/start": self.app.stack_start,
             "/api/stop": self.app.stop,
+            "/api/camera/refresh": self.app.refresh_camera,
         }
         route = routes.get(urlsplit(self.path).path)
         try:

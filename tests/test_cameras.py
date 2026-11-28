@@ -399,6 +399,28 @@ class BackButtonFocusTests(ConfiguredTests):
             gphoto.set_custom_function(text, 0x999, 1)
 
 
+class ConfigChoicesTests(unittest.TestCase):
+    OUTPUT = (
+        "Label: ISO Speed\nReadonly: 0\nType: RADIO\nCurrent: 800\nChoice: 0 Auto\nChoice: 1 100\nChoice: 2 800\nEND\n"
+        "Label: Shutter Speed\nReadonly: 0\nType: RADIO\nCurrent: 1/4\nChoice: 0 bulb\nChoice: 1 1/4\nEND\n"
+        "Label: Camera Model\nType: TEXT\nCurrent: Canon EOS 600D\nEND\n"
+    )
+
+    def test_settings_are_read_with_their_indexed_choices(self):
+        self.assertEqual(gphoto.parse_config(self.OUTPUT), [
+            ("800", [(0, "Auto"), (1, "100"), (2, "800")]),
+            ("1/4", [(0, "bulb"), (1, "1/4")]),
+            ("Canon EOS 600D", []),
+        ])
+
+    def test_values_are_named_by_label_number_or_index(self):
+        choices = [(0, "bulb"), (1, "4"), (2, "1/4"), (3, "5.6")]
+        for value, label in [("1/4", "1/4"), ("4", "4"), ("4.0", "4"), (5.6, "5.6"), ("2", "1/4"), ("0", "bulb"),
+                             ("9", None), ("1/3", None), ("", None)]:
+            with self.subTest(value=value):
+                self.assertEqual(gphoto.choice_label(value, choices), label)
+
+
 class PreviewWindowTests(unittest.TestCase):
     def test_an_unreachable_display_suggests_running_without_a_window(self):
         class TclError(Exception):
