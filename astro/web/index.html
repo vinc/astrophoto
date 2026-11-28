@@ -15,7 +15,6 @@
     --good: #5fbf7f;
     --bad: #e06c6c;
     --warn: #e0b45a;
-    --stripe: #1b2026;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
@@ -94,7 +93,7 @@
   th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; }
   td.number, th.number { text-align: right; }
   /* Alternate rows, sticky label cells included, so the eye keeps to a row across the table */
-  table.striped tbody tr:nth-child(even) td { background: var(--stripe); }
+  table.striped tbody tr:nth-child(even) td { background: #1b2026; }
   td.stacked { color: var(--good); }
   td.problem { color: var(--bad); }
   td.waiting { color: var(--muted); }
