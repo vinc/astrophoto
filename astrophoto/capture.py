@@ -148,16 +148,43 @@ def _capture_to_ram(directory, settings, log, stop, on_frame):
                     f"Expected one picture for frame {index}, found {len(new)}"
                     f"{' empty' if len(new) == 1 else ''}; stopped after {len(paths)} of {frames} pictures"
                 )
-            # Pictures taken to RAM are named capt0000.cr2, but those from the card IMG_0001.CR2
-            name = new[0].name
-            path = new[0].rename(directory / (name[:-len(new[0].suffix)] + new[0].suffix.upper()))
+            path = new[0].rename(_published(directory, new[0]))
             paths.append(path)
             log(f"Saved {path.name} ({index} of {frames})")
             if on_frame is not None:
                 on_frame(path)
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        _recover(staging, directory, log)
     return paths
+
+
+def _published(directory, path):
+    """Return where a downloaded picture goes in the series directory."""
+    # Pictures taken to RAM are named capt0000.cr2, but those from the card IMG_0001.CR2
+    return directory / (path.name[:-len(path.suffix)] + path.suffix.upper())
+
+
+def _recover(staging, directory, log):
+    """Keep any picture left in the staging directory by a frame that failed, then remove the directory.
+
+    gphoto2 can fail after saving a frame, while deleting it from the camera's memory for instance, and that
+    frame is still a good one.
+    """
+    for path in sorted(staging.iterdir()):
+        if path.is_file() and path.stat().st_size == 0:
+            path.unlink()
+            continue
+        target = _published(directory, path)
+        if path.is_file() and not target.exists():
+            try:
+                path.rename(target)
+            except OSError:
+                continue
+            log(f"Kept {target.name} from a frame that did not finish")
+    try:
+        staging.rmdir()
+    except OSError:
+        log(f"Left the files of an unfinished frame in {staging}")
 
 
 def _capture_to_card(directory, settings, log):

@@ -612,6 +612,23 @@ class LibraryTests(unittest.TestCase):
         # The staging directory is gone, and only the frames and the converted files are left
         self.assertEqual(left, [*frames, "converted1.fit", "converted2.fit"])
 
+    def test_a_frame_saved_before_gphoto2_fails_is_kept(self):
+        def fake(command, **kwargs):
+            pattern = command[command.index("--filename") + 1]
+            Path(pattern.replace("%Y%m%d-%H%M%S", "20261127-210000").replace("%C", "cr2")).write_text("raw")
+            # The frame is downloaded, then deleting it from the camera's memory fails
+            raise subprocess.CalledProcessError(1, command, stderr="*** Error: Could not delete file ***\n")
+
+        logged = []
+        settings = {"frames": 3, "iso": "800", "aperture": "4.0", "shutterspeed": "5", "target": "ram"}
+        with tempfile.TemporaryDirectory() as temporary, patch.object(gphoto.subprocess, "run", side_effect=fake), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(subprocess.CalledProcessError):
+                capture_command.capture_series(Path(temporary) / "light", settings, log=logged.append)
+            left = sorted(path.name for path in (Path(temporary) / "light").iterdir())
+        self.assertEqual(left, ["20261127-210000-001.CR2"])
+        self.assertIn("Kept 20261127-210000-001.CR2 from a frame that did not finish", logged)
+
     def test_series_directory_names_the_start_time_and_kind(self):
         from datetime import datetime
         self.assertEqual(capture_command.series_directory("dark", datetime(2026, 11, 27, 21, 5)),

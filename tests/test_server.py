@@ -110,6 +110,30 @@ class ServerTests(ServerCase):
         self.assertEqual(self.fake.position, 5)
         self.assertIn("Moved focus Near 1 x1", self.app.hub.logs[-1]["text"])
 
+    def test_a_job_cannot_start_while_a_lens_move_is_underway(self):
+        checked, release = threading.Event(), threading.Event()
+
+        def slow_move(steps, size):
+            checked.set()
+            release.wait(10)
+
+        with patch.object(server, "move_focus", side_effect=slow_move):
+            mover = threading.Thread(target=self.app.focus_move, args=({"steps": 1, "size": 1},))
+            mover.start()
+            checked.wait(10)
+            # Starting a capture now waits for the move rather than getting it partway through
+            starter = threading.Thread(target=self.app.jobs.start, args=("capture", lambda stop: stop.wait(5)))
+            starter.start()
+            starter.join(0.5)
+            # Read without the lock, which the move holds
+            self.assertTrue(starter.is_alive())
+            self.assertIsNone(self.app.jobs.name)
+            release.set()
+            mover.join(10)
+            starter.join(10)
+        self.assertEqual(self.app.jobs.running(), "capture")
+        self.app.jobs.stop()
+
     def test_requests_are_validated(self):
         for path, body, message in [
             ("/api/focus/move", {"steps": 0}, "non-zero"),

@@ -534,6 +534,37 @@ class CaptureTests(unittest.TestCase):
                 names = sorted(path.name for path in Path(temporary).iterdir())
                 self.assertEqual(names, ["light.CR2"] if failure else ["light.CR2", "light.fit"])
 
+    def test_two_conversions_of_one_file_at_once_each_publish_a_whole_frame(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "light.CR2"
+            source.touch()
+            tags = {"EXIF DateTimeOriginal": "2026:11:26 19:43:26", "EXIF ExposureTime": "5"}
+            writeto = conversion.fits.PrimaryHDU.writeto
+            written = []
+
+            def interleaved(hdu, name, **kwargs):
+                writeto(hdu, name, **kwargs)
+                written.append(Path(name).name)
+                # Another conversion of the same file, from the command line, runs while this one is underway
+                if len(written) == 1:
+                    conversion.convert(source, ZoneInfo("UTC"))
+
+            with patch.object(conversion.rawpy, "imread") as imread, \
+                    patch.object(conversion.exifread, "process_file", return_value=tags), \
+                    patch.object(conversion.fits.PrimaryHDU, "writeto", autospec=True, side_effect=interleaved), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                raw = imread.return_value.__enter__.return_value
+                raw.raw_image_visible = np.full((20, 20), 123, dtype=np.uint16)
+                raw.black_level_per_channel = [100] * 4
+                raw.white_level = 4095
+                raw.color_desc = b"RGBG"
+                raw.raw_colors_visible = np.tile([[0, 1], [3, 2]], (10, 10))
+                raw.daylight_whitebalance = [2, 1, 1.5, 0]
+                result = conversion.convert(source, ZoneInfo("UTC"))
+            self.assertEqual(len(set(written)), 2)
+            self.assertTrue((fits.getdata(result) == 123).all())
+            self.assertEqual(sorted(path.name for path in Path(temporary).iterdir()), ["light.CR2", "light.fit"])
+
     def test_conversion_records_the_sensor_temperature_from_the_maker_notes(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "light.CR2"

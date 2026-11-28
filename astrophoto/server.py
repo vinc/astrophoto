@@ -1,5 +1,6 @@
 import argparse
 from collections import deque
+import contextlib
 from datetime import datetime
 import io
 import json
@@ -205,6 +206,12 @@ class Jobs:
             name = self.name if self.thread is not None and self.thread.is_alive() else None
             self.stop_event.set()
         return name
+
+    @contextlib.contextmanager
+    def held(self):
+        """Yield the running job's name, or None, keeping any other job from starting until the block ends."""
+        with self.lock:
+            yield self.name if self.thread is not None and self.thread.is_alive() else None
 
     def join(self, timeout=None):
         thread = self.thread
@@ -445,17 +452,18 @@ class App:
         steps = integer(body, "steps", None)
         if steps is None or steps == 0 or abs(steps) > 20:
             raise RequestError("steps must be a non-zero whole number from -20 to 20")
-        running = self.jobs.running()
-        if running == "autofocus":
-            raise RequestError("Autofocus is driving the lens; stop it first", 409)
-        # A capture releases the camera between frames, where a move would change the focus mid-series
-        if running not in (None, "focus"):
-            raise RequestError(f"The lens can only be moved while idle or focusing, not during {running}", 409)
-        # Between two live-view frames, the camera lock lets this move in
-        try:
-            move_focus(steps, size)
-        except subprocess.CalledProcessError as exc:
-            raise RequestError(f"Could not move the focus: {error_text(exc)}", 502) from exc
+        # A job starting between the check and the move would get the move, so no job starts until it is done
+        with self.jobs.held() as running:
+            if running == "autofocus":
+                raise RequestError("Autofocus is driving the lens; stop it first", 409)
+            # A capture releases the camera between frames, where a move would change the focus mid-series
+            if running not in (None, "focus"):
+                raise RequestError(f"The lens can only be moved while idle or focusing, not during {running}", 409)
+            # Between two live-view frames, the camera lock lets this move in
+            try:
+                move_focus(steps, size)
+            except subprocess.CalledProcessError as exc:
+                raise RequestError(f"Could not move the focus: {error_text(exc)}", 502) from exc
         self.hub.log(f"Moved focus {'Far' if steps > 0 else 'Near'} {size} x{abs(steps)}")
         return {"ok": True}
 

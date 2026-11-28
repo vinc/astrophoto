@@ -1,8 +1,10 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
+import os
 from pathlib import Path
 import re
+import tempfile
 
 import exifread
 import rawpy
@@ -139,8 +141,11 @@ def convert(path, tz, output=None):
         hdr[key] = value
 
     output = Path(output) if output is not None else path.with_suffix(".fit")
-    # Written under a temporary name, then renamed, so a stack scanning for FITS frames never reads half a file
-    temporary = output.with_name(f".{output.name}.tmp")
+    # Written under a temporary name, then renamed, so a stack scanning for FITS frames never reads half a file;
+    # each conversion has a name of its own, so two converting the same file at once cannot mix their writes
+    handle, name = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=output.parent)
+    os.close(handle)
+    temporary = Path(name)
     try:
         hdu.writeto(temporary, overwrite=True)
         temporary.replace(output)
