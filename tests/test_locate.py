@@ -15,8 +15,8 @@ from astropy.time import Time
 from astropy.visualization import ZScaleInterval
 from astropy.wcs import WCS
 
-from astrophoto import locate
-from astrophoto.lib.camera import stack_display_limits
+from astro import locate
+from astro.lib.camera import stack_display_limits
 
 def make_header(shape, date):
     wcs = WCS(naxis=2)
@@ -108,7 +108,7 @@ class LocateTests(unittest.TestCase):
 
     def test_importing_shared_locating_code_preserves_the_selected_backend(self):
         result = subprocess.run(
-            [sys.executable, "-c", "import matplotlib; import astrophoto.center; import astrophoto.crop; print(matplotlib.get_backend())"],
+            [sys.executable, "-c", "import matplotlib; import astro.center; import astro.crop; print(matplotlib.get_backend())"],
             cwd=Path(__file__).resolve().parents[1],
             env=dict(os.environ, MPLBACKEND="svg"),
             capture_output=True, text=True, check=True,
@@ -186,7 +186,7 @@ class LocateTests(unittest.TestCase):
                 "--latitude", "0", "--longitude", "0", "--elevation", "0",
             ]
             with patch.object(sys, "argv", argv), \
-                    patch("astrophoto.locate.subprocess.run", side_effect=solve) as solver, \
+                    patch("astro.locate.subprocess.run", side_effect=solve) as solver, \
                     patch.object(locate, "get_ephemerides", side_effect=ephemerides), \
                     contextlib.redirect_stdout(io.StringIO()):
                 locate.main()

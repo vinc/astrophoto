@@ -16,10 +16,10 @@ from astropy.wcs import WCS
 from scipy.ndimage import shift
 from skimage.transform import SimilarityTransform
 
-from astrophoto.lib import camera
-from astrophoto.lib import color
-from astrophoto import locate
-from astrophoto import stack
+from astro.lib import camera
+from astro.lib import color
+from astro import locate
+from astro import stack
 
 def mosaic(rgb, pattern="RGGB"):
     height, width = rgb.shape[:2]

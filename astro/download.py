@@ -3,7 +3,7 @@ import sys
 
 import requests
 
-from astrophoto.lib.config import data_path
+from astro.lib.config import data_path
 
 INDEXES = "https://data.astrometry.net/4100"
 # Star, deep-sky object and constellation data, from d3-celestial (BSD-3-Clause)

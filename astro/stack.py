@@ -13,10 +13,10 @@ from scipy.ndimage import binary_dilation
 from scipy.signal import savgol_filter
 from skimage.transform import warp
 
-from astrophoto.lib import alignment, darks
-from astrophoto.lib.camera import stack_display_limits
-from astrophoto.lib.config import command_settings
-from astrophoto.lib.color import BAYER_PATTERNS, bin_rgb, color_metadata, luminance, rgb_display_header, render_rgb, saturation_flags
+from astro.lib import alignment, darks
+from astro.lib.camera import stack_display_limits
+from astro.lib.config import command_settings
+from astro.lib.color import BAYER_PATTERNS, bin_rgb, color_metadata, luminance, rgb_display_header, render_rgb, saturation_flags
 
 DEBAND_WINDOW = 65
 # Settings of the [stack] table in config.toml; full debanding suits both the EOS 20D and 600D

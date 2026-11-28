@@ -3,7 +3,7 @@ from pathlib import Path
 import tomllib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from astrophoto.lib.localtime import local_timezone
+from astro.lib.localtime import local_timezone
 
 OBSERVER = {"latitude": "degrees", "longitude": "degrees", "elevation": "meters"}
 # Only used when an image does not record its focal length and pixel size; 50 degrees covers a 28 mm lens
@@ -11,11 +11,11 @@ SOLVE = {"scale_low": 3.0, "scale_high": 50.0}
 
 
 def config_path():
-    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "astrophoto" / "config.toml"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "astro" / "config.toml"
 
 
 def data_path():
-    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "astrophoto"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "astro"
 
 
 def load_config(path=None):
@@ -87,7 +87,7 @@ def solve_scale(parser):
 
 def camera_profile(parser):
     """Return the camera named by the top-level `camera` key, or None when unset."""
-    from astrophoto.lib.camera import CAMERAS
+    from astro.lib.camera import CAMERAS
 
     config, path = read_config(parser)
     name = config.get("camera")

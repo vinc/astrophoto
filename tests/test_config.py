@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from astrophoto.lib import config
+from astro.lib import config
 
 COMMANDS = ["center", "chart", "crop", "locate", "visible", "weather"]
 
@@ -22,7 +22,7 @@ class ConfigTests(unittest.TestCase):
         patcher = patch.dict(os.environ, {"XDG_CONFIG_HOME": directory.name})
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.path = Path(directory.name) / "astrophoto" / "config.toml"
+        self.path = Path(directory.name) / "astro" / "config.toml"
 
     def write(self, text):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -40,13 +40,13 @@ class ConfigTests(unittest.TestCase):
     def test_path_follows_xdg_config_home(self):
         self.assertEqual(config.config_path(), self.path)
         with patch.dict(os.environ, {"XDG_CONFIG_HOME": ""}):
-            self.assertEqual(config.config_path(), Path.home() / ".config" / "astrophoto" / "config.toml")
+            self.assertEqual(config.config_path(), Path.home() / ".config" / "astro" / "config.toml")
 
     def test_data_path_follows_xdg_data_home(self):
         with patch.dict(os.environ, {"XDG_DATA_HOME": "/srv/data"}):
-            self.assertEqual(config.data_path(), Path("/srv/data/astrophoto"))
+            self.assertEqual(config.data_path(), Path("/srv/data/astro"))
         with patch.dict(os.environ, {"XDG_DATA_HOME": ""}):
-            self.assertEqual(config.data_path(), Path.home() / ".local" / "share" / "astrophoto")
+            self.assertEqual(config.data_path(), Path.home() / ".local" / "share" / "astro")
 
     def test_missing_file_keeps_observer_required(self):
         self.assertEqual(config.load_config(), {})
@@ -122,7 +122,7 @@ class ConfigTests(unittest.TestCase):
         self.write("latitude = 51.18\nlongitude = -1.83\nelevation = 100\n")
         for name in COMMANDS:
             with self.subTest(command=name):
-                module = importlib.import_module(f"astrophoto.{name}")
+                module = importlib.import_module(f"astro.{name}")
                 out = io.StringIO()
                 with patch.object(sys, "argv", [name, "--help"]), contextlib.redirect_stdout(out), \
                         self.assertRaises(SystemExit) as raised:

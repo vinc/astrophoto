@@ -11,7 +11,7 @@ import rawpy
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
 
-from astrophoto.lib.gphoto import custom_function, drive_options, get_config, run_gphoto2, set_custom_function
+from astro.lib.gphoto import custom_function, drive_options, get_config, run_gphoto2, set_custom_function
 
 @dataclass(frozen=True)
 class Camera:

@@ -13,9 +13,9 @@ from urllib.request import Request, urlopen
 import numpy as np
 from astropy.io import fits
 
-from astrophoto import center, convert, server
-from astrophoto.lib import camera, gphoto
-from astrophoto.locate import PlateSolveError
+from astro import center, convert, server
+from astro.lib import camera, gphoto
+from astro.locate import PlateSolveError
 from tests.test_cameras import FakeCamera
 
 
@@ -73,7 +73,7 @@ class ServerTests(ServerCase):
     def test_page_and_config_are_served(self):
         status, kind, page = self.get("/")
         self.assertEqual((status, kind), (200, "text/html; charset=utf-8"))
-        self.assertIn(b"<title>Astrophoto</title>", page)
+        self.assertIn(b"<title>Astro</title>", page)
         status, _, body = self.get("/api/config")
         config = json.loads(body)
         self.assertEqual(config["camera"], "Canon EOS 600D")
@@ -218,7 +218,7 @@ class ServerTests(ServerCase):
         self.assertEqual((status["camera"], status["busy"]), ("Canon EOS 600D", True))
 
     def test_computer_readings_are_published(self):
-        from astrophoto.lib.system import CpuUsage
+        from astro.lib.system import CpuUsage
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         for relative, text in [("proc/stat", "cpu  100 0 100 800 0 0 0 0\n"),
@@ -343,7 +343,7 @@ class CenterServerTests(ServerCase):
 class CaptureServerTests(ServerCase):
     def setUp(self):
         super().setUp()
-        self.directory = Path(tempfile.mkdtemp(prefix="astrophoto-server-"))
+        self.directory = Path(tempfile.mkdtemp(prefix="astro-server-"))
         self.addCleanup(shutil.rmtree, self.directory, ignore_errors=True)
         self.start(camera.CAMERAS["Canon EOS 600D"])
         self.app.root = self.directory
@@ -469,7 +469,7 @@ class CaptureServerTests(ServerCase):
         self.post("/api/stop")
 
     def test_a_failed_live_stack_save_does_not_stop_frame_processing(self):
-        from astrophoto.lib import livestack
+        from astro.lib import livestack
         with patch.object(livestack.LiveStack, "write", side_effect=OSError("No space left on device")):
             self.run_series(frames=2)
         self.assertTrue(any("Could not save the live stack" in event["text"] and "No space left" in event["text"]
@@ -495,9 +495,9 @@ class CaptureServerTests(ServerCase):
 class CalibratedStackTests(ServerCase):
     def setUp(self):
         super().setUp()
-        from astrophoto.lib import darks
+        from astro.lib import darks
         from tests.test_calibration import raw_frame, series
-        self.root = Path(tempfile.mkdtemp(prefix="astrophoto-server-"))
+        self.root = Path(tempfile.mkdtemp(prefix="astro-server-"))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         patcher = patch.object(darks, "library_path", return_value=self.root / "library")
         patcher.start()

@@ -18,13 +18,13 @@ from astropy.time import Time
 from astropy.wcs import WCS
 from astroquery.jplhorizons import Horizons
 
-from astrophoto.convert import convert
-from astrophoto.lib.camera import CAMERAS, display_limits, fits_binning, stack_display_limits
-from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
-from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
+from astro.convert import convert
+from astro.lib.camera import CAMERAS, display_limits, fits_binning, stack_display_limits
+from astro.lib.color import read_rgb, read_saturation, render_rgb
+from astro.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
 
 DATA = data_path()
-EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "horizons"
+EPHEMERIS_CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astro" / "horizons"
 
 class PlateSolveError(RuntimeError):
     pass
@@ -140,7 +140,7 @@ def solve_image(path, directory, timezone, scale_low, scale_high, cpu_limit=60, 
             break
     if not marker.exists() or not output.exists():
         if not any(DATA.glob("index-*.fits")):
-            raise PlateSolveError(f"Plate solving failed; no astrometry.net index files in {DATA}, run 'astrophoto download'")
+            raise PlateSolveError(f"Plate solving failed; no astrometry.net index files in {DATA}, run 'astro download'")
         raise PlateSolveError("Plate solving failed; check focus, exposure, indexes, and scale limits")
     if not WCS(fits.getheader(output), fix=False).has_celestial:
         raise PlateSolveError("Plate solving returned an image without celestial coordinates")
@@ -330,7 +330,7 @@ def main():
     timezone = camera_timezone(parser)
     observer = observer_location(args)
     failed = False
-    with tempfile.TemporaryDirectory(prefix="astrophoto-locate-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="astro-locate-") as temporary:
         observations = []
         for index, path in enumerate(args.files):
             try:

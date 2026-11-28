@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -11,7 +12,7 @@ import numpy as np
 import requests
 from astropy.time import Time
 
-from astrophoto import visible
+from astro import visible
 from tests.test_localtime import local_time_zone
 
 ARGS = ["visible.py", "--latitude", "51.18", "--longitude", "-1.83", "--elevation", "100"]
@@ -112,7 +113,9 @@ class MainTest(unittest.TestCase):
     def test_lists_bright_planets_sorted_by_magnitude(self):
         data = cache_data(Time.now().isot)
         argv = ARGS + ["--time", "2026-11-07T21:11", "--limit", "8"]
+        # The time is local, so it is read as the observer's own rather than the computer's
         with patch.object(visible, "load_minor_bodies", return_value=data), \
+                patch.dict(os.environ, {"TZ": "Europe/Paris"}), \
                 patch.object(sys, "argv", argv), \
                 contextlib.redirect_stdout(io.StringIO()) as stdout:
             visible.main()

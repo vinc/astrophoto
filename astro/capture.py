@@ -9,8 +9,8 @@ import sys
 import tempfile
 import threading
 
-from astrophoto.lib.gphoto import camera_lock, run_gphoto2
-from astrophoto.lib.config import camera_profile, read_config
+from astro.lib.gphoto import camera_lock, run_gphoto2
+from astro.lib.config import camera_profile, read_config
 
 KINDS = ("light", "dark", "flat")
 # A target of None leaves the choice to the camera profile

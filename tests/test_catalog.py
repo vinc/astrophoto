@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from astrophoto.lib import catalog
+from astro.lib import catalog
 
 
 def point(ra, dec):
@@ -99,7 +99,7 @@ class ResolveTests(unittest.TestCase):
 
     def test_catalogs_are_read_from_the_data_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
-            data = Path(temporary) / "astrophoto"
+            data = Path(temporary) / "astro"
             data.mkdir()
             for name, content in zip(catalog.FILES, [MESSIER, DSOS, DSONAMES, STARNAMES, STARS]):
                 (data / name).write_text(json.dumps(content))
@@ -107,7 +107,7 @@ class ResolveTests(unittest.TestCase):
                 self.assertEqual(catalog.resolve("m31").designation, "M31")
                 (data / "messier.json").unlink()
                 catalog._index = None
-                with self.assertRaisesRegex(SystemExit, "astrophoto download"):
+                with self.assertRaisesRegex(SystemExit, "astro download"):
                     catalog.resolve("m31")
 
 

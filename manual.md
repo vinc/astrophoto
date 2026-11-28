@@ -1,8 +1,8 @@
-# Astrophoto manual
+# Astro manual
 
 ```
-astrophoto <command> [options]
-astrophoto <command> --help
+astro <command> [options]
+astro <command> --help
 ```
 
 Commands, in the order of a session:
@@ -24,8 +24,8 @@ Commands, in the order of a session:
 
 ## Configuration
 
-Settings are read from `~/.config/astrophoto/config.toml` (or
-`$XDG_CONFIG_HOME/astrophoto/config.toml`). Command-line options override them.
+Settings are read from `~/.config/astro/config.toml` (or
+`$XDG_CONFIG_HOME/astro/config.toml`). Command-line options override them.
 
 Top-level keys apply to every command:
 
@@ -65,17 +65,17 @@ Images can be Canon RAW (CR2) or FITS files, including stacks, unless noted.
 ## download
 
 ```
-astrophoto download
+astro download
 ```
 
 Downloads the astrometry.net index files used for plate solving, the star chart
 data, and the star and deep-sky object catalogs into
-`~/.local/share/astrophoto`. Run it once after installing.
+`~/.local/share/astro`. Run it once after installing.
 
 ## weather
 
 ```
-astrophoto weather [--time TIME] [--update] [--model MODEL]
+astro weather [--time TIME] [--update] [--model MODEL]
 ```
 
 Prints an hourly forecast of cloud cover by layer, wind, temperature, dew point
@@ -93,7 +93,7 @@ and rain from Open-Meteo.
 ## visible
 
 ```
-astrophoto visible [--time TIME] [--limit MAG] [--min-altitude DEG] [--update]
+astro visible [--time TIME] [--limit MAG] [--min-altitude DEG] [--update]
 ```
 
 Lists planets and asteroids above the horizon, brightest first, with the Sun
@@ -114,7 +114,7 @@ and Moon altitude and the Moon phase.
 ## focus
 
 ```
-astrophoto focus [options] [FILE ...]
+astro focus [options] [FILE ...]
 ```
 
 Measures the half-flux radius (HFR) of stars; a smaller HFR means sharper
@@ -170,7 +170,7 @@ Configuration: `[focus]`, `camera`.
 ## center
 
 ```
-astrophoto center (--query NAME | --ra DEG --dec DEG) [options] [FILE]
+astro center (--query NAME | --ra DEG --dec DEG) [options] [FILE]
 ```
 
 Captures an image, plate-solves it, and prints how far to pan and tilt the
@@ -199,7 +199,7 @@ Configuration: `[center]`, `[solve]`, `camera`, `timezone`.
 ## capture
 
 ```
-astrophoto capture [light|dark|flat] [--frames N] [--iso ISO] [--aperture F] [--shutterspeed SPEED] [--target ram|card]
+astro capture [light|dark|flat] [--frames N] [--iso ISO] [--aperture F] [--shutterspeed SPEED] [--target ram|card]
 ```
 
 Captures a sequence of RAW frames into a new `YYYYMMDD-HHMM-<kind>` directory.
@@ -235,7 +235,7 @@ Configuration: `[capture]`, `[capture.light]`, `[capture.dark]`,
 ## convert
 
 ```
-astrophoto convert FILE ...
+astro convert FILE ...
 ```
 
 Converts Canon CR2 files to FITS files next to them, keeping the raw Bayer
@@ -247,7 +247,7 @@ Configuration: `timezone`.
 ## stack
 
 ```
-astrophoto stack [options] DIRECTORY
+astro stack [options] DIRECTORY
 ```
 
 Aligns and stacks the FITS files in a directory into
@@ -304,7 +304,7 @@ Configuration: `[stack]`.
 ## locate
 
 ```
-astrophoto locate --query NAME FILE ...
+astro locate --query NAME FILE ...
 ```
 
 Plate-solves each image and saves a full-frame PNG marking the Solar System
@@ -318,7 +318,7 @@ Configuration: `[solve]`, `timezone`.
 ## crop
 
 ```
-astrophoto crop --query NAME [--radius PIXELS] FILE ...
+astro crop --query NAME [--radius PIXELS] FILE ...
 ```
 
 Plate-solves each image and saves a crop around the Solar System body, labeled
@@ -335,7 +335,7 @@ Configuration: `[solve]`, `timezone`.
 ## chart
 
 ```
-astrophoto chart [--query NAME] [--overlay] [--fov DEG] [--magnitude MAG] [--output FILE] FILE ...
+astro chart [--query NAME] [--overlay] [--fov DEG] [--magnitude MAG] [--output FILE] FILE ...
 ```
 
 Draws a star chart with the outline of each plate-solved image, optionally
@@ -365,7 +365,7 @@ Configuration: `[solve]`, `timezone`.
 ## server
 
 ```
-astrophoto server [--host ADDRESS] [--port PORT] [--latitude DEG --longitude DEG --elevation M]
+astro server [--host ADDRESS] [--port PORT] [--latitude DEG --longitude DEG --elevation M]
 ```
 
 Serves a web app for running the camera from a phone or laptop on the same
@@ -416,9 +416,9 @@ Configuration: `[server]`, `[focus]`, `[center]`, `[capture]`, `[stack]`,
 
 | Path | Contents |
 |---|---|
-| `~/.config/astrophoto/config.toml` | Configuration |
-| `~/.local/share/astrophoto` | Indexes and catalogs from `download` |
-| `~/.cache/astrophoto` | Cached forecasts and ephemerides |
+| `~/.config/astro/config.toml` | Configuration |
+| `~/.local/share/astro` | Indexes and catalogs from `download` |
+| `~/.cache/astro` | Cached forecasts and ephemerides |
 | `<image>.new` | Saved plate solution of an image, reused by later commands |
-| `~/.local/share/astrophoto/darks` | Dark library: master darks kept by `stack --dark` |
+| `~/.local/share/astro/darks` | Dark library: master darks kept by `stack --dark` |
 | `<directory>/alignment.json` | Frame alignment saved by the server's live stack, reused by `stack` |

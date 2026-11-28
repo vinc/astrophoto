@@ -1,0 +1,17 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Installs the Python version set in mise.toml
+      - uses: jdx/mise-action@v2
+      - run: pip install -e . pytest
+      # The camera and the plate solver are simulated, so the tests need neither gphoto2 nor solve-field
+      - run: python -m pytest

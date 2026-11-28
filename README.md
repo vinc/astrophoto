@@ -1,4 +1,4 @@
-# Astrophoto
+# Astro
 
 A personal collection of mostly vibe coded astrophotography scripts.
 
@@ -7,13 +7,13 @@ A personal collection of mostly vibe coded astrophotography scripts.
 Install the tool (along with `gphoto2` and `solve-field`):
 
 ```sh
-git clone https://github.com/vinc/astrophoto
-cd astrophoto
+git clone https://github.com/vinc/astro
+cd astro
 pip install -e .
-astrophoto download
+astro download
 ```
 
-Create a config file in `~/.config/astrophoto/config.toml`:
+Create a config file in `~/.config/astro/config.toml`:
 ```toml
 latitude = 51.18
 longitude = -1.83
@@ -48,7 +48,7 @@ See the [manual](manual.md) for every command and option.
 Prepare a session by checking the weather forecast for the night:
 
 ```
-$ astrophoto weather
+$ astro weather
 Date         Thu 12  Fri 13
 Time (h)     22  23   0   1   2   3   4   5   6   7
 ---------------------------------------------------
@@ -69,7 +69,7 @@ Rain (mm)     0   0   0   0   0   0   0   0   0   0
 Check what is visible in the sky at a given time:
 
 ```
-$ astrophoto visible --time 22:30
+$ astro visible --time 22:30
 2026-11-12 22:30 CET
 Sun at -49 degrees (dark sky)
 Moon at -32 degrees (waxing crescent, 12% illuminated)
@@ -92,15 +92,15 @@ Focus and center the camera, capture a sequence of raw pictures (light, dark,
 and flat frames), and convert the CR2 files into FITS files:
 
 ```sh
-astrophoto focus
-astrophoto center --query vesta
-astrophoto capture light
-astrophoto capture dark
-astrophoto capture flat
-astrophoto convert 2026*/*.CR2
+astro focus
+astro center --query vesta
+astro capture light
+astro capture dark
+astro capture flat
+astro convert 2026*/*.CR2
 ```
 
-Or run `astrophoto server` and open the address it prints from a phone or
+Or run `astro server` and open the address it prints from a phone or
 laptop to focus from a browser.
 
 ### After a session
@@ -108,7 +108,7 @@ laptop to focus from a browser.
 Stack the FITS files in a directory with optional dark and flat frames:
 
 ```sh
-astrophoto stack 20261221-2149-light \
+astro stack 20261221-2149-light \
     --dark 20261221-*-dark/*.fit \
     --flat 20261221-*-flat/*.fit
 ```
@@ -118,20 +118,27 @@ Add `--rgb` to render an RGB image.
 Mark an object in the full image:
 
 ```sh
-astrophoto locate 2026*/*-stack.fit --query vesta
+astro locate 2026*/*-stack.fit --query vesta
 ```
 
 Crop a major or minor body from one or more images:
 
 ```sh
-astrophoto crop 2026*/*.fit --query vesta
+astro crop 2026*/*.fit --query vesta
 ```
 
 Draw a star chart around one or more images with an optional filter query:
 
 ```sh
-astrophoto chart 2026*/*-stack.fit --query vesta
+astro chart 2026*/*-stack.fit --query vesta
 ```
 
 Images are plate-solved if needed, with solutions saved as `.new` files for
 reuse.
+
+## License
+
+Copyright (C) 2026 Vincent Ollivier
+
+Astro is free software, released under the
+[GNU Affero General Public License](LICENSE), version 3 or later.

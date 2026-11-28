@@ -2,7 +2,7 @@ from dataclasses import dataclass
 import json
 import re
 
-from astrophoto.lib.config import data_path
+from astro.lib.config import data_path
 
 FILES = ("messier.json", "dsos.14.json", "dsonames.json", "starnames.json", "stars.6.json")
 
@@ -42,7 +42,7 @@ def parse_size(dim):
 def load_json(name):
     path = data_path() / name
     if not path.exists():
-        raise SystemExit(f"Missing {path}; run 'astrophoto download'")
+        raise SystemExit(f"Missing {path}; run 'astro download'")
     with path.open() as file:
         return json.load(file)
 

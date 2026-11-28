@@ -14,8 +14,8 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 
-from astrophoto import crop
-from astrophoto import locate
+from astro import crop
+from astro import locate
 
 def solve(command, **kwargs):
     path = Path(command[-1])
@@ -50,8 +50,8 @@ class SolverTests(unittest.TestCase):
             fits.writeto(path, np.arange(15000).reshape(100, 150), fits.Header({"DATE-AVG": "2025-01-01T00:00:00"}))
             original = path.read_bytes()
             settings = Path(self.enterContext(tempfile.TemporaryDirectory()))
-            (settings / "astrophoto").mkdir(parents=True)
-            (settings / "astrophoto" / "config.toml").write_text("[solve]\nscale_low = 16\nscale_high = 18\n")
+            (settings / "astro").mkdir(parents=True)
+            (settings / "astro" / "config.toml").write_text("[solve]\nscale_low = 16\nscale_high = 18\n")
             for module, query in [(crop, "vesta"), (crop, "pallas"), (locate, "vesta")]:
                 argv = [
                     module.__name__ + ".py", str(path), "--query", query,

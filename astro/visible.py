@@ -14,12 +14,12 @@ from astropy.coordinates import (
 from astropy.time import Time
 from astropy.utils import iers
 
-from astrophoto.lib.config import add_observer_arguments
-from astrophoto.lib.localtime import parse_local_time
-from astrophoto.lib.night import night_start
+from astro.lib.config import add_observer_arguments
+from astro.lib.localtime import parse_local_time
+from astro.lib.night import night_start
 
 SBDB = "https://ssd-api.jpl.nasa.gov/sbdb_query.api"
-CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "minor-bodies.json"
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astro" / "minor-bodies.json"
 MAX_AGE = 30  # Days before trying to refresh the cached orbital elements
 ASTEROID_H_LIMIT = 12  # Fainter asteroids never get much brighter than magnitude 14
 

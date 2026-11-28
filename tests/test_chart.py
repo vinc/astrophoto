@@ -19,8 +19,8 @@ from astropy.table import Table
 from astropy.time import Time
 from astropy.wcs import WCS
 
-from astrophoto import chart
-from astrophoto.lib.catalog import SkyObject
+from astro import chart
+from astro.lib.catalog import SkyObject
 
 def make_header(ra=56.75, dec=24.1, angle=15, scale=0.00123, size=(3504, 2336)):
     wcs = WCS(naxis=2)
@@ -197,7 +197,7 @@ class ChartTests(unittest.TestCase):
         (self.path / "stars.6.json").unlink()
         with self.assertRaises(SystemExit) as raised:
             self.render([chart.footprint(make_header())])
-        self.assertIn("astrophoto download", str(raised.exception))
+        self.assertIn("astro download", str(raised.exception))
 
 class DescribeTimesTests(unittest.TestCase):
     paris = ZoneInfo("Europe/Paris")
@@ -234,6 +234,8 @@ class DefaultOutputTests(unittest.TestCase):
 class ChartCommandTests(unittest.TestCase):
     def run_main(self, argv, **patches):
         patches.setdefault("resolve", {"return_value": None})
+        # Labels are in the camera's timezone, which would otherwise be the computer's own
+        patches.setdefault("camera_timezone", {"return_value": ZoneInfo("Europe/Paris")})
         with patch.object(sys, "argv", ["chart.py", *argv]), \
                 contextlib.redirect_stdout(io.StringIO()) as stdout, \
                 contextlib.ExitStack() as stack:

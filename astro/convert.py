@@ -9,8 +9,8 @@ import exifread
 import rawpy
 from astropy.io import fits
 
-from astrophoto.lib.color import raw_color_metadata
-from astrophoto.lib.config import camera_timezone
+from astro.lib.color import raw_color_metadata
+from astro.lib.config import camera_timezone
 
 def exif_value(tags, key):
     tag = tags.get(key)

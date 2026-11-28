@@ -12,12 +12,12 @@ import requests
 from astropy import units as u
 from astropy.coordinates import EarthLocation
 
-from astrophoto.lib.config import add_observer_arguments
-from astrophoto.lib.localtime import parse_local_time
-from astrophoto.lib.night import MAX_HOURS, NIGHT, first_night, sun_altitude
+from astro.lib.config import add_observer_arguments
+from astro.lib.localtime import parse_local_time
+from astro.lib.night import MAX_HOURS, NIGHT, first_night, sun_altitude
 
 API = "https://api.open-meteo.com/v1/forecast"
-CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astrophoto" / "weather"
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "astro" / "weather"
 MAX_AGE = timedelta(minutes=15)  # Models update a few times a day, so a short wait loses nothing
 VARIABLES = [
     "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
