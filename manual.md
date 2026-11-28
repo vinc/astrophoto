@@ -374,6 +374,17 @@ time and shows what is running, the camera model, its battery level, the
 free disk space, and the computer's CPU and memory use and ACPI temperature. The Night button turns the page red to keep your eyes dark
 adapted.
 
+The Weather tab shows the hourly forecast for the night like `weather`, with
+each hour colored green when clear, yellow with haze, rain, gusts or a risk of
+dew, and red when cloudy. Download again skips the 15 minute cache.
+
+The Visible tab lists the planets, asteroids and comets above the horizon like
+`visible`, brightest first, with the Sun and Moon altitude and the Moon phase.
+Update orbits downloads fresh orbital elements from JPL.
+
+Both tabs take a time in the same words as the commands, such as
+`tomorrow night` or `23:00`, and need the observer position.
+
 The Focus tab measures the HFR of stars over and over, from live view or
 from RAW captures, like `focus` and `focus --live`. The Near and Far buttons
 move the lens by one step of each size between frames, and Autofocus scans
@@ -410,7 +421,7 @@ working.
 : Port to listen on (default: 8000).
 
 Configuration: `[server]`, `[focus]`, `[center]`, `[capture]`, `[stack]`,
-`[solve]`, `camera`, `timezone`.
+`[solve]`, `camera`, `timezone`, `latitude`, `longitude`, `elevation`.
 
 ## Files
 
