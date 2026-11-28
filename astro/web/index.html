@@ -290,7 +290,7 @@
     <div class="title" id="stack-title"></div>
     <div class="view" id="stack-view"><div class="empty">Capture light frames to see them stacked as they arrive.</div></div>
   </section>
-  <div id="log"></div>
+  <div id="log" hidden></div>
 </main>
 <div id="toast"></div>
 <script>
@@ -805,7 +805,7 @@ const handlers = {
       stage = {name: null};
     } else if ($("calibrated-title").textContent.startsWith("Stacking")) {
       // A finished stack is announced before the job ends, so this one failed
-      $("calibrated-title").textContent = "Stacking failed; see the log below";
+      $("calibrated-title").textContent = "Stacking failed";
     }
   },
   stack_progress(event) {
@@ -884,6 +884,8 @@ $("night").onclick = () => {
 
 fetch("/api/config").then((response) => response.json()).then((value) => {
   config = value;
+  // The server console has the log; the page only shows it for debugging
+  $("log").hidden = !config.debug;
   setupSky();
   setupFocus();
   setupCenter();

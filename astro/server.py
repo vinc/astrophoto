@@ -74,17 +74,21 @@ class Stopped(Exception):
 class Hub:
     """Send events to every connected browser, keeping the latest of each kind for browsers that connect later."""
 
-    def __init__(self):
+    def __init__(self, send_logs=True):
         self.lock = threading.Lock()
         self.clients = set()
         self.latest = {}
         self.logs = deque(maxlen=200)
+        # The server console has every log line, so browsers only get them for debugging
+        self.send_logs = send_logs
 
     def publish(self, kind, /, **data):
         event = {"type": kind, "time": time.time(), **data}
         with self.lock:
             if kind == "log":
                 self.logs.append(event)
+                if not self.send_logs:
+                    return
             elif kind not in TRANSIENT:
                 self.latest[kind] = event
             for client in self.clients:
@@ -104,7 +108,7 @@ class Hub:
         client = queue.Queue(maxsize=200)
         with self.lock:
             self.clients.add(client)
-            return client, [*self.latest.values(), *self.logs]
+            return client, [*self.latest.values(), *(self.logs if self.send_logs else ())]
 
     def unsubscribe(self, client):
         with self.lock:
@@ -315,8 +319,9 @@ def preview_file(path):
 class App:
     def __init__(self, focus_settings, camera=None, radius=None, status_interval=STATUS_INTERVAL,
                  center_settings=None, observer=None, timezone=None, scale=None, capture_settings=None, root=None,
-                 stack_settings=None):
-        self.hub = Hub()
+                 stack_settings=None, debug=False):
+        self.debug = debug
+        self.hub = Hub(send_logs=debug)
         self.images = Images()
         self.jobs = Jobs(self.hub)
         self.focus_settings = focus_settings
@@ -376,6 +381,7 @@ class App:
             "targets": list(TARGETS),
             "zooms": ZOOMS,
             "steps": FOCUS_STEPS,
+            "debug": self.debug,
         }
 
     # Status
@@ -1106,6 +1112,7 @@ def main():
     )
     parser.add_argument("--host", help="Address to listen on (default: 0.0.0.0, every network interface)")
     parser.add_argument("--port", type=int, help="Port to listen on (default: 8000)")
+    parser.add_argument("--debug", action="store_true", help="Show the server's log in the page")
     add_observer_arguments(parser, required=False, note=", for the Center tab")
     args = parser.parse_args()
     # Everything the server and the commands it runs print, from any thread, is dated
@@ -1136,7 +1143,7 @@ def main():
 
     app = App(focus_settings, camera, center_settings=center_settings, observer=observer,
               timezone=camera_timezone(parser), scale=solve_scale(parser), capture_settings=capture_defaults,
-              stack_settings=stack.stack_settings(parser))
+              stack_settings=stack.stack_settings(parser), debug=args.debug)
     # From now on, what the server and the commands it runs print also reaches the page's log
     sys.stdout.hub = sys.stderr.hub = app.hub
     try:

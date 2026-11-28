@@ -104,6 +104,23 @@ class ServerTests(ServerCase):
         self.assertIsNone(self.latest("job")["name"])
         self.assertTrue(any("--capture-preview" in command and "eoszoom=5" in command for command in self.fake.commands))
 
+    def test_log_lines_reach_browsers_only_when_debugging(self):
+        _, _, body = self.get("/api/config")
+        self.assertFalse(json.loads(body)["debug"])
+        self.app.hub.log("hidden")
+        client, backlog = self.app.hub.subscribe()
+        self.addCleanup(self.app.hub.unsubscribe, client)
+        self.app.hub.log("hidden too")
+        self.assertNotIn("log", [event["type"] for event in backlog])
+        self.assertTrue(client.empty())
+        # The server keeps them all the same
+        self.assertEqual([event["text"] for event in self.app.hub.logs][-2:], ["hidden", "hidden too"])
+        debug = server.App({"shutterspeed": "1/4", "iso": None}, debug=True)
+        self.addCleanup(debug.close, 10)
+        self.assertTrue(debug.config()["debug"])
+        debug.hub.log("shown")
+        self.assertEqual([event["text"] for event in debug.hub.subscribe()[1] if event["type"] == "log"], ["shown"])
+
     def test_drive_buttons_move_the_lens(self):
         status, _ = self.post("/api/focus/move", {"steps": 2, "size": 3})
         self.assertEqual(status, 200)
@@ -178,6 +195,7 @@ class ServerTests(ServerCase):
         self.assertEqual(self.app.hub.logs[-1]["text"], "Autofocus failed: Error: No camera found.")
 
     def test_events_stream_replays_the_latest_state(self):
+        self.app.hub.send_logs = True
         self.app.hub.publish("status", camera="Canon EOS 600D", battery="75%", busy=False)
         self.app.hub.publish("error", message="old")
         self.app.hub.log("hello")

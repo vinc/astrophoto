@@ -365,7 +365,7 @@ Configuration: `[solve]`, `timezone`.
 ## server
 
 ```
-astro server [--host ADDRESS] [--port PORT] [--latitude DEG --longitude DEG --elevation M]
+astro server [--host ADDRESS] [--port PORT] [--debug] [--latitude DEG --longitude DEG --elevation M]
 ```
 
 Serves a web app for running the camera from a phone or laptop on the same
@@ -426,6 +426,10 @@ working.
 
 `--port PORT`
 : Port to listen on (default: 8000).
+
+`--debug`
+: Also show the server's log in the page, below the tabs. It is always printed
+  in the terminal.
 
 Configuration: `[server]`, `[focus]`, `[center]`, `[capture]`, `[stack]`,
 `[solve]`, `camera`, `timezone`, `latitude`, `longitude`, `elevation`.
