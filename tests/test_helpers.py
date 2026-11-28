@@ -544,7 +544,7 @@ class CaptureTests(unittest.TestCase):
 
             def interleaved(hdu, name, **kwargs):
                 writeto(hdu, name, **kwargs)
-                written.append(Path(name).name)
+                written.append(Path(name))
                 # Another conversion of the same file, from the command line, runs while this one is underway
                 if len(written) == 1:
                     conversion.convert(source, ZoneInfo("UTC"))
@@ -563,6 +563,34 @@ class CaptureTests(unittest.TestCase):
                 result = conversion.convert(source, ZoneInfo("UTC"))
             self.assertEqual(len(set(written)), 2)
             self.assertTrue((fits.getdata(result) == 123).all())
+            self.assertEqual(sorted(path.name for path in Path(temporary).iterdir()), ["light.CR2", "light.fit"])
+
+    def test_converted_frames_get_the_usual_file_permissions(self):
+        import os
+        import stat
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "light.CR2"
+            source.touch()
+            # Reconverting a frame others could read keeps it readable to them
+            (Path(temporary) / "light.fit").write_bytes(b"old")
+            (Path(temporary) / "light.fit").chmod(0o644)
+            tags = {"EXIF DateTimeOriginal": "2026:11:26 19:43:26", "EXIF ExposureTime": "5"}
+            previous = os.umask(0o022)
+            try:
+                with patch.object(conversion.rawpy, "imread") as imread, \
+                        patch.object(conversion.exifread, "process_file", return_value=tags), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    raw = imread.return_value.__enter__.return_value
+                    raw.raw_image_visible = np.full((20, 20), 123, dtype=np.uint16)
+                    raw.black_level_per_channel = [100] * 4
+                    raw.white_level = 4095
+                    raw.color_desc = b"RGBG"
+                    raw.raw_colors_visible = np.tile([[0, 1], [3, 2]], (10, 10))
+                    raw.daylight_whitebalance = [2, 1, 1.5, 0]
+                    result = conversion.convert(source, ZoneInfo("UTC"))
+            finally:
+                os.umask(previous)
+            self.assertEqual(stat.S_IMODE(result.stat().st_mode), 0o644)
             self.assertEqual(sorted(path.name for path in Path(temporary).iterdir()), ["light.CR2", "light.fit"])
 
     def test_conversion_records_the_sensor_temperature_from_the_maker_notes(self):

@@ -1,7 +1,6 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
-import os
 from pathlib import Path
 import re
 import tempfile
@@ -142,15 +141,12 @@ def convert(path, tz, output=None):
 
     output = Path(output) if output is not None else path.with_suffix(".fit")
     # Written under a temporary name, then renamed, so a stack scanning for FITS frames never reads half a file;
-    # each conversion has a name of its own, so two converting the same file at once cannot mix their writes
-    handle, name = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=output.parent)
-    os.close(handle)
-    temporary = Path(name)
-    try:
-        hdu.writeto(temporary, overwrite=True)
-        temporary.replace(output)
-    finally:
-        temporary.unlink(missing_ok=True)
+    # each conversion has a directory of its own, so two converting the same file at once cannot mix their writes,
+    # and the file is created as usual, with the permissions the user's umask gives rather than private ones
+    with tempfile.TemporaryDirectory(prefix=f".{output.name}.", dir=output.parent) as temporary:
+        written = Path(temporary) / output.name
+        hdu.writeto(written)
+        written.replace(output)
 
     print(f"{path} -> {output}")
     print(f"  Start:    {start.isoformat()}")
