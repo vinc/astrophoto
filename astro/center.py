@@ -14,12 +14,12 @@ from astropy.time import Time
 from astropy.utils import iers
 from astropy.wcs import NoConvergence, WCS
 
-from astrophoto.lib.camera import capture, display_limits, preview_figure, read_image
-from astrophoto.lib.catalog import AmbiguousObject, resolve
-from astrophoto.lib.config import (
+from astro.lib.camera import capture, display_limits, preview_figure, read_image
+from astro.lib.catalog import AmbiguousObject, resolve
+from astro.lib.config import (
     add_observer_arguments, camera_profile, camera_timezone, command_settings, observer_location, solve_scale,
 )
-from astrophoto.locate import PlateSolveError, get_ephemerides, solve_image
+from astro.locate import PlateSolveError, get_ephemerides, solve_image
 
 DEFAULTS = {"shutterspeed": None, "iso": None}
 # Search radius in degrees around the previous solution while the camera is moved by hand
@@ -216,7 +216,7 @@ def main():
         while True:
             if figure is not None and not plt.fignum_exists(figure.number):
                 break
-            with tempfile.TemporaryDirectory(prefix="astrophoto-center-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="astro-center-") as temporary:
                 try:
                     solved, result = point(
                         temporary, target, observer, settings, timezone, (scale_low, scale_high),

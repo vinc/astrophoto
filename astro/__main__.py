@@ -19,9 +19,9 @@ COMMANDS = {
 
 def usage():
     width = max(map(len, COMMANDS))
-    lines = ["usage: astrophoto <command> [options]", "", "commands:"]
+    lines = ["usage: astro <command> [options]", "", "commands:"]
     lines += [f"  {name:<{width}}  {description}" for name, description in COMMANDS.items()]
-    lines += ["", "Run 'astrophoto <command> --help' for the options of a command."]
+    lines += ["", "Run 'astro <command> --help' for the options of a command."]
     return "\n".join(lines)
 
 
@@ -35,10 +35,10 @@ def main(argv=None):
         print(usage())
         return 0
     if command not in COMMANDS:
-        print(f"astrophoto: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
+        print(f"astro: unknown command '{command}'\n\n{usage()}", file=sys.stderr)
         return 2
-    module = importlib.import_module(f"astrophoto.{command}")
-    sys.argv = [f"astrophoto {command}", *arguments]
+    module = importlib.import_module(f"astro.{command}")
+    sys.argv = [f"astro {command}", *arguments]
     module.main()
     return 0
 

@@ -6,9 +6,9 @@ import numpy as np
 from astropy.io import fits
 from matplotlib import pyplot as plt
 
-from astrophoto.lib import alignment
-from astrophoto.lib.camera import stack_display_limits
-from astrophoto.stack import normalize_background, stack_header
+from astro.lib import alignment
+from astro.lib.camera import stack_display_limits
+from astro.stack import normalize_background, stack_header
 
 # Pixels need this many samples before a value far from their running mean is rejected: a spread estimated
 # from fewer would also reject about one sample in twenty of plain noise

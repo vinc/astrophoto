@@ -19,12 +19,12 @@ from astropy.time import Time
 from astropy.utils import iers
 from astropy.wcs import WCS
 
-from astrophoto.lib import camera
-from astrophoto.lib.catalog import AmbiguousObject, SkyObject
-from astrophoto import center
-from astrophoto import convert as conversion
-from astrophoto import focus
-from astrophoto import locate
+from astro.lib import camera
+from astro.lib.catalog import AmbiguousObject, SkyObject
+from astro import center
+from astro import convert as conversion
+from astro import focus
+from astro import locate
 
 def star_field(sigma):
     rng = np.random.default_rng(42)
@@ -385,7 +385,7 @@ class CenterTests(unittest.TestCase):
             data = directory / "data"
             data.mkdir()
             with patch.object(locate, "DATA", data), patch.object(locate.subprocess, "run"):
-                with self.assertRaisesRegex(RuntimeError, "no astrometry.net index files .* run 'astrophoto download'"):
+                with self.assertRaisesRegex(RuntimeError, "no astrometry.net index files .* run 'astro download'"):
                     center.solve_image(path, directory, None, 3, 20)
                 (data / "index-4107.fits").touch()
                 with self.assertRaisesRegex(RuntimeError, "check focus, exposure, indexes"):

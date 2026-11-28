@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 from astropy.io import fits
 
-from astrophoto.lib.livestack import LiveStack
+from astro.lib.livestack import LiveStack
 
 
 def sky(dx=0.0, dy=0.0, seed=0, shape=(240, 320), stars=40, trail=False, noise=5):

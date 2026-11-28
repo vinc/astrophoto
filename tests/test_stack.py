@@ -12,7 +12,7 @@ matplotlib.use("Agg")
 import numpy as np
 from astropy.io import fits
 
-from astrophoto import stack
+from astro import stack
 
 class DebandingTests(unittest.TestCase):
     def test_reduces_bands_preserves_stars_and_scales_with_amount(self):
@@ -99,7 +99,7 @@ class DebandingTests(unittest.TestCase):
     def test_deband_defaults_to_the_stack_table(self):
         import os
         with tempfile.TemporaryDirectory() as temporary:
-            config = Path(temporary) / "astrophoto" / "config.toml"
+            config = Path(temporary) / "astro" / "config.toml"
             config.parent.mkdir()
             for text, argv, expected in [
                 ("", [], 1),
@@ -139,7 +139,7 @@ class DarkTests(unittest.TestCase):
         self.assertEqual(metadata, {"ISO": 800, "EXPTIME": 5})
 
     def test_subtraction_precedes_alignment_and_keeps_negative_signal_and_metadata(self):
-        from astrophoto.lib import camera
+        from astro.lib import camera
 
         y, x = np.mgrid[:8, :10]
         dark = (100 + y * 3 + x % 2 * 20).astype(np.uint16)

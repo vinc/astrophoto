@@ -7,8 +7,8 @@ from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from astrophoto.lib import localtime
-from astrophoto.lib.localtime import parse_local_time
+from astro.lib import localtime
+from astro.lib.localtime import parse_local_time
 
 @contextlib.contextmanager
 def local_time_zone(name):

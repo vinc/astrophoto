@@ -8,9 +8,9 @@ from unittest.mock import patch
 import numpy as np
 from astropy.io import fits
 
-from astrophoto import stack
-from astrophoto.lib import alignment, darks
-from astrophoto.lib.livestack import LiveStack
+from astro import stack
+from astro.lib import alignment, darks
+from astro.lib.livestack import LiveStack
 from tests.test_livestack import sky
 
 HEADER = {"INSTRUME": "Canon EOS 600D", "ISO": 800, "EXPTIME": 5.0, "BLACKLVL": 100.0, "WHITELEV": 16000,

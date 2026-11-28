@@ -7,8 +7,8 @@ import matplotlib
 from astropy.io import fits
 from astropy.time import Time
 
-from astrophoto.lib.config import add_observer_arguments, camera_timezone, observer_location, solve_scale
-from astrophoto.locate import get_ephemerides, save_image, solve_image
+from astro.lib.config import add_observer_arguments, camera_timezone, observer_location, solve_scale
+from astro.locate import get_ephemerides, save_image, solve_image
 
 def crop_image(path, radius, ra, dec, time, query, target_name=None, source_path=None):
     return save_image(
@@ -50,7 +50,7 @@ def main():
     failed = False
     timezone = camera_timezone(parser)
 
-    with tempfile.TemporaryDirectory(prefix="astrophoto-crop-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="astro-crop-") as temporary:
         for index, path in enumerate(args.files):
             try:
                 directory = Path(temporary) / str(index)

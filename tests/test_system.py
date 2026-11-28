@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from astrophoto.lib.system import CpuUsage, acpi_temperature, memory_percent
+from astro.lib.system import CpuUsage, acpi_temperature, memory_percent
 
 
 class SystemTests(unittest.TestCase):

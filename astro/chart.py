@@ -15,11 +15,11 @@ from astropy.time import Time
 from astropy.utils import iers
 from astropy.wcs import WCS
 
-from astrophoto.lib.camera import display_limits, stack_display_limits
-from astrophoto.lib.catalog import AmbiguousObject, resolve
-from astrophoto.lib.color import read_rgb, read_saturation, render_rgb
-from astrophoto.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
-from astrophoto.locate import get_ephemerides, solve_image
+from astro.lib.camera import display_limits, stack_display_limits
+from astro.lib.catalog import AmbiguousObject, resolve
+from astro.lib.color import read_rgb, read_saturation, render_rgb
+from astro.lib.config import add_observer_arguments, camera_timezone, data_path, observer_location, solve_scale
+from astro.locate import get_ephemerides, solve_image
 
 CATALOG = data_path()
 WIDTH, HEIGHT = 1200, 900
@@ -135,7 +135,7 @@ def chart_wcs(center, fov):
 def load_features(name):
     path = CATALOG / name
     if not path.exists():
-        raise SystemExit(f"Missing {path}; run 'astrophoto download'")
+        raise SystemExit(f"Missing {path}; run 'astro download'")
     with path.open() as file:
         return json.load(file)["features"]
 
@@ -371,7 +371,7 @@ def main():
     timezone = camera_timezone(parser)
     failed = False
     observations = []
-    with tempfile.TemporaryDirectory(prefix="astrophoto-chart-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="astro-chart-") as temporary:
         for index, path in enumerate(args.files):
             try:
                 directory = Path(temporary) / str(index)

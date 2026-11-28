@@ -24,17 +24,17 @@ from matplotlib import image as mpimage, style
 from matplotlib.figure import Figure
 import numpy as np
 
-from astrophoto import capture as capture_command, center, convert, focus, stack
-from astrophoto.capture import DEFAULTS as CAPTURE_DEFAULTS, KINDS, TARGETS, capture_series, series_directory
-from astrophoto.lib.camera import capture, display_limits, live_preview, move_focus, stack_display_limits
-from astrophoto.lib.catalog import AmbiguousObject
-from astrophoto.lib.config import (
+from astro import capture as capture_command, center, convert, focus, stack
+from astro.capture import DEFAULTS as CAPTURE_DEFAULTS, KINDS, TARGETS, capture_series, series_directory
+from astro.lib.camera import capture, display_limits, live_preview, move_focus, stack_display_limits
+from astro.lib.catalog import AmbiguousObject
+from astro.lib.config import (
     SOLVE, add_observer_arguments, camera_profile, camera_timezone, command_settings, observer_location, solve_scale,
 )
-from astrophoto.locate import PlateSolveError
-from astrophoto.lib.gphoto import ENGLISH, FOCUS_STEPS, camera_lock
-from astrophoto.lib.livestack import LiveStack
-from astrophoto.lib.system import CpuUsage, acpi_temperature, memory_percent
+from astro.locate import PlateSolveError
+from astro.lib.gphoto import ENGLISH, FOCUS_STEPS, camera_lock
+from astro.lib.livestack import LiveStack
+from astro.lib.system import CpuUsage, acpi_temperature, memory_percent
 
 DEFAULTS = {"host": "0.0.0.0", "port": "8000"}
 ZOOMS = (1, 5, 10)
@@ -403,7 +403,7 @@ class App:
         source = f"live view at zoom {zoom}" if live else f"RAW captures at {shutterspeed}"
         self.hub.log(f"Measuring focus from {source}; lower HFR is better")
         while not stop.is_set():
-            with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="astro-focus-") as temporary:
                 try:
                     path = live_preview(temporary, zoom, iso=iso) if live else capture(temporary, shutterspeed, iso)
                 except subprocess.CalledProcessError as exc:
@@ -501,7 +501,7 @@ class App:
         near = None
         self.hub.log(f"Pointing at {target.query}" + ("; move the camera between captures" if loop else ""))
         while not stop.is_set():
-            with tempfile.TemporaryDirectory(prefix="astrophoto-center-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="astro-center-") as temporary:
                 try:
                     solved, result = center.point(
                         temporary, target, self.observer, settings, self.timezone, self.scale,
@@ -811,7 +811,7 @@ def text(body, key, default):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "astrophoto"
+    server_version = "astro"
     protocol_version = "HTTP/1.1"
 
     @property
@@ -837,7 +837,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         if path == "/":
-            page = resources.files("astrophoto").joinpath("web/index.html").read_bytes()
+            page = resources.files("astro").joinpath("web/index.html").read_bytes()
             self.send(200, page, "text/html; charset=utf-8")
         elif path == "/api/config":
             self.send_json(200, self.app.config())

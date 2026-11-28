@@ -1,12 +1,15 @@
 [build-system]
-requires = ["setuptools>=64"]
+# License expressions need setuptools 77
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "astrophoto"
+name = "astro-vinua"
 version = "0.1.0"
-description = "Astrophotography scripts: forecast, capture, convert, stack, plate-solve, crop, and chart"
+description = "Astrophotography tools: forecast, focus, center, capture, stack, plate-solve, and chart, with a web app"
 readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "astroalign",
@@ -22,10 +25,10 @@ dependencies = [
 ]
 
 [project.scripts]
-astrophoto = "astrophoto.__main__:main"
+astro = "astro.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["astrophoto*"]
+include = ["astro", "astro.*"]
 
 [tool.setuptools.package-data]
-astrophoto = ["web/*.html"]
+astro = ["web/*.html"]

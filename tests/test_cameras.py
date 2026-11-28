@@ -12,8 +12,8 @@ from unittest.mock import patch
 import numpy as np
 from astropy.io import fits
 
-from astrophoto import capture as capture_command, center, focus, locate
-from astrophoto.lib import camera, config, gphoto
+from astro import capture as capture_command, center, focus, locate
+from astro.lib import camera, config, gphoto
 
 OBSERVER = ["--latitude", "0", "--longitude", "0", "--elevation", "0"]
 
@@ -25,7 +25,7 @@ class ConfiguredTests(unittest.TestCase):
         patcher = patch.dict(os.environ, {"XDG_CONFIG_HOME": directory.name})
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.path = Path(directory.name) / "astrophoto" / "config.toml"
+        self.path = Path(directory.name) / "astro" / "config.toml"
         self.path.parent.mkdir(parents=True)
 
     def run_helper(self, helper, *args):
@@ -98,13 +98,13 @@ class ScaleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "frame.fit"
             fits.writeto(path, np.zeros((4, 4)), fits.Header({"RAWFILE": "IMG_1.CR2", "XPIXSZ": 4.3, "XBINNING": 1}))
-            from astrophoto import stack
+            from astro import stack
             header = stack.stack_header(path, [path])
         self.assertEqual((header["XBINNING"], header["XPIXSZ"]), (2, 8.6))
         self.assertNotIn("RAWFILE", header)
 
     def test_pixel_size_is_read_from_the_exif_focal_plane_resolution(self):
-        from astrophoto import convert
+        from astro import convert
 
         class Tag:
             def __init__(self, text, values):

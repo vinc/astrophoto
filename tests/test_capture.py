@@ -23,11 +23,11 @@ class CaptureCase(unittest.TestCase):
         self.fake_gphoto2(directory)
         settings = directory / "config"
         if config is not None:
-            (settings / "astrophoto").mkdir(parents=True)
-            (settings / "astrophoto" / "config.toml").write_text(config)
+            (settings / "astro").mkdir(parents=True)
+            (settings / "astro" / "config.toml").write_text(config)
         log = directory / "arguments.txt"
         result = subprocess.run(
-            [sys.executable, "-m", "astrophoto", "capture", *arguments], cwd=directory,
+            [sys.executable, "-m", "astro", "capture", *arguments], cwd=directory,
             env=self.environment(directory, settings, log, fail_stage=fail_stage, camera_files=camera_files,
                                  captured=captured, downloaded=downloaded, empty=empty, first_folder=first_folder,
                                  ram_fail_at=ram_fail_at, ram_empty_at=ram_empty_at),
@@ -177,7 +177,7 @@ class CaptureTests(CaptureCase):
             with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as temporary:
                 result, commands, folders = self.run_capture(Path(temporary), *arguments)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("usage: astrophoto capture", result.stderr)
+                self.assertIn("usage: astro capture", result.stderr)
                 self.assertEqual(commands, [])
                 self.assertEqual(folders, [])
 
@@ -185,7 +185,7 @@ class CaptureTests(CaptureCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             result = subprocess.run(
-                [sys.executable, "-m", "astrophoto", "capture"], cwd=directory,
+                [sys.executable, "-m", "astro", "capture"], cwd=directory,
                 env=dict(os.environ, PATH=str(directory), PYTHONPATH=str(ROOT), XDG_CONFIG_HOME=str(directory)),
                 capture_output=True, text=True,
             )
@@ -343,7 +343,7 @@ class RamCaptureTests(CaptureCase):
             log = directory / "arguments.txt"
             # Like a terminal, send the interrupt to every process in the foreground group
             process = subprocess.Popen(
-                [sys.executable, "-m", "astrophoto", "capture", "--target", "ram", "--frames", "5"], cwd=directory,
+                [sys.executable, "-m", "astro", "capture", "--target", "ram", "--frames", "5"], cwd=directory,
                 env=self.environment(directory, directory / "config", log, slow=1),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
             )

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
-from astrophoto import download
+from astro import download
 
 
 class FakeResponse:
@@ -40,7 +40,7 @@ class FakeResponse:
 class DownloadTests(unittest.TestCase):
     def run_download(self, fail="", existing=()):
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        data = directory / "astrophoto"
+        data = directory / "astro"
         data.mkdir()
         for name in existing:
             (data / name).write_text("old")

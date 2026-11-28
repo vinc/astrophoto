@@ -11,12 +11,12 @@ from astropy.stats import sigma_clipped_stats
 from scipy.ndimage import label
 from scipy.optimize import least_squares
 
-from astrophoto.lib.camera import (
+from astro.lib.camera import (
     CAMERAS, capture, display_limits, ensure_back_button_focus, image_optics, live_preview, move_focus, pixel_scale,
     preview_figure, read_image,
 )
-from astrophoto.lib.gphoto import FOCUS_STEPS, camera_lock
-from astrophoto.lib.config import camera_profile, command_settings
+from astro.lib.gphoto import FOCUS_STEPS, camera_lock
+from astro.lib.config import camera_profile, command_settings
 
 class FocusRangeError(ValueError):
     pass
@@ -242,7 +242,7 @@ def _autofocus(span, step, zoom, radius, iso, samples, show, log):
         # The median of a few frames outvotes a frame where noise passed for a star
         readings = []
         for sample in range(samples):
-            with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="astro-focus-") as temporary:
                 path = live_preview(temporary, zoom, drive=drive if sample == 0 else 0, step=step, iso=iso)
                 data, stars, hfr, problem = measure_frame(path, radius)
             if hfr is not None:
@@ -364,7 +364,7 @@ def main():
         while args.files or not args.frames or count < args.frames:
             if figure is not None and not plt.fignum_exists(figure.number):
                 break
-            with tempfile.TemporaryDirectory(prefix="astrophoto-focus-") as temporary:
+            with tempfile.TemporaryDirectory(prefix="astro-focus-") as temporary:
                 try:
                     if args.files:
                         path = args.files[count]

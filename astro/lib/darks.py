@@ -6,7 +6,7 @@ import re
 import numpy as np
 from astropy.io import fits
 
-from astrophoto.lib.config import data_path
+from astro.lib.config import data_path
 
 # A dark matches lights from the same camera, at the same ISO and exposure time
 KEYS = ("INSTRUME", "ISO", "EXPTIME")
