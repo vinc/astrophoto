@@ -369,9 +369,10 @@ function setupObserver() {
 const RATING_TITLES = {green: "Clear", yellow: "Haze, rain, gusts or dew", red: "Cloudy"};
 
 async function loadWeather() {
-  if (!config.observer) return;
-  loaded.add("weather");
   const button = $("weather-show");
+  // Enter in a field and the button share this guard, so one request runs at a time
+  if (!config.observer || button.disabled) return;
+  loaded.add("weather");
   button.disabled = true;
   $("weather-title").textContent = "Loading the forecast…";
   const update = $("weather-update").checked;
@@ -428,9 +429,10 @@ async function loadWeather() {
 }
 
 async function loadVisible() {
-  if (!config.observer) return;
-  loaded.add("visible");
   const button = $("visible-show");
+  // Enter in a field and the button share this guard, so one request runs at a time
+  if (!config.observer || button.disabled) return;
+  loaded.add("visible");
   button.disabled = true;
   $("visible-title").textContent = "Working out where everything is…";
   const update = $("visible-update").checked;
