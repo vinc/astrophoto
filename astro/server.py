@@ -354,6 +354,7 @@ class App:
         self.series_lock = threading.Lock()
         # library.toml is read and written from the capture, stacking and request threads
         self.library_lock = threading.Lock()
+        self.master_lock = threading.Lock()
         # The series being captured, which library.toml describes once it ends
         self.capturing = None
         self.series = None
@@ -679,6 +680,7 @@ class App:
                 return
             if len(item) == 1:
                 self.save_stack(item[0])
+                self.series_master(item[0])
                 continue
             path, directory, kind, row = item
             try:
@@ -825,17 +827,29 @@ class App:
         except (OSError, ValueError) as exc:
             self.hub.log(f"Could not add {name} to {library.NAME}: {error_text(exc)}")
 
-    def calibration_master(self, name, kind, progress):
+    def calibration_master(self, name, kind, progress=stack.no_progress):
         """Return the master of a dark or flat series, combining its frames first when they are newer."""
-        path = library.master_path(self.root, name)
-        frames = self.series_frames(name, kind)
-        if path.exists() and all(frame.stat().st_mtime <= path.stat().st_mtime for frame in frames):
+        # A series that just ended and a calibrated stack may both want the same master
+        with self.master_lock:
+            path = library.master_path(self.root, name)
+            frames = self.series_frames(name, kind)
+            if path.exists() and all(frame.stat().st_mtime <= path.stat().st_mtime for frame in frames):
+                return path
+            combine = stack.master_dark if kind == "dark" else stack.master_flat
+            data, metadata = combine(frames, progress)
+            stack.write_master(path, data, metadata, frames)
+            self.hub.log(f"Saved the master {kind} of {name} as {name}/{path.name}")
             return path
-        combine = stack.master_dark if kind == "dark" else stack.master_flat
-        data, metadata = combine(frames, progress)
-        stack.write_master(path, data, metadata, frames)
-        self.hub.log(f"Saved the master {kind} of {name} as {name}/{path.name}")
-        return path
+
+    def series_master(self, directory):
+        """Combine the master of a dark or flat series once its frames are converted, ready for the library."""
+        kind = library.kind(directory.name)
+        if kind not in library.MASTERS or not self.series_frames(directory.name, kind):
+            return
+        try:
+            self.calibration_master(directory.name, kind)
+        except Exception as exc:
+            self.hub.log(f"Could not combine the master {kind} of {directory.name}: {error_text(exc)}")
 
     def calibrated_stack(self, lights, darks, flats, options):
         directory = self.root / lights

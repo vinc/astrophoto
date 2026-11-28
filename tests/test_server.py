@@ -451,6 +451,20 @@ class CaptureServerTests(ServerCase):
         self.assertEqual(library.load(self.app.root)[directory.name],
                          {"camera": "Canon EOS 600D", "shutter": "5", "iso": 1600})
 
+    def test_a_dark_series_keeps_its_master_once_it_ends(self):
+        directory = self.run_series(frames=3, kind="dark")
+        self.wait_for(lambda: (directory / "dark.fit").exists())
+        self.assertEqual(fits.getheader(directory / "dark.fit")["NDARKS"], 3)
+        self.assertIn(f"Saved the master dark of {directory.name} as {directory.name}/dark.fit",
+                      [event["text"] for event in self.app.hub.logs])
+
+    def test_a_master_that_cannot_be_combined_is_reported(self):
+        # These frames lack the RAW black level that flats need
+        directory = self.run_series(frames=2, kind="flat")
+        message = f"Could not combine the master flat of {directory.name}: "
+        self.wait_for(lambda: any(event["text"].startswith(message) for event in self.app.hub.logs))
+        self.assertFalse((directory / "flat.fit").exists())
+
     def test_stop_ends_the_series_after_the_current_frame(self):
         self.post("/api/capture/start", {"frames": 50})
         self.captured.wait(30)

@@ -414,9 +414,10 @@ frame, as `capture` leaves them, are converted first. It runs while the camera
 keeps working.
 
 Darks and flats come from the library by default, or from a chosen series, or
-none. A dark or flat series used once keeps its master, `dark.fit` or
-`flat.fit`, beside its frames, combined again when frames are added. The
-library then picks, among the series with a master:
+none. A dark or flat series keeps its master, `dark.fit` or `flat.fit`,
+beside its frames: combined once the series ends in the Capture tab, or for a
+series taken with `capture`, the first time it is chosen, and again when
+frames are added. The library then picks, among the series with a master:
 
 - the darks taken with the same camera, ISO and shutter speed, closest in
   sensor temperature to the lights, then the newest;
