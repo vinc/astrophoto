@@ -198,8 +198,8 @@
           </select>
         </label>
         <label class="live-only">Zoom <select id="zoom"></select></label>
-        <label>ISO <input id="iso" placeholder="camera"></label>
-        <label class="raw-only">Shutter <input id="shutterspeed"></label>
+        <label>ISO <select id="iso"></select></label>
+        <label class="raw-only">Shutter <select id="shutterspeed"></select></label>
         <label>Pause (s) <input id="interval" type="number" min="0" step="0.5"></label>
         <button class="action primary starts" id="start">Start</button>
         <button class="action danger stops">Stop</button>
@@ -230,8 +230,8 @@
       </fieldset>
       <fieldset>
         <legend>Capture</legend>
-        <label>Shutter <input id="center-shutterspeed" placeholder="camera"></label>
-        <label>ISO <input id="center-iso" placeholder="camera"></label>
+        <label>Shutter <select id="center-shutterspeed"></select></label>
+        <label>ISO <select id="center-iso"></select></label>
         <label class="check"><input type="checkbox" id="loop" checked> Repeat</label>
         <button class="action primary starts" id="point">Point</button>
         <button class="action danger stops">Stop</button>
@@ -506,8 +506,7 @@ function setupFocus() {
   const defaults = config.focus;
   fill($("zoom"), config.zooms, defaults.zoom);
   fill($("step"), config.steps, defaults.step);
-  $("iso").value = defaults.iso ?? "";
-  $("shutterspeed").value = defaults.shutterspeed ?? "";
+  showSettings("focus");
   $("interval").value = defaults.interval;
   $("span").value = defaults.span;
   $("samples").value = defaults.samples;
@@ -538,8 +537,8 @@ function setupFocus() {
   $("start").onclick = () => post("/api/focus/start", {
     live: $("source").value === "live",
     zoom: Number($("zoom").value),
-    iso: $("iso").value.trim(),
-    shutterspeed: $("shutterspeed").value.trim(),
+    iso: $("iso").value,
+    shutterspeed: $("shutterspeed").value,
     interval: Number($("interval").value),
   });
   $("auto").onclick = () => post("/api/focus/auto", {
@@ -547,14 +546,13 @@ function setupFocus() {
     step: Number($("step").value),
     samples: Number($("samples").value),
     zoom: Number($("zoom").value),
-    iso: $("iso").value.trim(),
+    iso: $("iso").value,
   });
 }
 
 function setupCenter() {
   const defaults = config.center;
-  $("center-shutterspeed").value = defaults.shutterspeed ?? "";
-  $("center-iso").value = defaults.iso ?? "";
+  showSettings("center");
   if (!defaults.observer) {
     $("center-off").hidden = false;
     $("point").classList.remove("starts");
@@ -563,8 +561,8 @@ function setupCenter() {
   const point = () => {
     const query = $("query").value.trim();
     const body = {
-      shutterspeed: $("center-shutterspeed").value.trim(),
-      iso: $("center-iso").value.trim(),
+      shutterspeed: $("center-shutterspeed").value,
+      iso: $("center-iso").value,
       loop: $("loop").checked,
     };
     if (query) body.query = query;
@@ -580,21 +578,42 @@ function setupCenter() {
 
 const TARGET_LABELS = {ram: "Each frame", card: "At the end"};
 
-// The camera's labels for each setting, and each kind's defaults as labels, once the camera answers
+// The camera's labels for each setting, and the defaults of each tab as labels, once the camera answers
 let cameraChoices = null;
-let captureDefaults = null;
-const SETTING_SELECTS = {iso: "capture-iso", aperture: "aperture", shutterspeed: "capture-shutterspeed"};
+let choiceDefaults = null;
+// Each select of a camera setting, with its tab and gphoto2 setting
+const SETTING_SELECTS = [
+  ["capture-iso", "capture", "iso"], ["aperture", "capture", "aperture"], ["capture-shutterspeed", "capture", "shutterspeed"],
+  ["iso", "focus", "iso"], ["shutterspeed", "focus", "shutterspeed"],
+  ["center-iso", "center", "iso"], ["center-shutterspeed", "center", "shutterspeed"],
+];
 
-function fillSetting(key, value) {
+function settingDefaults(tab) {
+  const defaults = choiceDefaults || config;
+  return tab === "capture" ? defaults.capture[$("kind").value] : defaults[tab];
+}
+
+function fillSetting(id, tab, key, value) {
   const labels = cameraChoices?.[key] || [];
+  const unset = value === null || value === undefined || value === "";
   // Without the camera's list, or for a setting it lacks, the configured value is the only choice
-  fill($(SETTING_SELECTS[key]), labels.includes(value) ? labels : [value, ...labels], value);
+  const options = (unset || labels.includes(value) ? labels : [value, ...labels]).map((label) => new Option(label, label));
+  // Focus and center can leave a setting as the camera has it, while a series needs every one
+  if (tab !== "capture") options.unshift(new Option("Camera", ""));
+  const select = $(id);
+  select.replaceChildren(...options);
+  select.value = unset ? "" : value;
+}
+
+function showSettings(tab) {
+  const defaults = settingDefaults(tab);
+  for (const [id, group, key] of SETTING_SELECTS) if (group === tab) fillSetting(id, tab, key, defaults[key]);
 }
 
 function showCaptureDefaults() {
-  const defaults = (captureDefaults || config.capture)[$("kind").value];
+  const defaults = settingDefaults("capture");
   $("frames").value = defaults.frames;
-  for (const key in SETTING_SELECTS) fillSetting(key, defaults[key]);
+  showSettings("capture");
   $("target").value = defaults.target;
 }
 
@@ -761,13 +780,14 @@ const handlers = {
   choices(event) {
     const previous = cameraChoices;
     cameraChoices = event.settings;
-    captureDefaults = event.capture;
-    const defaults = (captureDefaults || config.capture)[$("kind").value];
-    for (const key in SETTING_SELECTS) {
-      // Keep a value picked from the camera's list while it is still offered, as after reading the camera again
-      const current = $(SETTING_SELECTS[key]).value;
-      const keep = previous?.[key]?.includes(current) && cameraChoices?.[key]?.includes(current);
-      fillSetting(key, keep ? current : defaults[key]);
+    choiceDefaults = {capture: event.capture, focus: event.focus, center: event.center};
+    for (const [id, tab, key] of SETTING_SELECTS) {
+      // Keep the camera's own setting, or a value picked from its list while it is still offered, as after
+      // reading the camera again
+      const current = $(id).value;
+      const keep = current === "" ? tab !== "capture"
+        : previous?.[key]?.includes(current) && cameraChoices?.[key]?.includes(current);
+      fillSetting(id, tab, key, keep ? current : settingDefaults(tab)[key]);
     }
   },
   frame(event) {

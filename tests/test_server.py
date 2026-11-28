@@ -530,6 +530,23 @@ class CaptureServerTests(ServerCase):
         self.run_series(frames=1, kind="flat")
         self.assertEqual(self.settings["shutterspeed"], "50")
 
+    def test_focus_and_center_take_the_camera_choices_or_its_own_setting(self):
+        choices = self.read_choices()
+        # The focus shutter speed is not offered, so it is sent as configured; the center's 2 is an index
+        self.assertEqual(choices["focus"], {"iso": None, "shutterspeed": "1/4"})
+        self.assertEqual(choices["center"], {"iso": "3200", "shutterspeed": "15"})
+        with patch.object(self.app.jobs, "start") as start, patch.object(self.app, "focus_loop") as loop:
+            self.assertEqual(self.post("/api/focus/start", {"live": False, "iso": "1", "shutterspeed": ""})[0], 200)
+            start.call_args.args[1](None)
+        # An empty setting leaves the camera's own
+        self.assertEqual(loop.call_args.args[3:5], ("100", None))
+        for path, body in [("/api/focus/start", {"iso": "12800"}), ("/api/focus/auto", {"iso": "12800"}),
+                           ("/api/center/start", {"ra": 10, "dec": 20, "shutterspeed": "1/3"})]:
+            with self.subTest(path=path):
+                status, result = self.post(path, body)
+                self.assertEqual(status, 400)
+                self.assertIn("is not one of the camera's choices", result["error"])
+
     def test_a_refresh_reads_the_camera_again(self):
         self.app.status_wanted.clear()
         self.assertEqual(self.post("/api/camera/refresh"), (200, {"ok": True}))

@@ -421,18 +421,21 @@ class App:
                 self.publish_choices()
 
     def publish_choices(self):
-        """Send the camera's labels for each capture setting, and each kind's defaults as labels, without indexes."""
+        """Send the camera's labels for each setting, and the defaults of each tab as labels, without indexes."""
         choices = self.choices
         settings = None if choices is None else {name: [label for _, label in choices[name]] for name in choices}
-        defaults = {
-            kind: {
-                **values,
-                **{key: choice_label(values[key], choices[key]) or values[key] for key in CAMERA_SETTINGS
-                   if choices is not None},
-            }
-            for kind, values in self.capture_settings.items()
-        }
-        self.hub.publish("choices", settings=settings, capture=defaults)
+
+        def labeled(values, keys):
+            # A value the camera does not offer is sent as configured, and refused if it is chosen
+            return {key: values[key] if choices is None or values[key] is None
+                    else choice_label(values[key], choices[key]) or values[key] for key in keys}
+
+        self.hub.publish(
+            "choices", settings=settings,
+            capture={kind: {**values, **labeled(values, CAMERA_SETTINGS)} for kind, values in self.capture_settings.items()},
+            focus=labeled(self.focus_settings, ("iso", "shutterspeed")),
+            center=labeled(self.center_settings, ("iso", "shutterspeed")),
+        )
 
     def refresh_camera(self, body):
         """Read the camera's status and choices again soon, as after changing the lens."""
@@ -450,8 +453,8 @@ class App:
         if live:
             self.need_live_view()
         zoom = choice(body, "zoom", ZOOMS, 5)
-        iso = text(body, "iso", self.focus_settings["iso"])
-        shutterspeed = text(body, "shutterspeed", self.focus_settings["shutterspeed"])
+        iso = self.camera_setting("iso", text(body, "iso", self.focus_settings["iso"]))
+        shutterspeed = self.camera_setting("shutterspeed", text(body, "shutterspeed", self.focus_settings["shutterspeed"]))
         interval = number(body, "interval", 1, minimum=0)
         self.jobs.start("focus", lambda stop: self.focus_loop(stop, live, zoom, iso, shutterspeed, interval))
         return {"ok": True}
@@ -486,7 +489,7 @@ class App:
         step = choice(body, "step", FOCUS_STEPS, 2)
         samples = integer(body, "samples", 3, minimum=1)
         zoom = choice(body, "zoom", ZOOMS, 5)
-        iso = text(body, "iso", self.focus_settings["iso"])
+        iso = self.camera_setting("iso", text(body, "iso", self.focus_settings["iso"]))
         self.jobs.start("autofocus", lambda stop: self.autofocus(stop, span, step, zoom, iso, samples))
         return {"ok": True}
 
@@ -546,8 +549,7 @@ class App:
         else:
             ra = dec = None
         settings = {
-            "shutterspeed": text(body, "shutterspeed", self.center_settings["shutterspeed"]),
-            "iso": text(body, "iso", self.center_settings["iso"]),
+            key: self.camera_setting(key, text(body, key, self.center_settings[key])) for key in ("shutterspeed", "iso")
         }
         loop = bool(body.get("loop", False))
         try:
@@ -607,9 +609,12 @@ class App:
         return {"ok": True, "directory": directory.name}
 
     def camera_setting(self, key, value):
-        """Return a capture setting by its label, from a label or a gphoto2 index, when the camera's choices are known."""
+        """Return a camera setting by its label, from a label or a gphoto2 index, when the camera's choices are known.
+
+        None, which leaves the camera's current setting, stays None.
+        """
         choices = (self.choices or {}).get(key)
-        if not choices:
+        if not choices or value is None:
             return value
         label = choice_label(value, choices)
         if label is None:
