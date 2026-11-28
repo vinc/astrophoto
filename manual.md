@@ -20,6 +20,7 @@ Commands, in the order of a session:
 | [`locate`](#locate) | Mark a Solar System body in full-frame images |
 | [`crop`](#crop) | Crop a Solar System body from images |
 | [`chart`](#chart) | Star chart locating plate-solved images |
+| [`server`](#server) | Web app to run the camera from a browser |
 
 ## Configuration
 
@@ -39,10 +40,12 @@ A table named after a command holds that command's settings:
 
 | Table | Keys |
 |---|---|
-| `[capture]` | `frames`, `iso`, `aperture`, `shutterspeed` |
+| `[capture]` | `frames`, `iso`, `aperture`, `shutterspeed`, `target` |
 | `[capture.light]`, `[capture.dark]`, `[capture.flat]` | The same keys, for one kind of frame |
 | `[focus]` | `shutterspeed`, `iso` |
 | `[center]` | `shutterspeed`, `iso` |
+| `[stack]` | `deband`: default for `--deband` and the server's calibrated stack |
+| `[server]` | `host`, `port` |
 | `[solve]` | `scale_low`, `scale_high`: image width range in degrees for plate solving, used only for images that do not record their focal length and pixel size (default: 3 to 50) |
 
 ## Common options
@@ -171,7 +174,7 @@ astrophoto center (--query NAME | --ra DEG --dec DEG) [options] [FILE]
 ```
 
 Captures an image, plate-solves it, and prints how far to pan and tilt the
-camera to bring the target to the centre of the frame. It also warns when the
+camera to bring the target to the center of the frame. It also warns when the
 target is too large for the frame.
 
 `FILE`
@@ -196,12 +199,19 @@ Configuration: `[center]`, `[solve]`, `camera`, `timezone`.
 ## capture
 
 ```
-astrophoto capture [light|dark|flat] [--frames N] [--iso ISO] [--aperture F] [--shutterspeed SPEED]
+astrophoto capture [light|dark|flat] [--frames N] [--iso ISO] [--aperture F] [--shutterspeed SPEED] [--target ram|card]
 ```
 
-Captures a sequence of RAW frames, downloads them to a new
-`YYYYMMDD-HHMM-<kind>` directory, and deletes them from the camera once they
-are all downloaded. The camera card must be empty before starting.
+Captures a sequence of RAW frames into a new `YYYYMMDD-HHMM-<kind>` directory.
+
+With the `ram` target, each frame is taken into the camera's memory and
+downloaded before the next one. Ctrl-C stops the series once the current frame
+is saved; pressing it again aborts the frame, after which the camera may need
+to be reconnected.
+
+With the `card` target, the whole series is taken onto the camera card, then
+downloaded and deleted from the camera once every frame is downloaded. The
+card must be empty before starting.
 
 `light|dark|flat`
 : Kind of frames (default: `light`).
@@ -213,6 +223,12 @@ are all downloaded. The camera card must be empty before starting.
 : Camera settings, as the camera names them (defaults: `800`, `4.0`, `5`, or
   `50` for flats). Pass `help` to list the camera's choices.
 
+`--target ram|card`
+: Where frames are taken: the camera's memory, downloading each one as it is
+  taken, or its card, downloading the series at the end (default: `ram` for
+  the Canon EOS 600D, `card`
+  otherwise).
+
 Configuration: `[capture]`, `[capture.light]`, `[capture.dark]`,
 `[capture.flat]`.
 
@@ -223,7 +239,8 @@ astrophoto convert FILE ...
 ```
 
 Converts Canon CR2 files to FITS files next to them, keeping the raw Bayer
-data and recording the exposure time, camera and lens settings.
+data and recording the exposure time, camera and lens settings, and the sensor
+temperature when the camera records it.
 
 Configuration: `timezone`.
 
@@ -238,7 +255,16 @@ Aligns and stacks the FITS files in a directory into
 `<prefix>-coverage.png`.
 
 `--dark FILE ...`
-: Dark frames to subtract.
+: Dark frames to subtract. Their master dark is kept in the dark library.
+
+`--dark-library`
+: Subtract a master dark from the library taken with the same camera, ISO and
+  exposure time, for a session without its own dark frames: the one closest
+  to the lights' sensor temperature, or the newest when temperatures are not
+  recorded.
+
+Darks taken more than 5 °C warmer or colder than the lights produce a
+warning.
 
 `--flat FILE ...`
 : Flat frames to divide by.
@@ -257,17 +283,23 @@ Aligns and stacks the FITS files in a directory into
   field (default: 0).
 
 `--deband AMOUNT`
-: Remove horizontal banding, from 0 to 1 (default: 0). Useful on older Canon
-  cameras.
+: Remove horizontal banding, from 0 to 1, where 0 turns it off (default: 1,
+  or `deband` in `[stack]`).
 
 `--rgb`
-: Keep colour; output files get an `-rgb` prefix.
+: Keep color; output files get an `-rgb` prefix.
 
 `--bayer-pattern {RGGB,BGGR,GRBG,GBRG}`
 : Bayer layout for older FITS files, with `--rgb`.
 
 `--output-prefix NAME`
 : Output basename (default: the directory name).
+
+`--realign`
+: Match the stars of every frame again, instead of reusing the alignment
+  saved by the server's live stack.
+
+Configuration: `[stack]`.
 
 ## locate
 
@@ -289,7 +321,7 @@ Configuration: `[solve]`, `timezone`.
 astrophoto crop --query NAME [--radius PIXELS] FILE ...
 ```
 
-Plate-solves each image and saves a crop around the Solar System body, labelled
+Plate-solves each image and saves a crop around the Solar System body, labeled
 with its name and the time, as `<image>-crop-<name>.png`.
 
 `--query NAME`
@@ -330,6 +362,56 @@ marking a target at each image time.
 
 Configuration: `[solve]`, `timezone`.
 
+## server
+
+```
+astrophoto server [--host ADDRESS] [--port PORT] [--latitude DEG --longitude DEG --elevation M]
+```
+
+Serves a web app for running the camera from a phone or laptop on the same
+network, and prints the address to open. The app runs one camera task at a
+time and shows what is running, the camera model, its battery level, the
+free disk space, and the computer's CPU and memory use and ACPI temperature. The Night button turns the page red to keep your eyes dark
+adapted.
+
+The Focus tab measures the HFR of stars over and over, from live view or
+from RAW captures, like `focus` and `focus --live`. The Near and Far buttons
+move the lens by one step of each size between frames, and Autofocus scans
+the focus like `focus --auto`. Live view, the lens buttons, and Autofocus
+need a camera with live view.
+
+The Center tab captures and plate-solves a frame like `center`, then shows how
+far to pan and tilt the camera, with the target marked on the frame. With
+Repeat, it keeps capturing so you can follow the camera as you move it. It
+needs the observer position.
+
+The Capture tab captures a series of light, dark or flat frames like
+`capture`, into the same directories. Each frame is converted to FITS as it
+arrives, and listed with its HFR, star count and sky level. Stop ends the
+series once the current frame is saved; a series taken onto the card cannot
+be stopped.
+
+The Stack tab shows the light frames of the series stacked as they arrive,
+aligned to the first frame, without calibration. Frames that cannot be aligned
+are left out. The stack is saved in the series directory as
+`<directory>-live-stack.fit` and `.png` every minute and at the end of the
+series.
+
+Below it, Stack makes the full stack of a light series, like `stack`, with
+the darks of a dark series or from the dark library, the flats of a flat
+series, debanding, and color if chosen. RAW files without a FITS frame, as
+`capture` leaves them, are converted first. It runs while the camera keeps
+working.
+
+`--host ADDRESS`
+: Address to listen on (default: `0.0.0.0`, every network interface).
+
+`--port PORT`
+: Port to listen on (default: 8000).
+
+Configuration: `[server]`, `[focus]`, `[center]`, `[capture]`, `[stack]`,
+`[solve]`, `camera`, `timezone`.
+
 ## Files
 
 | Path | Contents |
@@ -338,3 +420,5 @@ Configuration: `[solve]`, `timezone`.
 | `~/.local/share/astrophoto` | Indexes and catalogs from `download` |
 | `~/.cache/astrophoto` | Cached forecasts and ephemerides |
 | `<image>.new` | Saved plate solution of an image, reused by later commands |
+| `~/.local/share/astrophoto/darks` | Dark library: master darks kept by `stack --dark` |
+| `<directory>/alignment.json` | Frame alignment saved by the server's live stack, reused by `stack` |

@@ -418,7 +418,7 @@ class CenterTests(unittest.TestCase):
         inspect.assert_called_once()
         self.assertIn("retrying with the next capture", output.getvalue())
 
-    def test_catalog_objects_are_centred_at_fixed_coordinates(self):
+    def test_catalog_objects_are_centered_at_fixed_coordinates(self):
         m31 = SkyObject("M31 (Andromeda Galaxy)", "M31", 10.68, 41.27, 3.17)
         argv = ["center.py", "saved.fit", "--query", "m-31", "--latitude", "0", "--longitude", "0", "--elevation", "0"]
         with patch.object(sys, "argv", argv), \
@@ -500,6 +500,126 @@ class CaptureTests(unittest.TestCase):
             self.assertEqual(header["WBR"], 2)
             self.assertEqual(header["WBG"], 1)
             self.assertEqual(header["WBB"], 1.5)
+            self.assertNotIn("CCD-TEMP", header)
+
+    def test_a_failed_conversion_leaves_no_partial_fits_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "light.CR2"
+            source.touch()
+            tags = {"EXIF DateTimeOriginal": "2026:11:26 19:43:26", "EXIF ExposureTime": "5"}
+            def full_disk(name, **kwargs):
+                # A disk that fills up leaves the header written and the pixels missing
+                Path(name).write_bytes(b"SIMPLE  =                    T")
+                raise OSError("No space left on device")
+
+            for failure in (full_disk, None):
+                with self.subTest(failure=failure), \
+                        patch.object(conversion.rawpy, "imread") as imread, \
+                        patch.object(conversion.exifread, "process_file", return_value=tags), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    raw = imread.return_value.__enter__.return_value
+                    raw.raw_image_visible = np.full((20, 20), 123, dtype=np.uint16)
+                    raw.black_level_per_channel = [100] * 4
+                    raw.white_level = 4095
+                    raw.color_desc = b"RGBG"
+                    raw.raw_colors_visible = np.tile([[0, 1], [3, 2]], (10, 10))
+                    raw.daylight_whitebalance = [2, 1, 1.5, 0]
+                    if failure is None:
+                        conversion.convert(source, ZoneInfo("UTC"))
+                    else:
+                        with patch.object(conversion.fits.PrimaryHDU, "writeto", side_effect=failure), \
+                                self.assertRaises(OSError):
+                            conversion.convert(source, ZoneInfo("UTC"))
+                # Only a complete frame ever appears under its final name, and nothing is left behind
+                names = sorted(path.name for path in Path(temporary).iterdir())
+                self.assertEqual(names, ["light.CR2"] if failure else ["light.CR2", "light.fit"])
+
+    def test_two_conversions_of_one_file_at_once_each_publish_a_whole_frame(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "light.CR2"
+            source.touch()
+            tags = {"EXIF DateTimeOriginal": "2026:11:26 19:43:26", "EXIF ExposureTime": "5"}
+            writeto = conversion.fits.PrimaryHDU.writeto
+            written = []
+
+            def interleaved(hdu, name, **kwargs):
+                writeto(hdu, name, **kwargs)
+                written.append(Path(name))
+                # Another conversion of the same file, from the command line, runs while this one is underway
+                if len(written) == 1:
+                    conversion.convert(source, ZoneInfo("UTC"))
+
+            with patch.object(conversion.rawpy, "imread") as imread, \
+                    patch.object(conversion.exifread, "process_file", return_value=tags), \
+                    patch.object(conversion.fits.PrimaryHDU, "writeto", autospec=True, side_effect=interleaved), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                raw = imread.return_value.__enter__.return_value
+                raw.raw_image_visible = np.full((20, 20), 123, dtype=np.uint16)
+                raw.black_level_per_channel = [100] * 4
+                raw.white_level = 4095
+                raw.color_desc = b"RGBG"
+                raw.raw_colors_visible = np.tile([[0, 1], [3, 2]], (10, 10))
+                raw.daylight_whitebalance = [2, 1, 1.5, 0]
+                result = conversion.convert(source, ZoneInfo("UTC"))
+            self.assertEqual(len(set(written)), 2)
+            self.assertTrue((fits.getdata(result) == 123).all())
+            self.assertEqual(sorted(path.name for path in Path(temporary).iterdir()), ["light.CR2", "light.fit"])
+
+    def test_converted_frames_get_the_usual_file_permissions(self):
+        import os
+        import stat
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "light.CR2"
+            source.touch()
+            # Reconverting a frame others could read keeps it readable to them
+            (Path(temporary) / "light.fit").write_bytes(b"old")
+            (Path(temporary) / "light.fit").chmod(0o644)
+            tags = {"EXIF DateTimeOriginal": "2026:11:26 19:43:26", "EXIF ExposureTime": "5"}
+            previous = os.umask(0o022)
+            try:
+                with patch.object(conversion.rawpy, "imread") as imread, \
+                        patch.object(conversion.exifread, "process_file", return_value=tags), \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    raw = imread.return_value.__enter__.return_value
+                    raw.raw_image_visible = np.full((20, 20), 123, dtype=np.uint16)
+                    raw.black_level_per_channel = [100] * 4
+                    raw.white_level = 4095
+                    raw.color_desc = b"RGBG"
+                    raw.raw_colors_visible = np.tile([[0, 1], [3, 2]], (10, 10))
+                    raw.daylight_whitebalance = [2, 1, 1.5, 0]
+                    result = conversion.convert(source, ZoneInfo("UTC"))
+            finally:
+                os.umask(previous)
+            self.assertEqual(stat.S_IMODE(result.stat().st_mode), 0o644)
+            self.assertEqual(sorted(path.name for path in Path(temporary).iterdir()), ["light.CR2", "light.fit"])
+
+    def test_conversion_records_the_sensor_temperature_from_the_maker_notes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "light.CR2"
+            source.touch()
+            tags = {"EXIF DateTimeOriginal": "2026:11:26 19:43:26", "EXIF ExposureTime": "5",
+                    "MakerNote CameraTemperature": "26 C"}
+            for side_effect, expected in [
+                ([tags], 26),
+                # Unreadable maker notes fall back to the plain EXIF tags
+                ([ValueError("bad maker note"), {key: tags[key] for key in list(tags)[:2]}], None),
+                ([{**tags, "MakerNote CameraTemperature": "250 C"}], None),
+            ]:
+                with self.subTest(expected=expected), \
+                        patch.object(conversion.rawpy, "imread") as imread, \
+                        patch.object(conversion.exifread, "process_file", side_effect=side_effect) as process, \
+                        contextlib.redirect_stdout(io.StringIO()) as output:
+                    raw = imread.return_value.__enter__.return_value
+                    raw.raw_image_visible = np.full((20, 20), 123, dtype=np.uint16)
+                    raw.black_level_per_channel = [100] * 4
+                    raw.white_level = 4095
+                    raw.color_desc = b"RGBG"
+                    raw.raw_colors_visible = np.tile([[0, 1], [3, 2]], (10, 10))
+                    raw.daylight_whitebalance = [2, 1, 1.5, 0]
+                    result = conversion.convert(source, ZoneInfo("UTC"))
+                self.assertTrue(process.call_args_list[0].kwargs["details"])
+                self.assertEqual(fits.getheader(result).get("CCD-TEMP"), expected)
+                self.assertEqual("Sensor:   26 °C" in output.getvalue(), expected == 26)
 
 if __name__ == "__main__":
     unittest.main()

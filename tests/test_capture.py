@@ -1,19 +1,57 @@
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-class CaptureTests(unittest.TestCase):
+class CaptureCase(unittest.TestCase):
+    """Run the capture command in a scratch directory, with gphoto2 replaced by a shell script."""
+
     def run_capture(self, directory, *arguments, fail_stage="", config=None, camera_files="",
-                    captured="", downloaded="", empty="", first_folder=""):
+                    captured="", downloaded="", empty="", first_folder="", ram_fail_at="", ram_empty_at=""):
         # Fake camera: --capture-image stores the frame count, which --list-files and
         # --get-all-files then report and download, unless CAPTURED or DOWNLOADED override it;
         # past FIRST_FOLDER frames, the rest are listed in the next folder. Without --quiet,
-        # the listing is in French, as gphoto2 translates it
+        # the listing is in French, as gphoto2 translates it. --capture-image-and-download saves one
+        # frame, failing or saving an empty file for the frame numbered RAM_FAIL_AT or RAM_EMPTY_AT,
+        # after SLOW seconds, logging any interrupt it receives
+        self.fake_gphoto2(directory)
+        settings = directory / "config"
+        if config is not None:
+            (settings / "astrophoto").mkdir(parents=True)
+            (settings / "astrophoto" / "config.toml").write_text(config)
+        log = directory / "arguments.txt"
+        result = subprocess.run(
+            [sys.executable, "-m", "astrophoto", "capture", *arguments], cwd=directory,
+            env=self.environment(directory, settings, log, fail_stage=fail_stage, camera_files=camera_files,
+                                 captured=captured, downloaded=downloaded, empty=empty, first_folder=first_folder,
+                                 ram_fail_at=ram_fail_at, ram_empty_at=ram_empty_at),
+            capture_output=True, text=True,
+        )
+        return result, self.calls(log), self.folders(directory)
+
+    def environment(self, directory, settings, log, fail_stage="", camera_files="", captured="", downloaded="",
+                    empty="", first_folder="", ram_fail_at="", ram_empty_at="", slow=""):
+        return dict(
+            os.environ, PATH=f"{directory / 'bin'}:{os.environ['PATH']}", PYTHONPATH=str(ROOT),
+            XDG_CONFIG_HOME=str(settings), CAPTURE_ARGUMENTS=str(log), FAIL_STAGE=fail_stage,
+            CAMERA_FILES=camera_files, CAMERA_STATE=str(directory / "camera"),
+            CAPTURED=str(captured), DOWNLOADED=str(downloaded), EMPTY=str(empty),
+            FIRST_FOLDER=str(first_folder), RAM_FAIL_AT=ram_fail_at, RAM_EMPTY_AT=ram_empty_at, SLOW=str(slow),
+        )
+
+    def calls(self, log):
+        return [call.splitlines() for call in log.read_text().split("CALL\n")[1:]] if log.exists() else []
+
+    def folders(self, directory):
+        return [path for path in directory.iterdir() if path.is_dir() and path.name not in ("bin", "config")]
+
+    def fake_gphoto2(self, directory):
         executable = directory / "bin" / "gphoto2"
         executable.parent.mkdir(exist_ok=True)
         executable.write_text(
@@ -39,6 +77,12 @@ class CaptureTests(unittest.TestCase):
             '        esac\n'
             '      done\n'
             '    fi ;;\n'
+            '  *" --capture-image-and-download "*)\n'
+            '    if [ -n "$SLOW" ]; then trap \'echo INTERRUPTED >> "$CAPTURE_ARGUMENTS"\' INT; sleep "$SLOW"; fi\n'
+            '    file=$(printf "%s" "$filename" | sed "s/%Y%m%d-%H%M%S/20261127-210000/; s/%C/cr2/")\n'
+            '    case "$file" in *-"$RAM_FAIL_AT".cr2) [ -n "$RAM_FAIL_AT" ] && exit 1 ;; esac\n'
+            '    case "$file" in *-"$RAM_EMPTY_AT".cr2) [ -n "$RAM_EMPTY_AT" ] && : > "$file" && exit 0 ;; esac\n'
+            '    echo raw > "$file" ;;\n'
             '  *" --capture-image "*) echo "${CAPTURED:-$frames}" > "$CAMERA_STATE" ;;\n'
             '  *" --get-all-files "*)\n'
             '    i=1; n=${DOWNLOADED:-$(cat "$CAMERA_STATE")}\n'
@@ -49,24 +93,10 @@ class CaptureTests(unittest.TestCase):
             'esac\n'
         )
         executable.chmod(0o755)
-        settings = directory / "config"
-        if config is not None:
-            (settings / "astrophoto").mkdir(parents=True)
-            (settings / "astrophoto" / "config.toml").write_text(config)
-        log = directory / "arguments.txt"
-        result = subprocess.run(
-            [sys.executable, "-m", "astrophoto", "capture", *arguments], cwd=directory,
-            env=dict(os.environ, PATH=f"{executable.parent}:{os.environ['PATH']}", PYTHONPATH=str(ROOT),
-                     XDG_CONFIG_HOME=str(settings), CAPTURE_ARGUMENTS=str(log), FAIL_STAGE=fail_stage,
-                     CAMERA_FILES=camera_files, CAMERA_STATE=str(directory / "camera"),
-                     CAPTURED=str(captured), DOWNLOADED=str(downloaded), EMPTY=str(empty),
-                     FIRST_FOLDER=str(first_folder)),
-            capture_output=True, text=True,
-        )
-        arguments = [call.splitlines() for call in log.read_text().split("CALL\n")[1:]] if log.exists() else []
-        folders = [path for path in directory.iterdir() if path.is_dir() and path.name not in ("bin", "config")]
-        return result, arguments, folders
+        return executable
 
+
+class CaptureTests(CaptureCase):
     def test_default_light_dark_and_flat_modes(self):
         for mode, suffix, shutter in [(None, "-light", "5"), ("light", "-light", "5"), ("dark", "-dark", "5"), ("flat", "-flat", "50")]:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
@@ -84,7 +114,8 @@ class CaptureTests(unittest.TestCase):
                 self.assertIn("iso=800", capture)
                 self.assertIn("aperture=4.0", capture)
                 self.assertIn("imageformat=RAW", capture)
-                self.assertFalse(any(argument.startswith("capturetarget=") for argument in capture))
+                # A RAM series leaves the camera capturing to RAM, so the card is chosen every time
+                self.assertIn("capturetarget=Memory card", capture)
                 self.assertIn("--capture-image", capture)
                 self.assertNotIn("--capture-image-and-download", capture)
                 self.assertEqual(capture[capture.index("--interval") + 1], "1")
@@ -246,6 +277,87 @@ class CaptureTests(unittest.TestCase):
                 self.assertRegex(result.stderr, message.replace("[", r"\[").replace("]", r"\]"))
                 self.assertEqual(commands, [])
                 self.assertEqual(folders, [])
+
+class RamCaptureTests(CaptureCase):
+    """Frames downloaded one by one from the camera's memory."""
+
+    def test_each_frame_is_downloaded_as_it_is_taken(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, folders = self.run_capture(Path(temporary), "--target", "ram", "--frames", "3")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(commands), 3)
+            for index, command in enumerate(commands, 1):
+                self.assertIn("capturetarget=Internal RAM", command)
+                self.assertIn("shutterspeed=5", command)
+                self.assertIn("--capture-image-and-download", command)
+                # Downloaded into a staging directory inside the series, removed at the end
+                staging, name = command[command.index("--filename") + 1].rsplit("/", 1)
+                self.assertEqual(name, f"%Y%m%d-%H%M%S-{index:03d}.%C")
+                self.assertRegex(staging, rf"/{folders[0].name}/\.capture-[^/]+$")
+            # Named like pictures from the card, so *.CR2 still finds them
+            self.assertEqual(sorted(path.name for path in folders[0].iterdir()),
+                             [f"20261127-210000-{index:03d}.CR2" for index in (1, 2, 3)])
+            self.assertIn("Saved 20261127-210000-003.CR2 (3 of 3)", result.stdout)
+
+    def test_ram_is_the_default_for_the_600d_and_the_card_otherwise(self):
+        for config, arguments, ram in [
+            ('camera = "Canon EOS 600D"\n', (), True),
+            ('camera = "Canon EOS 20D"\n', (), False),
+            ('camera = "Canon EOS 600D"\n', ("--target", "card"), False),
+            ('camera = "Canon EOS 600D"\n[capture]\ntarget = "card"\n', (), False),
+            ('[capture]\ntarget = "card"\n[capture.dark]\ntarget = "ram"\n', ("dark",), True),
+        ]:
+            with self.subTest(config=config, arguments=arguments), tempfile.TemporaryDirectory() as temporary:
+                result, commands, _ = self.run_capture(Path(temporary), "--frames", "2", *arguments, config=config)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(any("--capture-image-and-download" in command for command in commands), ram)
+                # Files left on the card do not matter when it is not used
+                self.assertEqual(any("--list-files" in command for command in commands), not ram)
+
+    def test_a_failed_frame_keeps_the_frames_before_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, folders = self.run_capture(Path(temporary), "--target", "ram", ram_fail_at="003")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(len(commands), 3)
+            self.assertEqual(len(list(folders[0].iterdir())), 2)
+            self.assertIn("Stopped after 2 of 20 pictures", result.stdout)
+
+    def test_an_empty_frame_stops_the_series(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, _ = self.run_capture(Path(temporary), "--target", "ram", ram_empty_at="002")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Expected one picture for frame 2, found 1 empty; stopped after 1 of 20 pictures", result.stderr)
+            self.assertEqual(len(commands), 2)
+
+    def test_an_unknown_target_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result, commands, _ = self.run_capture(Path(temporary), config='[capture]\ntarget = "sd"\n')
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("target in [capture] of", result.stderr)
+            self.assertEqual(commands, [])
+
+    def test_ctrl_c_stops_after_the_current_frame_without_interrupting_gphoto2(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.fake_gphoto2(directory)
+            log = directory / "arguments.txt"
+            # Like a terminal, send the interrupt to every process in the foreground group
+            process = subprocess.Popen(
+                [sys.executable, "-m", "astrophoto", "capture", "--target", "ram", "--frames", "5"], cwd=directory,
+                env=self.environment(directory, directory / "config", log, slow=1),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+            )
+            deadline = time.monotonic() + 30
+            while len(self.calls(log)) < 2 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            os.killpg(process.pid, signal.SIGINT)
+            stdout, stderr = process.communicate(timeout=30)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertIn("Stopping after this picture", stderr)
+            self.assertIn("Stopped after 2 of 5 pictures", stdout)
+            self.assertNotIn("INTERRUPTED", log.read_text())
+            self.assertEqual(len(list(self.folders(directory)[0].iterdir())), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

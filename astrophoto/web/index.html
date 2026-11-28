@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astrophoto</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #15191e;
+    --line: #262c34;
+    --text: #d6dbe1;
+    --muted: #7d8794;
+    --accent: #5aa9e6;
+    --good: #5fbf7f;
+    --bad: #e06c6c;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  /* Elements styled with a display, such as .view, would otherwise ignore the hidden attribute */
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  /* Night mode keeps only red light, to save dark adaptation */
+  body.night::after {
+    content: ""; position: fixed; inset: 0; background: #f00;
+    mix-blend-mode: multiply; pointer-events: none; z-index: 10;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+    padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  #status { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 13px; flex: 1; }
+  #status b { color: var(--text); font-weight: 500; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); margin-right: 5px; }
+  .dot.on { background: var(--good); }
+  nav { display: flex; gap: 4px; padding: 8px 16px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  nav button {
+    background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted);
+    padding: 8px 12px; font: inherit; cursor: pointer; white-space: nowrap;
+  }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  nav button:disabled { opacity: .4; cursor: default; }
+  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+  section { display: none; }
+  section.active { display: block; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+  fieldset {
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+    padding: 10px 12px; margin: 0; display: flex; flex-wrap: wrap; align-items: end; gap: 8px 10px;
+  }
+  legend { color: var(--muted); font-size: 12px; padding: 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+  label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; }
+  input, select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 8px; font: inherit; width: 6.5em;
+  }
+  button.action {
+    background: #1e2630; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 12px; font: inherit; cursor: pointer; min-width: 3em;
+  }
+  button.action:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: #1c3a52; border-color: #2c5878; }
+  button.danger { background: #4a2020; border-color: #6a3030; }
+  button.action:disabled { opacity: .4; cursor: default; }
+  select { width: auto; }
+  .drive { display: flex; flex-wrap: wrap; gap: 4px; }
+  .drive button { white-space: nowrap; padding: 7px 9px; }
+  .title { font-size: 16px; margin: 4px 0 8px; min-height: 1.4em; }
+  .correction { font-size: 22px; font-weight: 600; margin: 4px 0; min-height: 1.4em; }
+  .correction.inside { color: var(--good); }
+  .report { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: pre-line; }
+  .note { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .progress { margin: 0 0 10px; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .subhead { font-size: 13px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 20px 0 4px; }
+  input.wide { width: 13em; }
+  label.check { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text); padding-bottom: 7px; }
+  label.check input { width: auto; }
+  .split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; align-items: start; }
+  @media (max-width: 800px) { .split { grid-template-columns: minmax(0, 1fr); } }
+  .table-wrap {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    max-height: 70vh; overflow: auto;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 5px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; }
+  td.number, th.number { text-align: right; }
+  td.stacked { color: var(--good); }
+  td.problem { color: var(--bad); }
+  td.waiting { color: var(--muted); }
+  .view {
+    background: #000; color: var(--text); border: 1px solid var(--line); border-radius: 8px; min-height: 120px;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .view img { width: 100%; height: auto; display: block; }
+  .view .empty { color: var(--muted); padding: 40px 16px; text-align: center; }
+  #log {
+    margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 12px; font: 12px/1.5 ui-monospace, monospace; color: var(--muted);
+    max-height: 180px; overflow-y: auto; white-space: pre-wrap;
+  }
+  #log .error { color: var(--bad); }
+  #toast {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: calc(100% - 32px);
+    background: #4a2020; border: 1px solid #6a3030; color: var(--text); padding: 8px 14px; border-radius: 8px;
+    display: none; z-index: 5;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Astrophoto</h1>
+  <div id="status">
+    <span><span id="link" class="dot"></span><b id="camera">Connecting…</b></span>
+    <span>Battery <b id="battery">–</b></span>
+    <span>Disk <b id="disk">–</b></span>
+    <span>CPU <b id="cpu">–</b></span>
+    <span>RAM <b id="memory">–</b></span>
+    <span id="temperature-item" hidden>Temp <b id="temperature">–</b></span>
+    <span>Running <b id="job">nothing</b></span>
+  </div>
+  <button class="action" id="night" title="Red light only">Night</button>
+</header>
+<nav>
+  <button class="active" data-tab="focus">Focus</button>
+  <button data-tab="center">Center</button>
+  <button data-tab="capture">Capture</button>
+  <button data-tab="stack">Stack</button>
+</nav>
+<main>
+  <section id="focus" class="active">
+    <div class="controls">
+      <fieldset>
+        <legend>Measure</legend>
+        <label>Source
+          <select id="source">
+            <option value="live">Live view</option>
+            <option value="raw">RAW capture</option>
+          </select>
+        </label>
+        <label class="live-only">Zoom <select id="zoom"></select></label>
+        <label>ISO <input id="iso" placeholder="camera"></label>
+        <label class="raw-only">Shutter <input id="shutterspeed"></label>
+        <label>Pause (s) <input id="interval" type="number" min="0" step="0.5"></label>
+        <button class="action primary starts" id="start">Start</button>
+        <button class="action danger stops">Stop</button>
+      </fieldset>
+      <fieldset class="needs-live">
+        <legend>Drive the lens</legend>
+        <div class="drive" id="drive"></div>
+      </fieldset>
+      <fieldset class="needs-live">
+        <legend>Autofocus</legend>
+        <label>Span <input id="span" type="number" min="2"></label>
+        <label>Step <select id="step"></select></label>
+        <label>Samples <input id="samples" type="number" min="1"></label>
+        <button class="action primary starts" id="auto">Autofocus</button>
+      </fieldset>
+    </div>
+    <div class="title" id="focus-title"></div>
+    <div class="view" id="focus-view"><div class="empty">Start measuring to see stars and their HFR; lower is sharper.</div></div>
+  </section>
+  <section id="center">
+    <p class="note" id="center-off" hidden>Set latitude, longitude and elevation in config.toml, then restart the server, to point the camera.</p>
+    <div class="controls">
+      <fieldset>
+        <legend>Target</legend>
+        <label>Name <input id="query" class="wide" placeholder="M31, vesta, Betelgeuse" autocapitalize="off"></label>
+        <label>or RA (deg) <input id="ra" type="number" step="any" min="0" max="360"></label>
+        <label>Dec (deg) <input id="dec" type="number" step="any" min="-90" max="90"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Capture</legend>
+        <label>Shutter <input id="center-shutterspeed" placeholder="camera"></label>
+        <label>ISO <input id="center-iso" placeholder="camera"></label>
+        <label class="check"><input type="checkbox" id="loop" checked> Repeat</label>
+        <button class="action primary starts" id="point">Point</button>
+        <button class="action danger stops">Stop</button>
+      </fieldset>
+    </div>
+    <div class="correction" id="correction"></div>
+    <div class="report" id="report"></div>
+    <div class="view" id="center-view"><div class="empty">Capture and plate-solve a frame to see how far to move the camera.</div></div>
+  </section>
+  <section id="capture">
+    <div class="controls">
+      <fieldset>
+        <legend>Series</legend>
+        <label>Kind <select id="kind"></select></label>
+        <label>Frames <input id="frames" type="number" min="1"></label>
+        <label>ISO <input id="capture-iso"></label>
+        <label>Aperture <input id="aperture"></label>
+        <label>Shutter <input id="capture-shutterspeed"></label>
+        <label>Download <select id="target"></select></label>
+        <button class="action primary starts" id="capture-start">Start</button>
+        <button class="action danger stops">Stop</button>
+      </fieldset>
+    </div>
+    <div class="title" id="series-title"></div>
+    <div class="split">
+      <div class="view" id="frame-view"><div class="empty">The latest frame shows here as it is downloaded.</div></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="number">#</th><th>Frame</th><th>HFR</th><th class="number">Stars</th><th class="number">Sky</th><th class="number">Temp</th><th>Status</th></tr></thead>
+          <tbody id="frame-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  <section id="stack">
+    <div class="controls">
+      <fieldset>
+        <legend>Calibrated stack</legend>
+        <label>Lights <select id="stack-lights"></select></label>
+        <label>Darks <select id="stack-darks"></select></label>
+        <label>Flats <select id="stack-flats"></select></label>
+        <label>Deband <input id="stack-deband" type="number" min="0" max="1" step="0.1"></label>
+        <label class="check"><input type="checkbox" id="stack-rgb"> Color</label>
+        <button class="action primary" id="stack-start">Stack</button>
+      </fieldset>
+    </div>
+    <div id="calibrated" hidden>
+      <div class="title" id="calibrated-title"></div>
+      <div class="progress" id="stack-progress" hidden>
+        <div class="bar"><div id="stack-bar"></div></div>
+        <div class="report" id="stack-progress-text"></div>
+      </div>
+      <div class="view" id="calibrated-view" hidden></div>
+      <h2 class="subhead">Live stack</h2>
+    </div>
+    <div class="title" id="stack-title"></div>
+    <div class="view" id="stack-view"><div class="empty">Capture light frames to see them stacked as they arrive.</div></div>
+  </section>
+  <div id="log"></div>
+</main>
+<div id="toast"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+let config = null;
+
+function toast(message) {
+  const box = $("toast");
+  box.textContent = message;
+  box.style.display = "block";
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { box.style.display = "none"; }, 6000);
+}
+
+async function post(path, body = {}) {
+  try {
+    const response = await fetch(path, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok) toast(result.error || response.statusText);
+    return result;
+  } catch (error) {
+    toast(`Cannot reach the server: ${error.message}`);
+  }
+}
+
+function timestamp(seconds) {
+  // Local date and time, as the server prints them: 2026-11-27T21:05:03
+  const date = new Date(seconds * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function log(text, error = false) {
+  const box = $("log");
+  const line = document.createElement("div");
+  if (error) line.className = "error";
+  line.textContent = text;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 20;
+  box.append(line);
+  while (box.childElementCount > 200) box.firstChild.remove();
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function fill(select, values, selected) {
+  select.replaceChildren(...values.map((value) => new Option(value, value, false, value === selected)));
+}
+
+function setupFocus() {
+  const defaults = config.focus;
+  fill($("zoom"), config.zooms, defaults.zoom);
+  fill($("step"), config.steps, defaults.step);
+  $("iso").value = defaults.iso ?? "";
+  $("shutterspeed").value = defaults.shutterspeed ?? "";
+  $("interval").value = defaults.interval;
+  $("span").value = defaults.span;
+  $("samples").value = defaults.samples;
+  const drive = $("drive");
+  // Largest steps on the outside: Near 3, Near 2, Near 1, Far 1, Far 2, Far 3
+  const sizes = [...config.steps].reverse();
+  for (const [label, sign, list] of [["Near", -1, sizes], ["Far", 1, config.steps]]) {
+    for (const size of list) {
+      const button = document.createElement("button");
+      button.className = "action";
+      button.textContent = `${label} ${size}`;
+      button.onclick = () => post("/api/focus/move", {steps: sign, size});
+      drive.append(button);
+    }
+  }
+  if (!config.live_view) {
+    $("source").value = "raw";
+    $("source").disabled = true;
+    document.querySelectorAll(".needs-live").forEach((element) => { element.style.display = "none"; });
+  }
+  const showSource = () => {
+    const live = $("source").value === "live";
+    document.querySelectorAll(".live-only").forEach((element) => { element.style.display = live ? "" : "none"; });
+    document.querySelectorAll(".raw-only").forEach((element) => { element.style.display = live ? "none" : ""; });
+  };
+  $("source").onchange = showSource;
+  showSource();
+  $("start").onclick = () => post("/api/focus/start", {
+    live: $("source").value === "live",
+    zoom: Number($("zoom").value),
+    iso: $("iso").value.trim(),
+    shutterspeed: $("shutterspeed").value.trim(),
+    interval: Number($("interval").value),
+  });
+  $("auto").onclick = () => post("/api/focus/auto", {
+    span: Number($("span").value),
+    step: Number($("step").value),
+    samples: Number($("samples").value),
+    zoom: Number($("zoom").value),
+    iso: $("iso").value.trim(),
+  });
+}
+
+function setupCenter() {
+  const defaults = config.center;
+  $("center-shutterspeed").value = defaults.shutterspeed ?? "";
+  $("center-iso").value = defaults.iso ?? "";
+  if (!defaults.observer) {
+    $("center-off").hidden = false;
+    $("point").classList.remove("starts");
+    $("point").disabled = true;
+  }
+  const point = () => {
+    const query = $("query").value.trim();
+    const body = {
+      shutterspeed: $("center-shutterspeed").value.trim(),
+      iso: $("center-iso").value.trim(),
+      loop: $("loop").checked,
+    };
+    if (query) body.query = query;
+    else if ($("ra").value !== "" && $("dec").value !== "") {
+      body.ra = Number($("ra").value);
+      body.dec = Number($("dec").value);
+    }
+    post("/api/center/start", body);
+  };
+  $("point").onclick = point;
+  $("query").onkeydown = (event) => { if (event.key === "Enter") point(); };
+}
+
+const TARGET_LABELS = {ram: "Each frame", card: "At the end"};
+
+function setupCapture() {
+  fill($("kind"), config.kinds, "light");
+  $("target").replaceChildren(...config.targets.map((value) => new Option(TARGET_LABELS[value] || value, value)));
+  const showDefaults = () => {
+    const defaults = config.capture[$("kind").value];
+    $("frames").value = defaults.frames;
+    $("capture-iso").value = defaults.iso;
+    $("aperture").value = defaults.aperture;
+    $("capture-shutterspeed").value = defaults.shutterspeed;
+    $("target").value = defaults.target;
+  };
+  $("kind").onchange = showDefaults;
+  showDefaults();
+  $("capture-start").onclick = () => post("/api/capture/start", {
+    kind: $("kind").value,
+    frames: Number($("frames").value),
+    iso: $("capture-iso").value.trim(),
+    aperture: $("aperture").value.trim(),
+    shutterspeed: $("capture-shutterspeed").value.trim(),
+    target: $("target").value,
+  });
+}
+
+async function loadDirectories() {
+  let found;
+  try {
+    found = await (await fetch("/api/directories")).json();
+  } catch (error) {
+    return;
+  }
+  const refill = (select, names, extra) => {
+    const previous = select.value;
+    select.replaceChildren(...extra.map(([value, label]) => new Option(label, value)), ...names.map((name) => new Option(name, name)));
+    // Keep the choice if it is still there; otherwise the newest series comes first
+    if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+  };
+  refill($("stack-lights"), found.light, []);
+  refill($("stack-darks"), found.dark, [["none", "None"], ["library", "Library"]]);
+  refill($("stack-flats"), found.flat, [["none", "None"]]);
+  $("stack-start").dataset.ready = found.light.length ? "1" : "";
+  updateStackButton();
+}
+
+let stackingBusy = false;
+let stage = {name: null};
+
+function clock(seconds) {
+  const total = Math.round(seconds);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+let lastSeries = null;
+function updateStackButton() {
+  $("stack-start").disabled = stackingBusy || !$("stack-start").dataset.ready;
+}
+
+function setupStack() {
+  $("stack-deband").value = config.stack.deband;
+  $("stack-start").onclick = () => post("/api/stack/start", {
+    lights: $("stack-lights").value,
+    darks: $("stack-darks").value,
+    flats: $("stack-flats").value,
+    rgb: $("stack-rgb").checked,
+    deband: Number($("stack-deband").value || 0),
+  });
+  loadDirectories();
+}
+
+function cell(text, className = "") {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (className) td.className = className;
+  return td;
+}
+
+function setupTabs() {
+  const buttons = document.querySelectorAll("nav button[data-tab]");
+  const show = (name) => {
+    buttons.forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
+    document.querySelectorAll("main section").forEach((section) => section.classList.toggle("active", section.id === name));
+    try { localStorage.setItem("tab", name); } catch (error) { /* ignore */ }
+    if (name === "stack") loadDirectories();
+  };
+  buttons.forEach((button) => { button.onclick = () => show(button.dataset.tab); });
+  let saved = null;
+  try { saved = localStorage.getItem("tab"); } catch (error) { /* ignore */ }
+  if (saved && $(saved)) show(saved);
+}
+
+function showImage(view, url) {
+  let image = view.querySelector("img");
+  if (!image) {
+    image = new Image();
+    image.alt = "";
+    image.onclick = () => window.open(image.src, "_blank");
+    view.replaceChildren(image);
+  }
+  // Swap in the new frame only once it has loaded, so the view never flashes empty
+  const next = new Image();
+  next.onload = () => { image.src = next.src; };
+  next.src = url;
+}
+
+function bytes(value) {
+  return value >= 1e12 ? `${(value / 1e12).toFixed(1)} TB` : `${(value / 1e9).toFixed(1)} GB`;
+}
+
+const handlers = {
+  status(event) {
+    $("camera").textContent = event.camera || (config && config.camera ? `${config.camera} not found` : "No camera");
+    $("link").classList.toggle("on", Boolean(event.camera));
+    $("battery").textContent = event.battery || "–";
+  },
+  system(event) {
+    $("disk").textContent = bytes(event.disk_free);
+    $("cpu").textContent = event.cpu === null ? "–" : `${event.cpu}%`;
+    $("memory").textContent = event.memory === null ? "–" : `${event.memory}%`;
+    // Not every computer has an ACPI temperature sensor
+    $("temperature-item").hidden = event.temperature === null;
+    if (event.temperature !== null) $("temperature").textContent = `${event.temperature} °C`;
+  },
+  job(event) {
+    $("job").textContent = event.name || "nothing";
+    const busy = Boolean(event.name);
+    document.querySelectorAll(".starts").forEach((button) => { button.disabled = busy; });
+    document.querySelectorAll(".stops").forEach((button) => { button.disabled = !busy; });
+    // The lens only moves while idle or focusing, never mid-capture
+    $("drive").querySelectorAll("button").forEach((button) => { button.disabled = busy && event.name !== "focus"; });
+  },
+  focus(event) {
+    const title = $("focus-title");
+    title.textContent = event.frame ? `Frame ${event.frame}: ${event.title}` : event.title;
+    if (event.image) showImage($("focus-view"), event.image);
+  },
+  series(event) {
+    // A new series directory appears in the stacking choices
+    if (event.directory !== lastSeries) {
+      lastSeries = event.directory;
+      loadDirectories();
+    }
+    const stacked = event.frames.filter((row) => row.status === "stacked").length;
+    const kind = event.kind[0].toUpperCase() + event.kind.slice(1);
+    let title = `${kind} series ${event.directory}: ${event.frames.length} of ${event.planned} frames`;
+    if (event.kind === "light") title += `, ${stacked} stacked`;
+    $("series-title").textContent = title;
+    const rows = event.frames.map((row, index) => {
+      const tr = document.createElement("tr");
+      const statusClass = row.status === "stacked" ? "stacked"
+        : row.status === "captured" ? "waiting" : row.problem ? "problem" : "";
+      const status = cell(row.status, statusClass);
+      if (row.problem) status.title = row.problem;
+      tr.append(
+        cell(index + 1, "number"),
+        cell(row.name),
+        cell(row.hfr_text ? row.hfr_text.replace(/^HFR /, "") : (row.problem && row.status === "converted" ? "–" : "")),
+        cell(row.stars ?? "", "number"),
+        cell(row.background === undefined ? "" : Math.round(row.background), "number"),
+        cell(row.temperature === undefined ? "" : `${row.temperature} °C`, "number"),
+        status,
+      );
+      return tr;
+    });
+    // Newest first, where the eye lands
+    $("frame-rows").replaceChildren(...rows.reverse());
+  },
+  frame(event) {
+    showImage($("frame-view"), event.image);
+  },
+  stacking(event) {
+    stackingBusy = Boolean(event.name);
+    updateStackButton();
+    $("stack-progress").hidden = !stackingBusy;
+    if (stackingBusy) {
+      $("calibrated").hidden = false;
+      $("calibrated-title").textContent = "Stacking…";
+      $("stack-bar").style.width = "0";
+      $("stack-progress-text").textContent = "";
+      stage = {name: null};
+    } else if ($("calibrated-title").textContent.startsWith("Stacking")) {
+      // A finished stack is announced before the job ends, so this one failed
+      $("calibrated-title").textContent = "Stacking failed; see the log below";
+    }
+  },
+  stack_progress(event) {
+    // A page that connects after a stack replays its last progress, which is old news
+    if (!stackingBusy) return;
+    if (event.stage !== stage.name) stage = {name: event.stage, elapsed: event.elapsed, done: event.done};
+    const fraction = event.total ? Math.min(event.done / event.total, 1) : 0;
+    $("stack-bar").style.width = `${(100 * fraction).toFixed(1)}%`;
+    let text = event.stage === "Aligning lights" || event.stage === "Converting"
+      ? `${event.stage}: ${Math.floor(event.done)} of ${event.total} frames`
+      : `${event.stage}: ${Math.round(100 * fraction)}%`;
+    text += ` · ${clock(event.elapsed)} elapsed`;
+    // Estimate what is left of this step from its pace so far, once there is enough to go on
+    const spent = event.elapsed - stage.elapsed;
+    const progressed = event.done - stage.done;
+    if (progressed > 0 && spent >= 5 && fraction < 1) {
+      text += ` · about ${clock(spent / progressed * (event.total - event.done))} left in this step`;
+    }
+    $("calibrated-title").textContent = `Stacking ${event.directory}…`;
+    $("stack-progress-text").textContent = text;
+  },
+  calibrated(event) {
+    const parts = [];
+    if (event.darks === "library") parts.push("the library's dark");
+    else if (event.darks !== "none") parts.push(`darks from ${event.darks}`);
+    if (event.flats !== "none") parts.push(`flats from ${event.flats}`);
+    if (event.deband) parts.push(`deband ${event.deband}`);
+    $("calibrated").hidden = false;
+    $("calibrated-title").textContent = `${event.directory}${parts.length ? ` with ${parts.join(" and ")}` : ""}, saved as ${event.file}`;
+    $("calibrated-view").hidden = false;
+    showImage($("calibrated-view"), event.image);
+    loadDirectories();
+  },
+  stack(event) {
+    let title = `${event.frames} frame${event.frames === 1 ? "" : "s"} stacked from ${event.directory}`;
+    if (event.saved) title += `, saved as ${event.saved}`;
+    else if (event.saved_frames) title += `, saved with ${event.saved_frames} so far`;
+    else title += ", saved at the end of the series";
+    $("stack-title").textContent = title;
+    showImage($("stack-view"), event.image);
+  },
+  center(event) {
+    const correction = $("correction");
+    correction.textContent = event.title;
+    correction.classList.toggle("inside", event.inside);
+    // The first report line repeats the target and time; the correction is shown above
+    $("report").textContent = event.report.filter((line) => line.trim() !== event.title).map((line) => line.trim()).join("\n");
+    if (event.image) showImage($("center-view"), event.image);
+  },
+  autofocus(event) {
+    toast(`Focused at step ${event.step > 0 ? "+" : ""}${event.step}, HFR ${event.hfr.toFixed(2)} px`);
+  },
+  log(event) { log(`[${timestamp(event.time)}] ${event.text}`, Boolean(event.error)); },
+  error(event) { toast(event.message); },
+};
+
+function connect() {
+  const events = new EventSource("/api/events");
+  events.onmessage = (message) => {
+    const event = JSON.parse(message.data);
+    handlers[event.type]?.(event);
+  };
+  events.onerror = () => {
+    $("link").classList.remove("on");
+    $("camera").textContent = "Server unreachable, reconnecting…";
+  };
+}
+
+try {
+  if (localStorage.getItem("night") === "1") document.body.classList.add("night");
+} catch (error) { /* Private windows may refuse storage */ }
+$("night").onclick = () => {
+  const night = document.body.classList.toggle("night");
+  try { localStorage.setItem("night", night ? "1" : "0"); } catch (error) { /* ignore */ }
+};
+
+fetch("/api/config").then((response) => response.json()).then((value) => {
+  config = value;
+  setupFocus();
+  setupCenter();
+  setupCapture();
+  setupStack();
+  setupTabs();
+  document.querySelectorAll(".stops").forEach((button) => { button.onclick = () => post("/api/stop"); });
+  handlers.job({name: null});
+  connect();
+}).catch((error) => toast(`Cannot reach the server: ${error.message}`));
+</script>
+</body>
+</html>

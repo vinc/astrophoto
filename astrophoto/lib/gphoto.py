@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import threading
 
 # Setting choices such as "Near 1" are translated, so gphoto2 always runs untranslated
 ENGLISH = dict(os.environ, LC_ALL="C", LANG="C", LANGUAGE="C")
@@ -11,10 +12,14 @@ NO_FOCUS_HINT = (
     "(Shutter/AE lock button) to 'AE lock/AF' so the shutter no longer focuses"
 )
 
+# The camera serves one gphoto2 process at a time; hold this across calls that must not be interleaved
+camera_lock = threading.RLock()
+
 def run_gphoto2(command, **kwargs):
     """Run gphoto2, passing its errors through and explaining a failed autofocus."""
     try:
-        result = subprocess.run(command, check=True, stderr=subprocess.PIPE, text=True, env=ENGLISH, **kwargs)
+        with camera_lock:
+            result = subprocess.run(command, check=True, stderr=subprocess.PIPE, text=True, env=ENGLISH, **kwargs)
     except FileNotFoundError:
         raise SystemExit("gphoto2 not found")
     except subprocess.CalledProcessError as exc:
@@ -30,7 +35,7 @@ def run_gphoto2(command, **kwargs):
 FOCUS_STEPS = (1, 2, 3)
 
 def drive_options(steps, size):
-    """Return gphoto2 options that move the focus by a signed number of steps, positive towards infinity."""
+    """Return gphoto2 options that move the focus by a signed number of steps, positive toward infinity."""
     direction = "Far" if steps > 0 else "Near"
     return [option for _ in range(abs(steps)) for option in ("--set-config", f"manualfocusdrive={direction} {size}")]
 

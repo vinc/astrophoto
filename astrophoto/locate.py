@@ -250,7 +250,7 @@ def save_image(path, ra, dec, time, query, target_name=None, radius=None, source
         y0 = max(0, int(y) - radius)
         y1 = min(height, int(y) + radius)
 
-    # Average 2x2 Bayer blocks so the colour channels don't show as a checkerboard
+    # Average 2x2 Bayer blocks so the color channels don't show as a checkerboard
     bayer = "RAWFILE" in header
 
     if bayer:
@@ -268,17 +268,17 @@ def save_image(path, ra, dec, time, query, target_name=None, radius=None, source
     if source_path != Path(path) and source_path.suffix.lower() in {".fit", ".fits", ".new"}:
         # Cached plate solutions can lack the display limits saved in the stack
         display_header = fits.getheader(source_path)
-    colour_path = source_path if source_path.suffix.lower() in {".fit", ".fits", ".new"} else Path(path)
-    rgb, colour_header = read_rgb(colour_path)
-    if rgb is None and colour_path != Path(path):
-        colour_path = Path(path)
-        rgb, colour_header = read_rgb(colour_path)
+    color_path = source_path if source_path.suffix.lower() in {".fit", ".fits", ".new"} else Path(path)
+    rgb, color_header = read_rgb(color_path)
+    if rgb is None and color_path != Path(path):
+        color_path = Path(path)
+        rgb, color_header = read_rgb(color_path)
     if rgb is not None:
         if rgb.shape[:2] != data.shape:
             raise ValueError("RGB data dimensions do not match the plate solution")
-        saturation = read_saturation(colour_path)
+        saturation = read_saturation(color_path)
         # Feather highlights in the full image so crops keep identical transitions
-        crop = render_rgb(rgb, colour_header, saturation)[y0:y1, x0:x1]
+        crop = render_rgb(rgb, color_header, saturation)[y0:y1, x0:x1]
     if "NCOMBINE" in display_header or "STACKMTH" in display_header:
         vmin, vmax = stack_display_limits(data, display_header)
     else:

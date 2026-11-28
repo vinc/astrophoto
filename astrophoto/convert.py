@@ -2,6 +2,8 @@ import argparse
 from datetime import datetime, timedelta, timezone
 from fractions import Fraction
 from pathlib import Path
+import re
+import tempfile
 
 import exifread
 import rawpy
@@ -21,7 +23,7 @@ def exif_float(tags, key):
 
 
 def exif_pixel_size(tags):
-    """Return the sensor pixel width in micrometres from the EXIF focal plane resolution, or None."""
+    """Return the sensor pixel width in micrometers from the EXIF focal plane resolution, or None."""
     resolution = exif_float(tags, "EXIF FocalPlaneXResolution")
     unit = tags.get("EXIF FocalPlaneResolutionUnit")
     if not resolution or unit is None:
@@ -39,16 +41,37 @@ def exif_pixel_size(tags):
     return size if 1 <= size <= 20 else None
 
 
+def camera_temperature(tags):
+    """Return the sensor temperature in Celsius from Canon maker notes, or None when they do not record one."""
+    # exifread shows it as "26 C", having removed Canon's offset of 128
+    match = re.fullmatch(r"(-?\d+) C", exif_value(tags, "MakerNote CameraTemperature") or "")
+    if match is None:
+        return None
+    temperature = int(match.group(1))
+    # Other makers' notes, or a misread one, can hold anything
+    return temperature if -40 <= temperature <= 80 else None
+
+
+def read_tags(path):
+    """Return the EXIF tags of a RAW file, with its maker notes when they can be read."""
+    with path.open("rb") as f:
+        try:
+            return exifread.process_file(f, details=True)
+        # Maker notes are proprietary, and a camera exifread does not know could trip it up
+        except Exception:
+            f.seek(0)
+            return exifread.process_file(f, details=False)
+
+
 def convert(path, tz, output=None):
     with rawpy.imread(str(path)) as raw:
         # Preserve the original Bayer mosaic without demosaicing
         data = raw.raw_image_visible.copy()
         black_levels = list(raw.black_level_per_channel)
         white_level = int(raw.white_level)
-        colour = raw_color_metadata(raw)
+        color = raw_color_metadata(raw)
 
-    with path.open("rb") as f:
-        tags = exifread.process_file(f, details=False)
+    tags = read_tags(path)
 
     date = exif_value(tags, "EXIF DateTimeOriginal")
     exposure = exif_float(tags, "EXIF ExposureTime")
@@ -96,8 +119,12 @@ def convert(path, tz, output=None):
 
     pixel = exif_pixel_size(tags)
     if pixel is not None:
-        hdr["XPIXSZ"] = (round(pixel, 3), "Pixel width in micrometres, including binning")
+        hdr["XPIXSZ"] = (round(pixel, 3), "Pixel width in micrometers, including binning")
         hdr["XBINNING"] = (1, "Pixels combined horizontally")
+
+    temperature = camera_temperature(tags)
+    if temperature is not None:
+        hdr["CCD-TEMP"] = (temperature, "Sensor temperature (C) from the maker notes")
 
     if camera:
         hdr["INSTRUME"] = camera
@@ -109,16 +136,24 @@ def convert(path, tz, output=None):
         "Mean raw sensor black level",
     )
     hdr["WHITELEV"] = (white_level, "Raw sensor white level")
-    for key, value in colour.items():
+    for key, value in color.items():
         hdr[key] = value
 
     output = Path(output) if output is not None else path.with_suffix(".fit")
-    hdu.writeto(output, overwrite=True)
+    # Written under a temporary name, then renamed, so a stack scanning for FITS frames never reads half a file;
+    # each conversion has a directory of its own, so two converting the same file at once cannot mix their writes,
+    # and the file is created as usual, with the permissions the user's umask gives rather than private ones
+    with tempfile.TemporaryDirectory(prefix=f".{output.name}.", dir=output.parent) as temporary:
+        written = Path(temporary) / output.name
+        hdu.writeto(written)
+        written.replace(output)
 
     print(f"{path} -> {output}")
     print(f"  Start:    {start.isoformat()}")
     print(f"  Midpoint: {midpoint.isoformat()}")
     print(f"  Exposure: {exposure} s")
+    if temperature is not None:
+        print(f"  Sensor:   {temperature} °C")
     return output
 
 

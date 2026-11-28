@@ -143,11 +143,11 @@ class ChartTests(unittest.TestCase):
         track = ("4 Vesta", [57.0, 58.0, 59.0], [24.0, 24.0, 24.0])
         ax = self.render(outlines, labels=labels, track=track)
         self.assertEqual([text.get_text() for text in ax.get_legend().get_texts()], labels)
-        colours = {line.get_color() for line in ax.lines[-4:-1]}
-        self.assertEqual(colours, set(chart.SERIES[:3]))
+        colors = {line.get_color() for line in ax.lines[-4:-1]}
+        self.assertEqual(colors, set(chart.SERIES[:3]))
         self.assertIn("4 Vesta", [text.get_text() for text in ax.texts])
 
-    def test_more_images_than_colours_share_one(self):
+    def test_more_images_than_colors_share_one(self):
         outlines = [chart.footprint(make_header(ra=50 + i, dec=24.1)) for i in range(len(chart.SERIES) + 1)]
         ax = self.render(outlines, labels=[str(i) for i in range(len(outlines))])
         self.assertEqual({line.get_color() for line in ax.lines[-len(outlines):]}, {chart.SERIES[0]})
@@ -386,7 +386,7 @@ class OverlayTests(unittest.TestCase):
         real = WCS(header).celestial
 
         class Diverging:
-            """A solution whose inverse fails far from the image, landing every point on its centre pixel."""
+            """A solution whose inverse fails far from the image, landing every point on its center pixel."""
             pixel_scale_matrix = real.pixel_scale_matrix
 
             def pixel_to_world_values(self, x, y):
@@ -400,7 +400,7 @@ class OverlayTests(unittest.TestCase):
 
         pixels = np.ones((200, 300, 4), dtype=np.float32)
         canvas = chart.project_images([(pixels, Diverging())], chart.chart_wcs([56.75, 24.1], 10))
-        # Only the chart pixels within three image pixels of the centre are really there, not the whole chart
+        # Only the chart pixels within three image pixels of the center are really there, not the whole chart
         self.assertLess((canvas[..., 3] > 0).sum(), 100)
 
     def test_the_moon_is_plotted_where_the_observer_sees_it(self):

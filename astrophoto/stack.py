@@ -13,10 +13,26 @@ from scipy.ndimage import binary_dilation
 from scipy.signal import savgol_filter
 from skimage.transform import warp
 
+from astrophoto.lib import alignment, darks
 from astrophoto.lib.camera import stack_display_limits
+from astrophoto.lib.config import command_settings
 from astrophoto.lib.color import BAYER_PATTERNS, bin_rgb, color_metadata, luminance, rgb_display_header, render_rgb, saturation_flags
 
 DEBAND_WINDOW = 65
+# Settings of the [stack] table in config.toml; full debanding suits both the EOS 20D and 600D
+DEFAULTS = {"deband": "1"}
+
+
+def stack_settings(parser):
+    """Return the [stack] table's settings, checked, with deband as a number."""
+    settings = command_settings(parser, "stack", DEFAULTS)
+    try:
+        deband = float(settings["deband"])
+    except ValueError:
+        deband = float("nan")
+    if not np.isfinite(deband) or not 0 <= deband <= 1:
+        parser.error("deband in [stack] must be between 0 and 1")
+    return {"deband": deband}
 
 def read_frame(path):
     data, header = fits.getdata(path, header=True)
@@ -58,7 +74,7 @@ def black_level(path, header):
     return level
 
 def normalize_flat(data):
-    # Keep the flat illumination's colour out of the four Bayer pixel positions
+    # Keep the flat illumination's color out of the four Bayer pixel positions
     for y in range(2):
         for x in range(2):
             plane = data[y::2, x::2]
@@ -68,10 +84,14 @@ def normalize_flat(data):
             plane /= level
     return data
 
-def master_flat(paths):
+def no_progress(stage, done, total):
+    pass
+
+def master_flat(paths, progress=no_progress):
     images = []
     metadata = {}
-    for path in paths:
+    for index, path in enumerate(paths):
+        progress("Combining flats", index, len(paths) + 1)
         data, header = read_frame(path)
         shape = images[0].shape if images else data.shape
         check_flat_match(path, data, header, shape, metadata)
@@ -96,15 +116,19 @@ def master_flat(paths):
             if key in header:
                 metadata[key] = header[key]
 
-    flat, _, _ = combine_frames(images, method="median")
+    # Reading the frames and combining them each count as part of the step
+    flat, _, _ = combine_frames(images, method="median",
+                                progress=lambda done, total: progress("Combining flats", len(paths) + done / total,
+                                                                      len(paths) + 1))
     if not np.isfinite(flat).all() or np.any(flat <= 0):
         raise ValueError("Master flat contains invalid or non-positive response pixels")
     return normalize_flat(flat), metadata
 
-def master_dark(paths):
+def master_dark(paths, progress=no_progress):
     images = []
     metadata = {}
-    for path in paths:
+    for index, path in enumerate(paths):
+        progress("Combining darks", index, len(paths) + 1)
         data, header = read_frame(path)
         shape = images[0].shape if images else data.shape
         check_dark_match(path, data, header, shape, metadata)
@@ -116,7 +140,9 @@ def master_dark(paths):
         images.append(data)
 
     # Detector patterns stay fixed: combine without registration or normalization
-    dark, _, _ = combine_frames(images, method="median")
+    dark, _, _ = combine_frames(images, method="median",
+                                progress=lambda done, total: progress("Combining darks", len(paths) + done / total,
+                                                                      len(paths) + 1))
     return dark, metadata
 
 def reduce_banding(image, amount):
@@ -199,7 +225,7 @@ def stack_header(reference, files):
     header["NCOMBINE"] = (len(files), "Number of frames stacked")
     # Plate solving reads the image scale from the binned pixel size
     if "XPIXSZ" in header:
-        header["XPIXSZ"] = (2 * float(header["XPIXSZ"]), "Pixel width in micrometres, including binning")
+        header["XPIXSZ"] = (2 * float(header["XPIXSZ"]), "Pixel width in micrometers, including binning")
     header["XBINNING"] = (2, "Pixels combined horizontally")
 
     times = []
@@ -257,7 +283,7 @@ def align_saturation(flags, transform, shape, footprint):
     result[footprint] = 0
     return result
 
-def combine_frames(images, method="mean", sigma=3, saturation=None):
+def combine_frames(images, method="mean", sigma=3, saturation=None, progress=None):
     shape = images[0].shape
     result = np.full(shape, np.nan, dtype=np.float32)
     coverage = np.zeros(shape, dtype=np.int32)
@@ -289,6 +315,8 @@ def combine_frames(images, method="mean", sigma=3, saturation=None):
             flags = np.stack([mask[rows] for mask in saturation])
             channels = (flags[..., None] & np.array([1, 2, 4], dtype=np.uint8)) != 0
             saturated[rows] = np.sum(channels & ~np.ma.getmaskarray(contributors), axis=0)
+        if progress is not None:
+            progress(min(y + 128, shape[0]), shape[0])
 
     if saturation is not None:
         fraction = np.divide(saturated, accepted, out=np.zeros(shape, dtype=np.float32), where=accepted > 0)
@@ -320,7 +348,9 @@ def coverage_crop(coverage, minimum):
 
 def stack_directory(directory, method="mean", normalize=True, sigma=3,
                     min_coverage=0, output_prefix=None, dark_files=None, deband=0,
-                    flat_files=None, rgb=False, bayer_pattern=None):
+                    flat_files=None, rgb=False, bayer_pattern=None, dark_library=False, realign=False,
+                    progress=no_progress):
+    """Stack the FITS frames of a directory, reporting each step to progress(stage, done, total)."""
     dark_files = list(dict.fromkeys(Path(path).resolve() for path in (dark_files or [])))
     flat_files = list(dict.fromkeys(Path(path).resolve() for path in (flat_files or [])))
     if set(dark_files) & set(flat_files):
@@ -334,20 +364,45 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     if not files:
         raise SystemExit(f"No FITS images found in {directory}")
 
-    dark, dark_metadata = master_dark(dark_files) if dark_files else (None, None)
-    if dark_files:
-        print(f"Combined {len(dark_files)} dark frames")
-    flat, flat_metadata = master_flat(flat_files) if flat_files else (None, None)
-    if flat_files:
-        print(f"Combined {len(flat_files)} flat frames")
-
     # The field drifts on a fixed tripod, so align to the middle
     # frame to halve the largest offset between frames
     middle = files[len(files) // 2]
-    colour = color_metadata(middle, fits.getheader(middle), bayer_pattern) if rgb else None
-    colour_options = {"rgb": True, "bayer_pattern": bayer_pattern, "return_saturation": True} if rgb else {}
+
+    if dark_files and dark_library:
+        raise ValueError("Use either dark frames or the dark library, not both")
+    dark, dark_metadata = master_dark(dark_files, progress) if dark_files else (None, None)
+    library_dark = None
+    light_temperature = darks.median_temperature(files) if dark_files or dark_library else None
+    if dark_files:
+        print(f"Combined {len(dark_files)} dark frames")
+        dark_temperature = darks.median_temperature(dark_files)
+        saved = darks.save(dark, dark_metadata, dark_files)
+        if saved is not None:
+            print(f"Master dark kept in the library as {saved.name}")
+    elif dark_library:
+        light = fits.getheader(middle)
+        library_dark = darks.find(light, light_temperature)
+        if library_dark is None:
+            raise ValueError(f"No master dark for {darks.describe(light)} in the library; "
+                             "stack once with --dark to add one")
+        dark, dark_metadata, library_header = darks.load(library_dark)
+        dark_temperature = library_header.get("CCD-TEMP")
+        taken = "" if dark_temperature is None else f", taken at {dark_temperature:g} °C"
+        print(f"Using the library's master dark {library_dark.name}{taken}")
+    if dark is not None:
+        warning = darks.temperature_warning(dark_temperature, light_temperature)
+        if warning:
+            print(warning, file=sys.stderr)
+    flat, flat_metadata = master_flat(flat_files, progress) if flat_files else (None, None)
+    if flat_files:
+        print(f"Combined {len(flat_files)} flat frames")
+    saved_alignment = None if realign else alignment.load(directory)
+    reused = 0
+    color = color_metadata(middle, fits.getheader(middle), bayer_pattern) if rgb else None
+    color_options = {"rgb": True, "bayer_pattern": bayer_pattern, "return_saturation": True} if rgb else {}
+    progress("Aligning lights", 0, len(files))
     reference = load(middle, dark, dark_metadata, deband=deband,
-                     flat=flat, flat_metadata=flat_metadata, **colour_options)
+                     flat=flat, flat_metadata=flat_metadata, **color_options)
     if rgb:
         reference, reference_saturation = reference
         saturation = [reference_saturation]
@@ -357,23 +412,36 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     used = [middle]
     offsets = [[0.0] * 3 if rgb else 0.0]
 
+    # The reference frame is the first one done
+    done = 1
     for path in files:
         if path == middle:
             continue
+        progress("Aligning lights", done, len(files))
+        done += 1
 
         image = load(path, dark, dark_metadata, deband=deband,
-                     flat=flat, flat_metadata=flat_metadata, **colour_options)
+                     flat=flat, flat_metadata=flat_metadata, **color_options)
         if rgb:
             image, image_saturation = image
 
+        # The live stack saved where each frame lies, so its stars need not be matched again
+        transform = None if saved_alignment is None else saved_alignment.transform(path.name, middle.name)
         try:
             if rgb:
-                transform, _ = astroalign.find_transform(luminance(image), luminance(reference))
+                if transform is None:
+                    transform, _ = astroalign.find_transform(luminance(image), luminance(reference))
+                else:
+                    reused += 1
                 channels = [astroalign.apply_transform(transform, image[..., channel], reference[..., channel])
                             for channel in range(3)]
                 registered = np.stack([data for data, _ in channels], axis=-1)
                 footprint = np.logical_or.reduce([mask for _, mask in channels])
                 registered_saturation = align_saturation(image_saturation, transform, reference.shape[:2], footprint)
+            elif transform is not None:
+                registered, footprint = astroalign.apply_transform(transform, image, reference)
+                registered = registered.astype(np.float32)
+                reused += 1
             else:
                 registered, footprint = astroalign.register(image, reference)
             registered[footprint] = np.nan
@@ -389,11 +457,16 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         except Exception as exc:
             print(f"Skipped {path.name}: {exc}")
 
+    if reused:
+        print(f"Reused the saved alignment of {reused} frames; pass --realign to match their stars again")
+    progress("Aligning lights", len(files), len(files))
+    combining = lambda rows, total: progress("Stacking lights", rows, total)
     if rgb:
-        stack, coverage, accepted, saturation = combine_frames(aligned, method, sigma, saturation=saturation)
+        stack, coverage, accepted, saturation = combine_frames(aligned, method, sigma, saturation=saturation,
+                                                               progress=combining)
         coverage = coverage.min(axis=-1)
     else:
-        stack, coverage, accepted = combine_frames(aligned, method, sigma)
+        stack, coverage, accepted = combine_frames(aligned, method, sigma, progress=combining)
     rows, columns = slice(0, stack.shape[0]), slice(0, stack.shape[1])
     if min_coverage > 0:
         minimum = int(np.ceil(min_coverage * len(aligned)))
@@ -409,19 +482,25 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     png_path = directory / f"{prefix}-stack.png"
     coverage_path = directory / f"{prefix}-coverage.png"
 
+    progress("Saving", 0, 1)
     header = stack_header(middle, used)
-    if dark_files:
+    if dark is not None:
         header["DARKCOR"] = (True, "Master dark subtracted before binning")
-        header["NDARKS"] = (len(dark_files), "Number of median-combined dark frames")
+        count = len(dark_files) if dark_files else library_header.get("NDARKS", 0)
+        header["NDARKS"] = (count, "Number of median-combined dark frames")
         for path in dark_files:
             header.add_history(f"Dark {path.name}")
+        if library_dark is not None:
+            header.add_history(f"Library dark {library_dark.name}")
+        if dark_temperature is not None:
+            header["DARKTEMP"] = (dark_temperature, "Median sensor temperature (C) of the darks")
     if flat_files:
         header["FLATCOR"] = (True, "Master flat applied before binning")
         header["NFLATS"] = (len(flat_files), "Number of normalized flat frames")
         header["FLATBIAS"] = ("BLACKLVL", "Flat bias from RAW black-level metadata")
         for path in flat_files:
             header.add_history(f"Flat {path.name}")
-    if dark_files or flat_files or rgb:
+    if dark is not None or flat_files or rgb:
         # camera.read_image must not subtract the raw bias a second time
         header["BLACKLVL"] = (0.0, "Raw bias removed during calibration")
         header.remove("WHITELEV", ignore_missing=True)
@@ -437,14 +516,16 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     header["MINCOV"] = (min_coverage, "Minimum input coverage fraction for crop")
     header["CROPX"] = (columns.start, "Crop origin in binned reference pixels")
     header["CROPY"] = (rows.start, "Crop origin in binned reference pixels")
+    if reused:
+        header.add_history(f"Saved alignment reused for {reused} frames")
     for path, offset in zip(used, offsets):
         text = ", ".join(f"{value:.6g}" for value in offset) if rgb else f"{offset:.6g}"
         header.add_history(f"Input {path.name}; background offset {text} ADU")
 
     primary = luminance(stack) if rgb else stack
     if rgb:
-        header["RGB"] = (True, "Linear colour data in RGB extension")
-        header["RAWPATT"] = (colour["BAYERPAT"], "Reference RAW Bayer layout")
+        header["RGB"] = (True, "Linear color data in RGB extension")
+        header["RAWPATT"] = (color["BAYERPAT"], "Reference RAW Bayer layout")
     lo, hi = stack_display_limits(primary)
     header["DISPLO"] = (lo, "Black point for the rendered PNG")
     header["DISPHI"] = (hi, "White point for the rendered PNG")
@@ -459,17 +540,17 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
         fits.ImageHDU(np.moveaxis(accepted, -1, 0) if rgb else accepted, accepted_header, name="ACCEPTED"),
     ]
     if rgb:
-        colour_header = rgb_display_header(stack, colour)
-        colour_header["BUNIT"] = "ADU"
-        colour_header["SATEXT"] = ("SATURATED", "Accepted sensor clipping fractions")
-        hdus.append(fits.ImageHDU(np.moveaxis(stack, -1, 0), colour_header, name="RGB"))
+        color_header = rgb_display_header(stack, color)
+        color_header["BUNIT"] = "ADU"
+        color_header["SATEXT"] = ("SATURATED", "Accepted sensor clipping fractions")
+        hdus.append(fits.ImageHDU(np.moveaxis(stack, -1, 0), color_header, name="RGB"))
         saturation_header = fits.Header({"BUNIT": "fraction", "SATTHR": 0.98})
         saturation_header.add_comment("Maximum accepted clipping fraction across R, G and B")
         hdus.append(fits.ImageHDU(saturation, saturation_header, name="SATURATED"))
     fits.HDUList(hdus).writeto(fits_path, overwrite=True)
 
     if rgb:
-        plt.imsave(png_path, render_rgb(stack, colour_header, saturation))
+        plt.imsave(png_path, render_rgb(stack, color_header, saturation))
     else:
         plt.imsave(png_path, stack, cmap="gray", vmin=lo, vmax=hi)
     plt.imsave(coverage_path, coverage, cmap="gray", vmin=0, vmax=len(aligned))
@@ -478,6 +559,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     print(f"Created {fits_path}")
     print(f"Created {png_path}")
     print(f"Created {coverage_path}")
+    progress("Saving", 1, 1)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -498,17 +580,26 @@ def main():
                         help="Crop to this fraction of aligned frames; 0 keeps the full field (default: 0)")
     parser.add_argument("--output-prefix",
                         help="Output basename within the input directory (default: directory name)")
-    parser.add_argument("--dark", nargs="+", type=Path,
-                        help="Unstacked dark FITS files; median-combine and subtract before binning")
+    darks_group = parser.add_mutually_exclusive_group()
+    darks_group.add_argument("--dark", nargs="+", type=Path,
+                             help="Unstacked dark FITS files; median-combine and subtract before binning, "
+                                  "and keep the master dark in the library")
+    darks_group.add_argument("--dark-library", action="store_true",
+                             help="Subtract the newest master dark from the library with the same camera, ISO "
+                                  "and exposure time")
     parser.add_argument("--flat", nargs="+", type=Path,
                         help="Unstacked flat FITS files; normalize and divide before binning")
-    parser.add_argument("--deband", type=float, default=0, metavar="AMOUNT",
-                        help="Horizontal row correction strength, 0 to 1 (default: 0, disabled)")
+    parser.add_argument("--deband", type=float, metavar="AMOUNT",
+                        help="Horizontal row correction strength, 0 to 1, where 0 disables it (default: 1, or deband in [stack])")
     parser.add_argument("--rgb", action="store_true",
-                        help="Keep RGB colour at the usual 2x2-binned size; save with an -rgb prefix")
+                        help="Keep RGB color at the usual 2x2-binned size; save with an -rgb prefix")
     parser.add_argument("--bayer-pattern", choices=BAYER_PATTERNS,
                         help="Bayer layout override for older FITS files; requires --rgb")
+    parser.add_argument("--realign", action="store_true",
+                        help="Match the stars of every frame, ignoring the alignment saved by the server's live stack")
     args = parser.parse_args()
+    if args.deband is None:
+        args.deband = stack_settings(parser)["deband"]
     if not np.isfinite(args.sigma) or args.sigma <= 0:
         parser.error("--sigma must be finite and positive")
     if args.bayer_pattern is not None and not args.rgb:
@@ -532,7 +623,7 @@ def main():
         stack_directory(directory, args.method, not args.no_normalize, args.sigma,
                         args.min_coverage, args.output_prefix, dark_files=args.dark,
                         deband=args.deband, flat_files=args.flat, rgb=args.rgb,
-                        bayer_pattern=args.bayer_pattern)
+                        bayer_pattern=args.bayer_pattern, dark_library=args.dark_library, realign=args.realign)
     except (OSError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 

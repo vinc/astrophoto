@@ -107,7 +107,7 @@ def chart_center(outlines):
     radius = np.degrees(np.arccos(np.clip((points @ center).min(), -1, 1)))
     if radius > SPREAD:
         raise SystemExit(f"Images are spread over too much of the sky to chart together "
-                         f"(more than {SPREAD}° from any centre); chart fewer at a time")
+                         f"(more than {SPREAD}° from any center); chart fewer at a time")
     ra, dec = to_radec(center)
     return float(ra), float(dec)
 
@@ -174,22 +174,22 @@ def inside(x, y, margin=0):
     return (-0.5 + margin <= x) & (x <= WIDTH - 0.5 - margin) & (-0.5 + margin <= y) & (y <= HEIGHT - 0.5 - margin)
 
 def render_image(path, solved):
-    """Return an image as RGBA pixels, coloured when it has RGB data, with its celestial WCS."""
+    """Return an image as RGBA pixels, colored when it has RGB data, with its celestial WCS."""
     data, header = fits.getdata(solved, header=True)
     rgb = None
     for source in (Path(path), Path(solved)):
         if source.suffix.lower() in {".fit", ".fits", ".new"}:
-            rgb, colour = read_rgb(source)
+            rgb, color = read_rgb(source)
             if rgb is not None and rgb.shape[:2] == data.shape:
-                return render_rgb(rgb, colour, read_saturation(source)), WCS(header).celestial
+                return render_rgb(rgb, color, read_saturation(source)), WCS(header).celestial
     source = Path(path) if Path(path).suffix.lower() in {".fit", ".fits", ".new"} else Path(solved)
     display = fits.getheader(source)
     if "NCOMBINE" in display or "STACKMTH" in display:
         low, high = stack_display_limits(data, display)
     else:
         low, high = display_limits(data)
-    grey = np.clip((data - low) / (high - low), 0, 1)
-    return np.dstack((grey, grey, grey, np.isfinite(data))).astype(np.float32), WCS(header).celestial
+    gray = np.clip((data - low) / (high - low), 0, 1)
+    return np.dstack((gray, gray, gray, np.isfinite(data))).astype(np.float32), WCS(header).celestial
 
 def project_images(images, wcs):
     """Paint images onto the chart grid, later images over earlier ones, as an RGBA array."""
@@ -199,7 +199,7 @@ def project_images(images, wcs):
     for pixels, image_wcs in images:
         height, width = pixels.shape[:2]
         center = image_wcs.pixel_to_world_values((width - 1) / 2, (height - 1) / 2)
-        # The image projection folds back on itself far from its centre, so stay well within a hemisphere
+        # The image projection folds back on itself far from its center, so stay well within a hemisphere
         near = np.isfinite(ra) & (separation(ra, dec, center) < 80)
         ix, iy = np.full(ra.shape, -1), np.full(ra.shape, -1)
         px, py = image_wcs.all_world2pix(ra[near], dec[near], 0, quiet=True)
@@ -227,7 +227,7 @@ def horizon_and_moon(observer, time):
     with iers.conf.set_temp("auto_download", False), iers.conf.set_temp("auto_max_age", None):
         horizon = SkyCoord(az=np.linspace(0, 360, 361) * u.deg, alt=np.zeros(361) * u.deg, frame=frame).icrs
         moon = get_body("moon", time, location)
-        # With its distance, the conversion would move the viewpoint to the barycentre, far off for the Moon
+        # With its distance, the conversion would move the viewpoint to the barycenter, far off for the Moon
         moon = SkyCoord(moon.frame.realize_frame(moon.represent_as(UnitSphericalRepresentation))).icrs
     return (horizon.ra.deg, horizon.dec.deg), (float(moon.ra.deg), float(moon.dec.deg))
 
@@ -292,7 +292,7 @@ def draw_chart(outlines, output, labels=None, fov=None, magnitude=6.0, track=Non
     ax.scatter(x[order], y[order], s=star_sizes(mag[near][order], magnitude),
                color=TEXT, edgecolors=SURFACE, linewidths=0.5, zorder=2)
 
-    # Past the palette, a shared colour beats generated hues nobody can tell apart
+    # Past the palette, a shared color beats generated hues nobody can tell apart
     shared = len(outlines) > len(SERIES)
     legend = labels is not None and len(outlines) > 1 and not shared
     for index, (ra, dec) in enumerate(outlines):
@@ -344,7 +344,7 @@ def main():
     matplotlib.use("Agg")
     parser = argparse.ArgumentParser(description="Draw a star chart locating plate-solved images in the sky")
     parser.add_argument("files", nargs="+", type=Path, help="Saved RAW or FITS images, including stacks")
-    parser.add_argument("--fov", type=float, help="Chart width in degrees at its centre (default: fit the images, at least 30)")
+    parser.add_argument("--fov", type=float, help="Chart width in degrees at its center (default: fit the images, at least 30)")
     parser.add_argument("--magnitude", type=float, default=6.0, help="Faintest star magnitude, up to 6 (default: 6)")
     parser.add_argument("--output", type=Path, help="PNG path (default: next to a single image, or <kind>-chart-NNNN.png in the current directory)")
     parser.add_argument("--query", help="Star, deep-sky object, or Solar System body to mark at each image time")
