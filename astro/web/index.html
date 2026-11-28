@@ -105,10 +105,6 @@
   .forecast .green { color: var(--good); }
   .forecast .yellow { color: var(--warn); }
   .forecast .red { color: var(--bad); }
-  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 13px; margin: 8px 0 0; }
-  .legend .green { color: var(--good); }
-  .legend .yellow { color: var(--warn); }
-  .legend .red { color: var(--bad); }
   .view {
     background: #000; color: var(--text); border: 1px solid var(--line); border-radius: 8px; min-height: 120px;
     display: flex; align-items: center; justify-content: center; overflow: hidden;
@@ -164,11 +160,6 @@
     <div class="title" id="weather-title"></div>
     <div class="table-wrap" id="weather-wrap" hidden>
       <table class="forecast"><tbody id="weather-rows"></tbody></table>
-    </div>
-    <div class="legend" id="weather-legend" hidden>
-      <span class="green">● Clear</span>
-      <span class="yellow">● Haze, rain, gusts or dew</span>
-      <span class="red">● Cloudy</span>
     </div>
   </section>
   <section id="visible">
@@ -371,6 +362,8 @@ function setupObserver() {
   document.querySelectorAll(".needs-observer").forEach((button) => { button.disabled = off; });
 }
 
+const RATING_TITLES = {green: "Clear", yellow: "Haze, rain, gusts or dew", red: "Cloudy"};
+
 async function loadWeather() {
   if (!config.observer) return;
   loaded.add("weather");
@@ -413,7 +406,12 @@ async function loadWeather() {
   const corner = document.createElement("th");
   corner.textContent = "Date";
   dateRow.append(corner, ...dateCells);
-  const rows = [dateRow, row("Time (h)", hours.map((hour) => cell(hour.hour, hour.rating || "")))];
+  const hourCells = hours.map((hour) => {
+    const td = cell(hour.hour, hour.rating || "");
+    if (hour.rating) td.title = RATING_TITLES[hour.rating];
+    return td;
+  });
+  const rows = [dateRow, row("Time (h)", hourCells)];
   for (const group of result.groups) {
     group.forEach(({label, cells}, index) => {
       rows.push(row(label, cells.map((value) => cell(value)), index === 0 ? "group" : ""));
@@ -421,7 +419,6 @@ async function loadWeather() {
   }
   $("weather-rows").replaceChildren(...rows);
   $("weather-wrap").hidden = !hours.length;
-  $("weather-legend").hidden = !hours.length;
 }
 
 async function loadVisible() {

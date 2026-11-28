@@ -376,7 +376,7 @@ adapted.
 
 The Weather tab shows the hourly forecast for the night like `weather`, with
 each hour colored green when clear, yellow with haze, rain, gusts or a risk of
-dew, and red when cloudy. Download again skips the 15 minute cache.
+dew, and red when cloudy, with the status shown on hover. Download again skips the 15 minute cache.
 
 The Visible tab lists the planets, asteroids and comets above the horizon like
 `visible`, brightest first, with the Sun and Moon altitude and the Moon phase.
