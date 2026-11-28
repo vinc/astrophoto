@@ -402,6 +402,13 @@ arrives, and listed with its HFR, star count and sky level. Stop ends the
 series once the current frame is saved; a series taken onto the card cannot
 be stopped.
 
+In the Focus, Center and Capture tabs, the ISO, aperture and shutter speed
+are chosen from the camera's own list, read again when the Capture tab opens,
+so the aperture choices follow the lens. A configured value can be a label or
+a position in that list, as gphoto2 takes it, and is shown by its label.
+Without a camera, only the configured values are offered. Focus and Center
+also offer Camera, which leaves the camera's current setting.
+
 The Stack tab shows the light frames of the series stacked as they arrive,
 aligned to the first frame, without calibration. Frames that cannot be aligned
 are left out. The stack is saved in the series directory as
