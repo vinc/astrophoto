@@ -74,6 +74,7 @@
   .correction { font-size: 22px; font-weight: 600; margin: 4px 0; min-height: 1.4em; }
   .correction.inside { color: var(--good); }
   .report { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: pre-line; }
+  .report.warning { color: var(--warn); }
   .note { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
   .progress { margin: 0 0 10px; }
   .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
@@ -178,6 +179,7 @@
     </div>
     <div class="title" id="visible-title"></div>
     <div class="report" id="visible-report"></div>
+    <div class="report warning" id="visible-warning" hidden></div>
     <div class="table-wrap" id="visible-wrap" hidden>
       <table class="striped">
         <thead><tr><th>Name</th><th class="number">Mag</th><th class="number">Alt</th><th class="number">Az</th><th class="number">RA</th><th class="number">Dec</th><th class="number">Elong</th><th>Type</th></tr></thead>
@@ -377,7 +379,9 @@ async function loadWeather() {
   button.disabled = false;
   $("weather-update").checked = false;
   if (!result) {
+    // A table left from an earlier request would read as the answer to this one
     $("weather-title").textContent = "";
+    $("weather-wrap").hidden = true;
     return;
   }
   const hours = result.hours;
@@ -440,8 +444,13 @@ async function loadVisible() {
   $("visible-update").checked = false;
   if (!result) {
     $("visible-title").textContent = "";
+    $("visible-report").textContent = "";
+    $("visible-warning").hidden = true;
+    $("visible-wrap").hidden = true;
     return;
   }
+  $("visible-warning").textContent = result.warning || "";
+  $("visible-warning").hidden = !result.warning;
   const days = Math.round(result.age);
   const percent = Math.round(100 * result.illuminated);
   $("visible-title").textContent = result.label;

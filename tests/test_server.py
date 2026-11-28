@@ -792,6 +792,19 @@ class SkyTests(ServerCase):
         self.assertEqual(magnitudes, sorted(magnitudes))
         saturn = result["bodies"][names.index("Saturn")]
         self.assertEqual(saturn["compass"], visible.compass(saturn["az"]))
+        self.assertIsNone(result["warning"])
+
+    def test_a_failed_orbit_update_is_reported_with_the_cached_report(self):
+        cache = tempfile.TemporaryDirectory()
+        self.addCleanup(cache.cleanup)
+        path = Path(cache.name) / "minor-bodies.json"
+        path.write_text(json.dumps({"downloaded": "2026-11-07T00:00:00", "asteroids": [], "comets": []}))
+        error = visible.requests.ConnectionError("offline")
+        with patch.object(visible, "CACHE", path), patch.object(visible, "download_minor_bodies", side_effect=error):
+            status, result = self.get_json("/api/visible?time=2026-11-07T21:11&update=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["downloaded"], "2026-11-07T00:00:00")
+        self.assertEqual(result["warning"], "Could not update orbital elements: offline")
 
     def test_visible_requests_are_validated(self):
         for query, message in [("limit=bright", "limit must be a number"),

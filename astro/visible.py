@@ -74,7 +74,10 @@ def load_minor_bodies(update):
         except requests.RequestException as exc:
             if cached is None:
                 raise SystemExit(f"No cached orbital elements and download failed: {exc}")
-            print(f"Could not update orbital elements: {exc}", file=sys.stderr)
+            warning = f"Could not update orbital elements: {exc}"
+            print(warning, file=sys.stderr)
+            # Kept with the cached elements, so a report made from them can say they are not fresh
+            return {**cached, "warning": warning}
         else:
             CACHE.parent.mkdir(parents=True, exist_ok=True)
             tmp = CACHE.with_suffix(".tmp")
@@ -314,6 +317,7 @@ def sky_report(latitude, longitude, elevation, start, limit=10, min_altitude=10,
         "illuminated": float(illuminated),
         "downloaded": data["downloaded"],
         "age": (Time.now() - Time(data["downloaded"])).jd,
+        "warning": data.get("warning"),
         "bodies": [
             {key: float(value) if key not in ("name", "kind") else value for key, value in body.items()}
             for body in sorted(bodies, key=lambda body: body["mag"])
