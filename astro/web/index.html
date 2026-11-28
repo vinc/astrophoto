@@ -285,10 +285,12 @@
         <div class="report" id="stack-progress-text"></div>
       </div>
       <div class="view" id="calibrated-view" hidden></div>
-      <h2 class="subhead">Live stack</h2>
     </div>
-    <div class="title" id="stack-title"></div>
-    <div class="view" id="stack-view"><div class="empty">Capture light frames to see them stacked as they arrive.</div></div>
+    <div id="live">
+      <h2 class="subhead" id="live-heading" hidden>Live stack</h2>
+      <div class="title" id="stack-title"></div>
+      <div class="view" id="stack-view"><div class="empty">Capture light frames to see them stacked as they arrive.</div></div>
+    </div>
   </section>
   <div id="log" hidden></div>
 </main>
@@ -654,6 +656,20 @@ async function loadDirectories() {
 }
 
 let stackingBusy = false;
+// Whether a light series was stacked as it arrived, since the server started
+let liveStack = false;
+
+// The live stack shows once there is one; its hint to capture only shows while the tab has nothing else
+function showLiveStack() {
+  const calibrated = !$("calibrated").hidden;
+  $("live").hidden = calibrated && !liveStack;
+  $("live-heading").hidden = !(calibrated && liveStack);
+}
+
+function showCalibrated() {
+  $("calibrated").hidden = false;
+  showLiveStack();
+}
 let stage = {name: null};
 
 function clock(seconds) {
@@ -799,7 +815,7 @@ const handlers = {
     updateStackButton();
     $("stack-progress").hidden = !stackingBusy;
     if (stackingBusy) {
-      $("calibrated").hidden = false;
+      showCalibrated();
       $("calibrated-title").textContent = "Stacking…";
       $("stack-bar").style.width = "0";
       $("stack-progress-text").textContent = "";
@@ -838,7 +854,7 @@ const handlers = {
     if (event.unmatched.length) {
       title += `; no ${event.unmatched.map((kind) => `${kind}s`).join(" or ")} in the library suit it`;
     }
-    $("calibrated").hidden = false;
+    showCalibrated();
     $("calibrated-title").textContent = title;
     $("calibrated-view").hidden = false;
     showImage($("calibrated-view"), event.image);
@@ -851,6 +867,8 @@ const handlers = {
     else title += ", saved at the end of the series";
     $("stack-title").textContent = title;
     showImage($("stack-view"), event.image);
+    liveStack = true;
+    showLiveStack();
   },
   center(event) {
     const correction = $("correction");
