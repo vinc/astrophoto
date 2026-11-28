@@ -176,7 +176,7 @@ class FlatTests(unittest.TestCase):
                     stack.master_flat([path])
 
     def test_flat_optical_metadata_and_shape_must_match_lights(self):
-        changes = [{"ISO": 1600}, {"INSTRUME": "other camera"}, {"FOCALLEN": 100},
+        changes = [{"INSTRUME": "other camera"}, {"FOCALLEN": 100},
                    {"FNUMBER": 5.6}, {"OBJECTIV": "other lens"}, {"FLATCOR": True}]
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "light.fit"
@@ -187,6 +187,11 @@ class FlatTests(unittest.TestCase):
                     fits.writeto(path, np.full((16, 20), 150), header, overwrite=True)
                     with self.assertRaises(ValueError):
                         stack.load(path, flat=np.ones((16, 20)), flat_metadata=frame_header())
+            # Gain does not change the shape of the illumination, so flats at another ISO still apply
+            header = frame_header()
+            header["ISO"] = 1600
+            fits.writeto(path, np.full((16, 20), 150), header, overwrite=True)
+            stack.load(path, flat=np.ones((16, 20)), flat_metadata=frame_header())
             fits.writeto(path, np.full((8, 10), 150), frame_header(), overwrite=True)
             with self.assertRaisesRegex(ValueError, "shape"):
                 stack.load(path, flat=np.ones((16, 20)))

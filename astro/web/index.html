@@ -646,8 +646,9 @@ async function loadDirectories() {
     if ([...select.options].some((option) => option.value === previous)) select.value = previous;
   };
   refill($("stack-lights"), found.light, []);
-  refill($("stack-darks"), found.dark, [["none", "None"], ["library", "Library"]]);
-  refill($("stack-flats"), found.flat, [["none", "None"]]);
+  // The library picks the masters that suit the lights, and stacks without them when it has none
+  refill($("stack-darks"), found.dark, [["library", "Library"], ["none", "None"]]);
+  refill($("stack-flats"), found.flat, [["library", "Library"], ["none", "None"]]);
   $("stack-start").dataset.ready = found.light.length ? "1" : "";
   updateStackButton();
 }
@@ -829,12 +830,16 @@ const handlers = {
   },
   calibrated(event) {
     const parts = [];
-    if (event.darks === "library") parts.push("the library's dark");
-    else if (event.darks !== "none") parts.push(`darks from ${event.darks}`);
-    if (event.flats !== "none") parts.push(`flats from ${event.flats}`);
+    const library = (kind) => (event.library.includes(kind) ? " from the library" : "");
+    if (event.darks !== "none") parts.push(`darks of ${event.darks}${library("dark")}`);
+    if (event.flats !== "none") parts.push(`flats of ${event.flats}${library("flat")}`);
     if (event.deband) parts.push(`deband ${event.deband}`);
+    let title = `${event.directory}${parts.length ? ` with ${parts.join(" and ")}` : ""}, saved as ${event.file}`;
+    if (event.unmatched.length) {
+      title += `; no ${event.unmatched.map((kind) => `${kind}s`).join(" or ")} in the library suit it`;
+    }
     $("calibrated").hidden = false;
-    $("calibrated-title").textContent = `${event.directory}${parts.length ? ` with ${parts.join(" and ")}` : ""}, saved as ${event.file}`;
+    $("calibrated-title").textContent = title;
     $("calibrated-view").hidden = false;
     showImage($("calibrated-view"), event.image);
     loadDirectories();

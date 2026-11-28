@@ -13,7 +13,7 @@ from scipy.ndimage import binary_dilation
 from scipy.signal import savgol_filter
 from skimage.transform import warp
 
-from astro.lib import alignment, darks
+from astro.lib import alignment, library
 from astro.lib.camera import stack_display_limits
 from astro.lib.config import command_settings
 from astro.lib.color import BAYER_PATTERNS, bin_rgb, color_metadata, luminance, rgb_display_header, render_rgb, saturation_flags
@@ -53,12 +53,15 @@ def check_calibration_match(path, data, header, shape, metadata, kind, keys):
             raise ValueError(f"{path}: {key}={header[key]} does not match {kind} {metadata[key]}")
 
 def check_dark_match(path, data, header, shape, metadata):
-    check_calibration_match(path, data, header, shape, metadata, "dark",
-                            ("INSTRUME", "ISO", "EXPTIME"))
+    check_calibration_match(path, data, header, shape, metadata, "dark", DARK_KEYS)
     if header.get("DARKCOR", False):
         raise ValueError(f"{path}: dark correction has already been applied")
 
-FLAT_KEYS = ("INSTRUME", "ISO", "OBJECTIV", "FOCALLEN", "FNUMBER")
+# Gain does not change the shape of the illumination, so flats need not share the lights' ISO
+FLAT_KEYS = ("INSTRUME", "OBJECTIV", "FOCALLEN", "FNUMBER")
+DARK_KEYS = ("INSTRUME", "ISO", "EXPTIME")
+# Dark current roughly doubles every 5 to 6 degrees, so darks further from the lights than this subtract poorly
+TEMPERATURE_TOLERANCE = 5
 
 def check_flat_match(path, data, header, shape, metadata):
     check_calibration_match(path, data, header, shape, metadata, "flat", FLAT_KEYS)
@@ -134,7 +137,7 @@ def master_dark(paths, progress=no_progress):
         check_dark_match(path, data, header, shape, metadata)
         if not np.isfinite(data).all():
             raise ValueError(f"{path}: dark frame contains non-finite pixels")
-        for key in ("INSTRUME", "ISO", "EXPTIME"):
+        for key in DARK_KEYS:
             if key in header:
                 metadata[key] = header[key]
         images.append(data)
@@ -144,6 +147,49 @@ def master_dark(paths, progress=no_progress):
                                 progress=lambda done, total: progress("Combining darks", len(paths) + done / total,
                                                                       len(paths) + 1))
     return dark, metadata
+
+def median_temperature(paths):
+    """Return the median sensor temperature recorded in FITS frames, or None when none records one."""
+    temperatures = []
+    for path in paths:
+        try:
+            value = fits.getheader(path).get("CCD-TEMP")
+        except OSError:
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            temperatures.append(float(value))
+    return float(np.median(temperatures)) if temperatures else None
+
+def temperature_warning(dark, lights):
+    """Return a warning when darks were taken much warmer or colder than the lights, or None."""
+    if dark is None or lights is None or abs(dark - lights) <= TEMPERATURE_TOLERANCE:
+        return None
+    return (f"Warning: the darks were taken at {dark:g} °C and the lights at {lights:g} °C; "
+            "darks within a few degrees of the lights subtract better")
+
+def write_master(path, data, metadata, frames):
+    """Save a master dark or flat beside its frames, with what lights are checked against."""
+    path = Path(path)
+    header = fits.Header()
+    for key, value in metadata.items():
+        header[key] = value
+    master = path.stem.upper()
+    header[f"N{master}S"] = (len(frames), f"Number of median-combined {path.stem} frames")
+    temperature = median_temperature(frames)
+    if temperature is not None:
+        header["CCD-TEMP"] = (temperature, f"Median sensor temperature (C) of the {path.stem} frames")
+    for frame in frames:
+        header.add_history(f"{path.stem.capitalize()} {frame.name}")
+    # Written under another name first, so a stack never reads half a master
+    temporary = path.with_name(f".{path.name}.tmp")
+    fits.writeto(temporary, np.asarray(data, dtype=np.float32), header, overwrite=True)
+    temporary.replace(path)
+    return path
+
+def read_master(path, keys):
+    """Return a master's data, the metadata lights are checked against, and its header."""
+    data, header = fits.getdata(path, header=True)
+    return data.astype(np.float32), {key: header[key] for key in keys if key in header}, header
 
 def reduce_banding(image, amount):
     if not np.isfinite(amount) or not 0 <= amount <= 1:
@@ -348,9 +394,12 @@ def coverage_crop(coverage, minimum):
 
 def stack_directory(directory, method="mean", normalize=True, sigma=3,
                     min_coverage=0, output_prefix=None, dark_files=None, deband=0,
-                    flat_files=None, rgb=False, bayer_pattern=None, dark_library=False, realign=False,
-                    progress=no_progress):
-    """Stack the FITS frames of a directory, reporting each step to progress(stage, done, total)."""
+                    flat_files=None, rgb=False, bayer_pattern=None, realign=False, dark_master=None,
+                    flat_master=None, progress=no_progress):
+    """Stack the FITS frames of a directory, reporting each step to progress(stage, done, total).
+
+    Darks and flats are either frames to combine, or a master already combined, such as a series' dark.fit.
+    """
     dark_files = list(dict.fromkeys(Path(path).resolve() for path in (dark_files or [])))
     flat_files = list(dict.fromkeys(Path(path).resolve() for path in (flat_files or [])))
     if set(dark_files) & set(flat_files):
@@ -358,7 +407,7 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     calibration_paths = set(dark_files) | set(flat_files)
     files = sorted(
         path for path in directory.glob("*.fit")
-        if not path.name.endswith("-stack.fit") and path.resolve() not in calibration_paths
+        if library.is_frame(path) and path.resolve() not in calibration_paths
     )
 
     if not files:
@@ -368,34 +417,33 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     # frame to halve the largest offset between frames
     middle = files[len(files) // 2]
 
-    if dark_files and dark_library:
-        raise ValueError("Use either dark frames or the dark library, not both")
-    dark, dark_metadata = master_dark(dark_files, progress) if dark_files else (None, None)
-    library_dark = None
-    light_temperature = darks.median_temperature(files) if dark_files or dark_library else None
+    if dark_files and dark_master is not None or flat_files and flat_master is not None:
+        raise ValueError("Use either calibration frames or a master, not both")
+    dark = dark_metadata = dark_temperature = None
+    dark_count = flat_count = 0
+    light_temperature = median_temperature(files) if dark_files or dark_master is not None else None
     if dark_files:
+        dark, dark_metadata = master_dark(dark_files, progress)
+        dark_count, dark_temperature = len(dark_files), median_temperature(dark_files)
         print(f"Combined {len(dark_files)} dark frames")
-        dark_temperature = darks.median_temperature(dark_files)
-        saved = darks.save(dark, dark_metadata, dark_files)
-        if saved is not None:
-            print(f"Master dark kept in the library as {saved.name}")
-    elif dark_library:
-        light = fits.getheader(middle)
-        library_dark = darks.find(light, light_temperature)
-        if library_dark is None:
-            raise ValueError(f"No master dark for {darks.describe(light)} in the library; "
-                             "stack once with --dark to add one")
-        dark, dark_metadata, library_header = darks.load(library_dark)
-        dark_temperature = library_header.get("CCD-TEMP")
+    elif dark_master is not None:
+        dark, dark_metadata, master_header = read_master(dark_master, DARK_KEYS)
+        dark_count, dark_temperature = master_header.get("NDARKS", 0), master_header.get("CCD-TEMP")
         taken = "" if dark_temperature is None else f", taken at {dark_temperature:g} °C"
-        print(f"Using the library's master dark {library_dark.name}{taken}")
+        print(f"Using the master dark of {Path(dark_master).parent.name}{taken}")
     if dark is not None:
-        warning = darks.temperature_warning(dark_temperature, light_temperature)
+        warning = temperature_warning(dark_temperature, light_temperature)
         if warning:
             print(warning, file=sys.stderr)
-    flat, flat_metadata = master_flat(flat_files, progress) if flat_files else (None, None)
+    flat = flat_metadata = None
     if flat_files:
+        flat, flat_metadata = master_flat(flat_files, progress)
+        flat_count = len(flat_files)
         print(f"Combined {len(flat_files)} flat frames")
+    elif flat_master is not None:
+        flat, flat_metadata, master_header = read_master(flat_master, FLAT_KEYS)
+        flat_count = master_header.get("NFLATS", 0)
+        print(f"Using the master flat of {Path(flat_master).parent.name}")
     saved_alignment = None if realign else alignment.load(directory)
     reused = 0
     color = color_metadata(middle, fits.getheader(middle), bayer_pattern) if rgb else None
@@ -486,21 +534,22 @@ def stack_directory(directory, method="mean", normalize=True, sigma=3,
     header = stack_header(middle, used)
     if dark is not None:
         header["DARKCOR"] = (True, "Master dark subtracted before binning")
-        count = len(dark_files) if dark_files else library_header.get("NDARKS", 0)
-        header["NDARKS"] = (count, "Number of median-combined dark frames")
+        header["NDARKS"] = (dark_count, "Number of median-combined dark frames")
         for path in dark_files:
             header.add_history(f"Dark {path.name}")
-        if library_dark is not None:
-            header.add_history(f"Library dark {library_dark.name}")
+        if dark_master is not None:
+            header.add_history(f"Master dark {Path(dark_master).parent.name}/{Path(dark_master).name}")
         if dark_temperature is not None:
             header["DARKTEMP"] = (dark_temperature, "Median sensor temperature (C) of the darks")
-    if flat_files:
+    if flat is not None:
         header["FLATCOR"] = (True, "Master flat applied before binning")
-        header["NFLATS"] = (len(flat_files), "Number of normalized flat frames")
+        header["NFLATS"] = (flat_count, "Number of normalized flat frames")
         header["FLATBIAS"] = ("BLACKLVL", "Flat bias from RAW black-level metadata")
         for path in flat_files:
             header.add_history(f"Flat {path.name}")
-    if dark is not None or flat_files or rgb:
+        if flat_master is not None:
+            header.add_history(f"Master flat {Path(flat_master).parent.name}/{Path(flat_master).name}")
+    if dark is not None or flat is not None or rgb:
         # camera.read_image must not subtract the raw bias a second time
         header["BLACKLVL"] = (0.0, "Raw bias removed during calibration")
         header.remove("WHITELEV", ignore_missing=True)
@@ -580,13 +629,8 @@ def main():
                         help="Crop to this fraction of aligned frames; 0 keeps the full field (default: 0)")
     parser.add_argument("--output-prefix",
                         help="Output basename within the input directory (default: directory name)")
-    darks_group = parser.add_mutually_exclusive_group()
-    darks_group.add_argument("--dark", nargs="+", type=Path,
-                             help="Unstacked dark FITS files; median-combine and subtract before binning, "
-                                  "and keep the master dark in the library")
-    darks_group.add_argument("--dark-library", action="store_true",
-                             help="Subtract the newest master dark from the library with the same camera, ISO "
-                                  "and exposure time")
+    parser.add_argument("--dark", nargs="+", type=Path,
+                        help="Unstacked dark FITS files; median-combine and subtract before binning")
     parser.add_argument("--flat", nargs="+", type=Path,
                         help="Unstacked flat FITS files; normalize and divide before binning")
     parser.add_argument("--deband", type=float, metavar="AMOUNT",
@@ -623,7 +667,7 @@ def main():
         stack_directory(directory, args.method, not args.no_normalize, args.sigma,
                         args.min_coverage, args.output_prefix, dark_files=args.dark,
                         deband=args.deband, flat_files=args.flat, rgb=args.rgb,
-                        bayer_pattern=args.bayer_pattern, dark_library=args.dark_library, realign=args.realign)
+                        bayer_pattern=args.bayer_pattern, realign=args.realign)
     except (OSError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
 

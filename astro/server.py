@@ -35,6 +35,7 @@ from astro.lib.config import (
 )
 from astro.locate import PlateSolveError
 from astro.lib.gphoto import ENGLISH, FOCUS_STEPS, camera_lock, choice_label, parse_config
+from astro.lib import library
 from astro.lib.livestack import LiveStack
 from astro.lib.localtime import parse_local_time
 from astro.lib.system import CpuUsage, acpi_temperature, memory_percent
@@ -55,6 +56,8 @@ PREVIEW_WIDTH = 1600
 SAVE_INTERVAL = 60
 # Series directories as capture names them, with a number added for a second series in the same minute
 SERIES = re.compile(r"\d{8}-\d{4}-(light|dark|flat)(-\d+)?")
+# Besides a series name, darks and flats may come from the library, which picks the masters that suit the lights
+CALIBRATION_CHOICES = ("library", "none")
 # What the Visible tab lists unless asked otherwise, as the visible command does
 VISIBLE_DEFAULTS = {"limit": 10.0, "min_altitude": 10.0}
 
@@ -349,6 +352,10 @@ class App:
         # Stacking only uses the computer, so it runs beside camera jobs rather than instead of them
         self.stacking = Jobs(self.hub, event="stacking")
         self.series_lock = threading.Lock()
+        # library.toml is read and written from the capture, stacking and request threads
+        self.library_lock = threading.Lock()
+        # The series being captured, which library.toml describes once it ends
+        self.capturing = None
         self.series = None
         self.live = None
         self.saved = 0.0
@@ -634,12 +641,16 @@ class App:
                 "target": settings["target"], "frames": [],
             }
         self.publish_series()
+        self.capturing = directory.name
         if settings["target"] == "card":
             self.hub.log("The series is downloaded once every frame is taken, and cannot be stopped before")
         try:
             capture_series(directory, settings, log=self.hub.log, stop=stop,
                            on_frame=lambda path: self.frame_captured(path, directory, kind))
         finally:
+            self.capturing = None
+            if directory.is_dir():
+                self.record_series(directory.name)
             # Once its frames are processed, the series' stack is saved
             self.processing.put((directory,))
 
@@ -762,7 +773,7 @@ class App:
         """Return the FITS frames of a series directory picked in the page, refusing any other path."""
         if name not in self.directories()[kind]:
             raise RequestError(f"No {kind} series named {name}")
-        return sorted(path for path in (self.root / name).glob("*.fit") if not path.name.endswith("-stack.fit"))
+        return sorted(path for path in (self.root / name).glob("*.fit") if library.is_frame(path))
 
     def unconverted(self, name):
         """Return the RAW files of a series directory that have no FITS frame yet."""
@@ -779,30 +790,55 @@ class App:
         if not isinstance(lights, str):
             raise RequestError("Choose a light series")
         self.check_series(lights, "light")
-        darks = body.get("darks", "none")
-        flats = body.get("flats", "none")
+        darks = body.get("darks", "library")
+        flats = body.get("flats", "library")
         if not isinstance(darks, str) or not isinstance(flats, str):
-            raise RequestError("darks and flats must be series names, none, or library for darks")
-        if darks not in ("none", "library"):
-            self.check_series(darks, "dark")
-        if flats != "none":
-            self.check_series(flats, "flat")
+            raise RequestError("darks and flats must be series names, library, or none")
+        for name, kind in ((darks, "dark"), (flats, "flat")):
+            if name not in CALIBRATION_CHOICES:
+                self.check_series(name, kind)
         rgb = bool(body.get("rgb", False))
         deband = number(body, "deband", self.stack_settings["deband"], minimum=0)
         if deband > 1:
             raise RequestError("deband must be from 0 to 1")
-        options = {"dark_library": darks == "library", "rgb": rgb, "deband": deband}
+        options = {"rgb": rgb, "deband": deband}
         self.stacking.start("stacking", lambda stop: self.calibrated_stack(lights, darks, flats, options))
         return {"ok": True}
 
+    def read_library(self):
+        """Return library.toml, adding the series it lacks, except one still being captured."""
+        with self.library_lock:
+            return library.update(self.root, skip=() if self.capturing is None else (self.capturing,))
+
+    def fill_library(self):
+        """Describe in library.toml the series it lacks, such as those captured before the server started."""
+        try:
+            self.read_library()
+        except (OSError, ValueError) as exc:
+            self.hub.log(f"Could not update {library.NAME}: {error_text(exc)}")
+
+    def record_series(self, name):
+        """Describe a series that just ended in library.toml."""
+        try:
+            with self.library_lock:
+                library.record(self.root, name)
+        except (OSError, ValueError) as exc:
+            self.hub.log(f"Could not add {name} to {library.NAME}: {error_text(exc)}")
+
+    def calibration_master(self, name, kind, progress):
+        """Return the master of a dark or flat series, combining its frames first when they are newer."""
+        path = library.master_path(self.root, name)
+        frames = self.series_frames(name, kind)
+        if path.exists() and all(frame.stat().st_mtime <= path.stat().st_mtime for frame in frames):
+            return path
+        combine = stack.master_dark if kind == "dark" else stack.master_flat
+        data, metadata = combine(frames, progress)
+        stack.write_master(path, data, metadata, frames)
+        self.hub.log(f"Saved the master {kind} of {name} as {name}/{path.name}")
+        return path
+
     def calibrated_stack(self, lights, darks, flats, options):
         directory = self.root / lights
-        calibration = [text for text in (
-            "the library's dark" if darks == "library" else None if darks == "none" else f"darks from {darks}",
-            None if flats == "none" else f"flats from {flats}",
-            f"deband {options['deband']:g}" if options["deband"] else None,
-        ) if text]
-        self.hub.log(f"Stacking {lights}" + (f" with {' and '.join(calibration)}" if calibration else ""))
         start = time.monotonic()
         last = {"stage": None, "time": 0.0}
 
@@ -817,7 +853,7 @@ class App:
 
         # Series captured outside the server only have their RAW files
         series = [(lights, "light")] + [(name, kind) for name, kind in ((darks, "dark"), (flats, "flat"))
-                                        if name not in ("none", "library")]
+                                        if name not in CALIBRATION_CHOICES]
         raw = [path for name, _ in series for path in self.unconverted(name)]
         if raw:
             self.hub.log(f"Converting {len(raw)} RAW files to FITS")
@@ -832,15 +868,40 @@ class App:
         for name, kind in series:
             if not self.series_frames(name, kind):
                 raise ValueError(f"No usable frames in {name}")
-        dark_files = self.series_frames(darks, "dark") if darks not in ("none", "library") else []
-        flat_files = self.series_frames(flats, "flat") if flats != "none" else []
-        stack.stack_directory(directory, progress=progress, dark_files=dark_files, flat_files=flat_files, **options)
+
+        # The library picks the masters that suit the lights, and none when it has none
+        chosen = {"dark": darks, "flat": flats}
+        unmatched = []
+        if "library" in chosen.values():
+            entries = self.read_library()
+            light = entries.get(lights, {})
+            for kind, name in chosen.items():
+                if name == "library":
+                    match = library.find(self.root, entries, kind, light)
+                    chosen[kind] = match or "none"
+                    if match is None:
+                        unmatched.append(kind)
+                        self.hub.log(f"No {kind} in the library suits {lights}, so it is stacked without one")
+                    else:
+                        self.hub.log(f"Using the master {kind} of {match} from the library")
+        calibration = [text for text in (
+            None if chosen["dark"] == "none" else f"darks from {chosen['dark']}",
+            None if chosen["flat"] == "none" else f"flats from {chosen['flat']}",
+            f"deband {options['deband']:g}" if options["deband"] else None,
+        ) if text]
+        self.hub.log(f"Stacking {lights}" + (f" with {' and '.join(calibration)}" if calibration else ""))
+        masters = {kind: None if name == "none" else self.calibration_master(name, kind, progress)
+                   for kind, name in chosen.items()}
+        stack.stack_directory(directory, progress=progress, dark_master=masters["dark"],
+                              flat_master=masters["flat"], **options)
         prefix = f"{directory.name}-rgb" if options["rgb"] else directory.name
         png = directory / f"{prefix}-stack.png"
         image = self.images.put("calibrated", preview_file(png))
         self.hub.log(f"Saved {prefix}-stack.fit and .png in {lights}")
         self.hub.publish("calibrated", directory=lights, file=f"{prefix}-stack.fit", image=image,
-                         darks=darks, flats=flats, rgb=options["rgb"], deband=options["deband"])
+                         darks=chosen["dark"], flats=chosen["flat"], rgb=options["rgb"], deband=options["deband"],
+                         library=[kind for kind, name in (("dark", darks), ("flat", flats)) if name == "library"],
+                         unmatched=unmatched)
 
     # Weather and visible bodies
 
@@ -1152,6 +1213,7 @@ def main():
         raise SystemExit(f"Cannot listen on {host}:{port}: {exc}") from exc
     threading.Thread(target=app.watch_status, daemon=True).start()
     threading.Thread(target=app.watch_system, daemon=True).start()
+    threading.Thread(target=app.fill_library, daemon=True).start()
     print(f"Listening on http://{address(host)}:{port}/", flush=True)
     try:
         server.serve_forever()

@@ -9,7 +9,7 @@ import numpy as np
 from astropy.io import fits
 
 from astro import stack
-from astro.lib import alignment, darks
+from astro.lib import alignment
 from astro.lib.livestack import LiveStack
 from tests.test_livestack import sky
 
@@ -96,13 +96,10 @@ class SavedAlignmentTests(unittest.TestCase):
         self.assertNotIn("Reused", output)
 
 
-class DarkLibraryTests(unittest.TestCase):
+class MasterTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(self.root, ignore_errors=True))
-        patcher = patch.object(darks, "library_path", return_value=self.root / "library")
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def session(self, name, iso=800, temperature=None, dark_temperature=None):
         directory = self.root / name
@@ -114,74 +111,51 @@ class DarkLibraryTests(unittest.TestCase):
                                  temperature=dark_temperature) for index in range(3)]
         return directory, dark_frames
 
-    def test_stacking_with_darks_keeps_one_master_per_set_of_frames(self):
+    def flat_frames(self, iso=800):
+        flats = self.root / "flats"
+        flats.mkdir()
+        frames = []
+        for index in range(2):
+            frames.append(flats / f"flat{index}.fit")
+            image = np.random.default_rng(index).normal(8000, 20, (240, 320)).astype(np.float32)
+            fits.writeto(frames[-1], image, fits.Header({**HEADER, "ISO": iso, "EXPTIME": 0.02}))
+        return frames
+
+    def test_a_master_stacks_like_the_frames_it_was_combined_from(self):
+        lights, dark_frames = self.session("first", dark_temperature=12)
+        quietly(stack.stack_directory, lights, dark_files=dark_frames, output_prefix="frames")
+        data, metadata = stack.master_dark(dark_frames)
+        master = stack.write_master(dark_frames[0].parent / "dark.fit", data, metadata, dark_frames)
+        header = fits.getheader(master)
+        self.assertEqual((header["ISO"], header["EXPTIME"], header["NDARKS"], header["CCD-TEMP"]), (800, 5.0, 3, 12))
+        output = quietly(stack.stack_directory, lights, dark_master=master, output_prefix="master")
+        self.assertIn("Using the master dark of first-dark, taken at 12 °C", output)
+        stacked = fits.getheader(lights / "master-stack.fit")
+        self.assertTrue(stacked["DARKCOR"])
+        self.assertEqual((stacked["NDARKS"], stacked["DARKTEMP"]), (3, 12))
+        self.assertIn("Master dark first-dark/dark.fit", str(stacked["HISTORY"]))
+        np.testing.assert_allclose(fits.getdata(lights / "master-stack.fit"),
+                                   fits.getdata(lights / "frames-stack.fit"), atol=1e-3)
+
+    def test_masters_are_not_taken_for_frames(self):
         lights, dark_frames = self.session("first")
-        output = quietly(stack.stack_directory, lights, dark_files=dark_frames)
-        masters = list((self.root / "library").glob("*.fit"))
-        self.assertEqual(len(masters), 1)
-        self.assertEqual(masters[0].name, "CanonEOS600D-iso800-5s-20261127210000.fit")
-        self.assertIn(f"kept in the library as {masters[0].name}", output)
-        header = fits.getheader(masters[0])
-        self.assertEqual((header["ISO"], header["EXPTIME"], header["NDARKS"]), (800, 5.0, 3))
-        quietly(stack.stack_directory, lights, dark_files=dark_frames)
-        self.assertEqual(len(list((self.root / "library").glob("*.fit"))), 1)
+        data, metadata = stack.master_dark(dark_frames)
+        for name in ("dark.fit", "flat.fit"):
+            stack.write_master(lights / name, data, metadata, dark_frames)
+        quietly(stack.stack_directory, lights)
+        self.assertEqual(fits.getheader(lights / "first-stack.fit")["NCOMBINE"], 3)
 
-    def test_a_later_session_without_darks_uses_the_library(self):
-        lights, dark_frames = self.session("first")
-        quietly(stack.stack_directory, lights, dark_files=dark_frames, output_prefix="with-darks")
-        later, _ = self.session("later")
-        output = quietly(stack.stack_directory, later, dark_library=True, output_prefix="library")
-        self.assertIn("Using the library's master dark CanonEOS600D-iso800-5s-20261127210000.fit", output)
-        header = fits.getheader(later / "library-stack.fit")
-        self.assertTrue(header["DARKCOR"])
-        self.assertEqual(header["NDARKS"], 3)
-        self.assertIn("Library dark CanonEOS600D-iso800-5s", str(header["HISTORY"]))
-        # The same master gives the same result as the frames it came from
-        np.testing.assert_allclose(fits.getdata(later / "library-stack.fit"),
-                                   fits.getdata(lights / "with-darks-stack.fit"), atol=1e-3)
-
-    def test_different_darks_with_the_same_names_and_sizes_are_both_kept(self):
-        nights = []
-        for night, temperature in (("cold", 5), ("warm", 22)):
-            directory = self.root / night
-            directory.mkdir()
-            frame = raw_frame(directory, "IMG_0001.fit", seed=temperature, dark=True, temperature=temperature)
-            nights.append(frame)
-            data, metadata = stack.master_dark([frame])
-            darks.save(data, metadata, [frame])
-        self.assertEqual(nights[0].stat().st_size, nights[1].stat().st_size)
-        self.assertEqual(len(list((self.root / "library").glob("*.fit"))), 2)
-        self.assertEqual(fits.getheader(darks.find(fits.Header(HEADER), temperature=22))["CCD-TEMP"], 22)
-
-    def test_the_newest_matching_master_is_chosen(self):
-        for stamp in ("2026-10-01T20:00:00", "2026-11-20T20:00:00"):
-            with patch.object(darks, "sources_digest", return_value=stamp):
-                frame = self.root / f"{stamp[:10]}.fit"
-                fits.writeto(frame, np.zeros((4, 4)), fits.Header({**HEADER, "DATE-OBS": stamp}))
-                darks.save(np.zeros((4, 4)), {key: HEADER[key] for key in darks.KEYS}, [frame])
-        self.assertIn("20261120", darks.find(fits.Header(HEADER)).name)
-        self.assertIsNone(darks.find(fits.Header({**HEADER, "EXPTIME": 30.0})))
-
-    def test_no_matching_master_stops_with_a_hint(self):
-        lights, dark_frames = self.session("first")
-        quietly(stack.stack_directory, lights, dark_files=dark_frames)
-        later, _ = self.session("later", iso=1600)
-        with self.assertRaisesRegex(ValueError, "No master dark for Canon EOS 600D at ISO 1600 and 5 s in the library; "
-                                                "stack once with --dark"):
-            quietly(stack.stack_directory, later, dark_library=True)
-
-    def test_the_master_closest_in_temperature_beats_a_newer_one(self):
-        for stamp, temperature in [("2026-10-01T20:00:00", 12), ("2026-11-20T20:00:00", 25), ("2026-11-25T20:00:00", None)]:
-            with patch.object(darks, "sources_digest", return_value=stamp):
-                frame = self.root / f"{stamp[:10]}.fit"
-                extra = {} if temperature is None else {"CCD-TEMP": temperature}
-                fits.writeto(frame, np.zeros((4, 4)), fits.Header({**HEADER, "DATE-OBS": stamp, **extra}))
-                saved = darks.save(np.zeros((4, 4)), {key: HEADER[key] for key in darks.KEYS}, [frame])
-                self.assertEqual(fits.getheader(saved).get("CCD-TEMP"), temperature)
-        self.assertIn("20261001", darks.find(fits.Header(HEADER), temperature=10).name)
-        self.assertIn("20261120", darks.find(fits.Header(HEADER), temperature=22).name)
-        # Without a temperature to match, the newest wins
-        self.assertIn("20261125", darks.find(fits.Header(HEADER)).name)
+    def test_flats_need_not_share_the_lights_iso(self):
+        lights, _ = self.session("first")
+        frames = self.flat_frames(iso=100)
+        data, metadata = stack.master_flat(frames)
+        self.assertNotIn("ISO", metadata)
+        master = stack.write_master(frames[0].parent / "flat.fit", data, metadata, frames)
+        self.assertEqual(fits.getheader(master)["NFLATS"], 2)
+        output = quietly(stack.stack_directory, lights, flat_master=master)
+        self.assertIn("Using the master flat of flats", output)
+        header = fits.getheader(lights / "first-stack.fit")
+        self.assertEqual((header["FLATCOR"], header["NFLATS"]), (True, 2))
 
     def test_darks_far_from_the_lights_temperature_are_flagged(self):
         lights, dark_frames = self.session("first", temperature=8, dark_temperature=21)
@@ -189,23 +163,18 @@ class DarkLibraryTests(unittest.TestCase):
             quietly(stack.stack_directory, lights, dark_files=dark_frames, output_prefix="warm")
         self.assertIn("the darks were taken at 21 °C and the lights at 8 °C", errors.getvalue())
         self.assertEqual(fits.getheader(lights / "warm-stack.fit")["DARKTEMP"], 21)
+        data, metadata = stack.master_dark(dark_frames)
+        master = stack.write_master(dark_frames[0].parent / "dark.fit", data, metadata, dark_frames)
         later, _ = self.session("later", temperature=19)
         with contextlib.redirect_stderr(io.StringIO()) as errors:
-            output = quietly(stack.stack_directory, later, dark_library=True)
+            output = quietly(stack.stack_directory, later, dark_master=master)
         self.assertIn("taken at 21 °C", output)
         self.assertEqual(errors.getvalue(), "")
 
     def test_each_step_reports_its_progress_in_order(self):
         lights, dark_frames = self.session("first")
-        flats = self.root / "flats"
-        flats.mkdir()
-        flat_frames = []
-        for index in range(2):
-            flat_frames.append(flats / f"flat{index}.fit")
-            image = np.random.default_rng(index).normal(8000, 20, (240, 320)).astype(np.float32)
-            fits.writeto(flat_frames[-1], image, fits.Header({**HEADER, "EXPTIME": 0.02}))
         reports = []
-        quietly(stack.stack_directory, lights, dark_files=dark_frames, flat_files=flat_frames,
+        quietly(stack.stack_directory, lights, dark_files=dark_frames, flat_files=self.flat_frames(),
                 progress=lambda *report: reports.append(report))
         stages = list(dict.fromkeys(stage for stage, _, _ in reports))
         self.assertEqual(stages, ["Combining darks", "Combining flats", "Aligning lights", "Stacking lights", "Saving"])
@@ -216,10 +185,10 @@ class DarkLibraryTests(unittest.TestCase):
             self.assertEqual(steps[-1][0], steps[-1][1])
         self.assertEqual([done for stage, done, _ in reports if stage == "Aligning lights"], [0, 1, 2, 3])
 
-    def test_darks_and_the_library_cannot_be_combined(self):
+    def test_frames_and_a_master_cannot_be_combined(self):
         lights, dark_frames = self.session("first")
-        with self.assertRaisesRegex(ValueError, "either dark frames or the dark library"):
-            quietly(stack.stack_directory, lights, dark_files=dark_frames, dark_library=True)
+        with self.assertRaisesRegex(ValueError, "either calibration frames or a master"):
+            quietly(stack.stack_directory, lights, dark_files=dark_frames, dark_master=dark_frames[0])
 
 
 if __name__ == "__main__":

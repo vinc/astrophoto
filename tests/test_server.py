@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,7 +15,7 @@ import numpy as np
 from astropy.io import fits
 
 from astro import center, convert, server, visible, weather
-from astro.lib import camera, gphoto
+from astro.lib import camera, gphoto, library
 from astro.locate import PlateSolveError
 from tests.test_cameras import FakeCamera
 from tests.test_localtime import local_time_zone
@@ -443,6 +444,13 @@ class CaptureServerTests(ServerCase):
             _, content_type, image = self.get(self.latest(kind)["image"])
             self.assertTrue(image.startswith(b"\x89PNG"))
 
+    def test_a_series_is_described_in_the_library_once_it_ends(self):
+        exif = {"Image Model": "Canon EOS 600D", "EXIF ExposureTime": "5", "EXIF ISOSpeedRatings": "1600"}
+        with patch.object(library, "read_tags", return_value=exif):
+            directory = self.run_series(frames=2)
+        self.assertEqual(library.load(self.app.root)[directory.name],
+                         {"camera": "Canon EOS 600D", "shutter": "5", "iso": 1600})
+
     def test_stop_ends_the_series_after_the_current_frame(self):
         self.post("/api/capture/start", {"frames": 50})
         self.captured.wait(30)
@@ -585,13 +593,9 @@ class CaptureServerTests(ServerCase):
 class CalibratedStackTests(ServerCase):
     def setUp(self):
         super().setUp()
-        from astro.lib import darks
         from tests.test_calibration import raw_frame, series
         self.root = Path(tempfile.mkdtemp(prefix="astro-server-"))
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        patcher = patch.object(darks, "library_path", return_value=self.root / "library")
-        patcher.start()
-        self.addCleanup(patcher.stop)
         self.app.root = self.root
         for name in ("20261127-2100-light", "20261127-2200-light", "20261127-2130-dark", "20261127-2140-flat",
                      "20261127-2150-dark", "notes"):
@@ -627,9 +631,30 @@ class CalibratedStackTests(ServerCase):
         _, _, image = self.get(event["image"])
         self.assertTrue(image.startswith(b"\x89PNG"))
         self.assertIsNone(self.latest("stacking")["name"])
-        # The master dark went into the library, for a later session without darks
-        self.stack(darks="library")
-        self.assertEqual(self.latest("calibrated")["darks"], "library")
+        # Each series kept its master, which the library then picks for the same lights
+        self.assertTrue((self.root / "20261127-2130-dark" / "dark.fit").is_file())
+        self.assertTrue((self.root / "20261127-2140-flat" / "flat.fit").is_file())
+        self.stack()
+        event = self.latest("calibrated")
+        self.assertEqual((event["darks"], event["flats"], event["library"], event["unmatched"]),
+                         ("20261127-2130-dark", "20261127-2140-flat", ["dark", "flat"], []))
+        header = fits.getheader(self.root / "20261127-2100-light" / event["file"])
+        self.assertTrue(header["DARKCOR"] and header["FLATCOR"])
+        self.assertIn("Master dark 20261127-2130-dark/dark.fit", str(header["HISTORY"]))
+        sections = library.load(self.root)
+        self.assertEqual(sections["20261127-2130-dark"], {"camera": "Canon EOS 600D", "shutter": "5", "iso": 800})
+        self.assertIn("20261127-2100-light", sections)
+
+    def test_a_master_is_combined_again_once_its_frames_are_newer(self):
+        from tests.test_calibration import raw_frame
+        self.stack(darks="20261127-2130-dark")
+        master = self.root / "20261127-2130-dark" / "dark.fit"
+        os.utime(master, (1, 1))
+        raw_frame(self.root / "20261127-2130-dark", "dark3.fit", seed=3, dark=True)
+        self.stack(darks="20261127-2130-dark")
+        self.assertEqual(fits.getheader(master)["NDARKS"], 4)
+        made = [event["text"] for event in self.app.hub.logs if event["text"].startswith("Saved the master dark")]
+        self.assertEqual(len(made), 2)
 
     def test_raw_files_without_fits_frames_are_converted_first(self):
         from tests.test_calibration import raw_frame
@@ -737,10 +762,14 @@ class CalibratedStackTests(ServerCase):
         _, _, image = self.get(event["image"])
         self.assertTrue(image.startswith(b"\x89PNG"))
 
-    def test_a_missing_library_dark_is_reported(self):
-        self.stack(darks="library")
-        self.assertIsNone(self.latest("calibrated"))
-        self.assertIn("No master dark for Canon EOS 600D at ISO 800 and 5 s", self.app.hub.logs[-1]["text"])
+    def test_without_a_suitable_master_the_library_stacks_without_one(self):
+        self.stack()
+        event = self.latest("calibrated")
+        self.assertEqual((event["darks"], event["flats"], event["unmatched"]), ("none", "none", ["dark", "flat"]))
+        header = fits.getheader(self.root / "20261127-2100-light" / event["file"])
+        self.assertNotIn("DARKCOR", header)
+        self.assertIn("No dark in the library suits 20261127-2100-light, so it is stacked without one",
+                      [event["text"] for event in self.app.hub.logs])
 
     def test_only_series_in_the_session_can_be_stacked(self):
         for body, message in [

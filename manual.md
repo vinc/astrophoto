@@ -255,19 +255,12 @@ Aligns and stacks the FITS files in a directory into
 `<prefix>-coverage.png`.
 
 `--dark FILE ...`
-: Dark frames to subtract. Their master dark is kept in the dark library.
-
-`--dark-library`
-: Subtract a master dark from the library taken with the same camera, ISO and
-  exposure time, for a session without its own dark frames: the one closest
-  to the lights' sensor temperature, or the newest when temperatures are not
-  recorded.
-
-Darks taken more than 5 °C warmer or colder than the lights produce a
-warning.
+: Dark frames to subtract. Darks taken more than 5 °C warmer or colder than
+  the lights produce a warning.
 
 `--flat FILE ...`
-: Flat frames to divide by.
+: Flat frames to divide by. They must come through the same camera, lens,
+  focal length and aperture as the lights, at any ISO.
 
 `--method {mean,median}`
 : Combination method (default: sigma-clipped mean).
@@ -416,10 +409,38 @@ are left out. The stack is saved in the series directory as
 series.
 
 Below it, Stack makes the full stack of a light series, like `stack`, with
-the darks of a dark series or from the dark library, the flats of a flat
-series, debanding, and color if chosen. RAW files without a FITS frame, as
-`capture` leaves them, are converted first. It runs while the camera keeps
-working.
+darks and flats, debanding, and color if chosen. RAW files without a FITS
+frame, as `capture` leaves them, are converted first. It runs while the camera
+keeps working.
+
+Darks and flats come from the library by default, or from a chosen series, or
+none. A dark or flat series used once keeps its master, `dark.fit` or
+`flat.fit`, beside its frames, combined again when frames are added. The
+library then picks, among the series with a master:
+
+- the darks taken with the same camera, ISO and shutter speed, closest in
+  sensor temperature to the lights, then the newest;
+- the newest flats taken with the same camera, lens, focal length and aperture.
+
+When none suits the lights, the stack is made without them, and says so.
+
+The library is `library.toml` in the directory the server runs in, with a
+section per series directory describing its frames from their EXIF data:
+
+```toml
+[20261127-2350-dark]
+camera = "Canon EOS 600D"
+scope = "Tamron 28-75mm f/4"
+focal = 28
+shutter = "1/500"
+aperture = 5
+iso = 800
+temperature = 18
+```
+
+The server adds a section when a series ends, and for any series directory
+that lacks one, such as those taken with `capture`. The temperature is the
+median sensor temperature of the frames, when the camera records it.
 
 `--host ADDRESS`
 : Address to listen on (default: `0.0.0.0`, every network interface).
@@ -442,5 +463,6 @@ Configuration: `[server]`, `[focus]`, `[center]`, `[capture]`, `[stack]`,
 | `~/.local/share/astro` | Indexes and catalogs from `download` |
 | `~/.cache/astro` | Cached forecasts and ephemerides |
 | `<image>.new` | Saved plate solution of an image, reused by later commands |
-| `~/.local/share/astro/darks` | Dark library: master darks kept by `stack --dark` |
+| `library.toml` | Library of the series in the server's directory |
+| `<directory>/dark.fit`, `<directory>/flat.fit` | Master dark or flat of a series, used by the server's Stack tab |
 | `<directory>/alignment.json` | Frame alignment saved by the server's live stack, reused by `stack` |
